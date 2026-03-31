@@ -1,0 +1,255 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─────────────────────── ENUMS ───────────────────────
+
+enum Gender {
+  male
+  female
+  other
+}
+
+enum UserRole {
+  customer
+  admin
+}
+
+enum UserStatus {
+  active
+  suspended
+  deleted
+}
+
+enum ListingStatus {
+  pending
+  live
+  rejected
+  inactive
+}
+
+enum VerificationStatus {
+  pending
+  approved
+  rejected
+}
+
+enum IjamatStatus {
+  pending
+  approved
+  rejected
+  not_submitted
+}
+
+enum ReviewStatus {
+  active
+  removed
+}
+
+enum ReportStatus {
+  pending
+  reviewed
+  dismissed
+}
+
+// ─────────────────────── MODELS ───────────────────────
+
+model User {
+  id           String     @id @default(uuid())
+  mobileNumber String     @unique @map("mobile_number") @db.VarChar(15)
+  name         String     @db.VarChar(100)
+  gender       Gender
+  role         UserRole   @default(customer)
+  city         String?    @db.VarChar(100)
+  area         String?    @db.VarChar(100)
+  pincode      String?    @db.VarChar(10)
+  status       UserStatus @default(active)
+  deletedAt    DateTime?  @map("deleted_at")
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+
+  // Relations
+  listings        Listing[]      @relation("ProviderListings")
+  verification    Verification?  @relation("UserVerification")
+  reviews         Review[]       @relation("ReviewerReviews")
+  reviewReports   ReviewReport[] @relation("ReporterReports")
+  moderatedReviews Review[]      @relation("ModeratorReviews")
+  reviewedVerifications Verification[] @relation("ReviewerVerifications")
+
+  @@map("users")
+}
+
+model Category {
+  id           String     @id @default(uuid())
+  parentId     String?    @map("parent_id")
+  name         String     @db.VarChar(100)
+  slug         String     @unique @db.VarChar(100)
+  description  String?
+  isActive     Boolean    @default(true) @map("is_active")
+  displayOrder Int        @default(0) @map("display_order")
+  createdAt    DateTime   @default(now()) @map("created_at")
+
+  // Self-reference
+  parent       Category?  @relation("CategoryParent", fields: [parentId], references: [id])
+  children     Category[] @relation("CategoryParent")
+
+  // Listing join
+  listingCategories ListingCategory[]
+
+  @@map("categories")
+}
+
+model Listing {
+  id                  String        @id @default(uuid())
+  providerId          String        @map("provider_id")
+  businessName        String        @map("business_name") @db.VarChar(150)
+  description         String?
+  contactPhone        String?       @map("contact_phone") @db.VarChar(15)
+  city                String        @db.VarChar(100)
+  area                String?       @db.VarChar(100)
+  pincode             String?       @db.VarChar(10)
+  latitude            Decimal?      @db.Decimal(9, 6)
+  longitude           Decimal?      @db.Decimal(9, 6)
+  isWomenLed          Boolean       @default(false) @map("is_women_led")
+  communityVerified   Boolean       @default(false) @map("community_verified")
+  status              ListingStatus @default(pending)
+  rejectionNote       String?       @map("rejection_note")
+  submittedAt         DateTime      @default(now()) @map("submitted_at")
+  approvedAt          DateTime?     @map("approved_at")
+  deletedAt           DateTime?     @map("deleted_at")
+  updatedAt           DateTime      @updatedAt @map("updated_at")
+
+  // Relations
+  provider            User              @relation("ProviderListings", fields: [providerId], references: [id])
+  listingCategories   ListingCategory[]
+  photos              Photo[]
+  products            Product[]
+  reviews             Review[]
+
+  @@index([status, city])
+  @@index([isWomenLed, status])
+  @@index([providerId])
+  @@index([communityVerified, status])
+  @@map("listings")
+}
+
+model ListingCategory {
+  id         String   @id @default(uuid())
+  listingId  String   @map("listing_id")
+  categoryId String   @map("category_id")
+
+  listing    Listing  @relation(fields: [listingId], references: [id])
+  category   Category @relation(fields: [categoryId], references: [id])
+
+  @@unique([listingId, categoryId])
+  @@index([categoryId, listingId])
+  @@map("listing_categories")
+}
+
+model Verification {
+  id              String             @id @default(uuid())
+  userId          String             @unique @map("user_id")
+  aadhaarDocUrl   String             @map("aadhaar_doc_url") @db.VarChar(500)
+  aadhaarStatus   VerificationStatus @default(pending) @map("aadhaar_status")
+  ijamatNumber    String?            @map("ijamat_number") @db.VarChar(50)
+  ijamatExpiry    DateTime?          @map("ijamat_expiry") @db.Date
+  ijamatDocUrl    String?            @map("ijamat_doc_url") @db.VarChar(500)
+  ijamatStatus    IjamatStatus       @default(not_submitted) @map("ijamat_status")
+  adminNotes      String?            @map("admin_notes")
+  reviewedAt      DateTime?          @map("reviewed_at")
+  reviewedBy      String?            @map("reviewed_by")
+
+  user            User               @relation("UserVerification", fields: [userId], references: [id])
+  reviewer        User?              @relation("ReviewerVerifications", fields: [reviewedBy], references: [id])
+
+  @@index([userId])
+  @@map("verifications")
+}
+
+model Photo {
+  id           String   @id @default(uuid())
+  listingId    String   @map("listing_id")
+  imageUrl     String   @map("image_url") @db.VarChar(500)
+  storageKey   String   @map("storage_key") @db.VarChar(300)
+  displayOrder Int      @default(0) @map("display_order")
+  uploadedAt   DateTime @default(now()) @map("uploaded_at")
+
+  listing      Listing  @relation(fields: [listingId], references: [id])
+
+  @@index([listingId, displayOrder])
+  @@map("photos")
+}
+
+model Product {
+  id           String   @id @default(uuid())
+  listingId    String   @map("listing_id")
+  name         String   @db.VarChar(150)
+  description  String?
+  price        Decimal? @db.Decimal(10, 2)
+  currency     String   @default("INR") @db.VarChar(3)
+  photoUrl     String?  @map("photo_url") @db.VarChar(500)
+  isActive     Boolean  @default(true) @map("is_active")
+  displayOrder Int      @default(0) @map("display_order")
+
+  listing      Listing  @relation(fields: [listingId], references: [id])
+
+  @@index([listingId, isActive])
+  @@map("products")
+}
+
+model Review {
+  id          String       @id @default(uuid())
+  listingId   String       @map("listing_id")
+  reviewerId  String       @map("reviewer_id")
+  starRating  Int          @map("star_rating") @db.SmallInt
+  reviewText  String?      @map("review_text")
+  status      ReviewStatus @default(active)
+  postedAt    DateTime     @default(now()) @map("posted_at")
+  moderatedAt DateTime?    @map("moderated_at")
+  moderatedBy String?      @map("moderated_by")
+
+  listing     Listing      @relation(fields: [listingId], references: [id])
+  reviewer    User         @relation("ReviewerReviews", fields: [reviewerId], references: [id])
+  moderator   User?        @relation("ModeratorReviews", fields: [moderatedBy], references: [id])
+  photos      ReviewPhoto[]
+  reports     ReviewReport[]
+
+  @@unique([listingId, reviewerId])
+  @@index([listingId, status])
+  @@map("reviews")
+}
+
+model ReviewPhoto {
+  id         String @id @default(uuid())
+  reviewId   String @map("review_id")
+  imageUrl   String @map("image_url") @db.VarChar(500)
+  storageKey String @map("storage_key") @db.VarChar(300)
+
+  review     Review @relation(fields: [reviewId], references: [id])
+
+  @@map("review_photos")
+}
+
+model ReviewReport {
+  id         String       @id @default(uuid())
+  reviewId   String       @map("review_id")
+  reporterId String       @map("reporter_id")
+  reason     String?
+  status     ReportStatus @default(pending)
+  reportedAt DateTime     @default(now()) @map("reported_at")
+
+  review     Review       @relation(fields: [reviewId], references: [id])
+  reporter   User         @relation("ReporterReports", fields: [reporterId], references: [id])
+
+  @@unique([reviewId, reporterId])
+  @@map("review_reports")
+}
