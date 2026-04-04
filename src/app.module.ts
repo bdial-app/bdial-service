@@ -4,6 +4,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
+import { AdminAuthModule } from './admin-auth/admin-auth.module';
 import { UsersModule } from './users/users.module';
 import { CategoriesModule } from './categories/categories.module';
 import { ListingsModule } from './listings/listings.module';
@@ -20,6 +21,7 @@ import { PhotosModule } from './photos/photos.module';
     StorageModule,
     PhotosModule,
     AuthModule,
+    AdminAuthModule,
     UsersModule,
     CategoriesModule,
     ListingsModule,
