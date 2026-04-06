@@ -44,7 +44,8 @@ export class CategoriesService {
     };
   }
 
-  // ✅ TOP LEVEL
+]
+
   findTopLevel() {
     return this.prisma.category.findMany({
       where: { parentId: null, isActive: true },
@@ -52,7 +53,6 @@ export class CategoriesService {
     });
   }
 
-  // ✅ CREATE (auto slug)
   create(data: any) {
     return this.prisma.category.create({
       data: {
@@ -62,7 +62,7 @@ export class CategoriesService {
     });
   }
 
-  // ✅ UPDATE (with slug update)
+
   update(
     id: string,
     data: {
@@ -87,7 +87,7 @@ export class CategoriesService {
     });
   }
 
-  // ✅ GET ONE (with validation)
+  
   async findOne(id: string) {
     const category = await this.prisma.category.findUnique({
       where: { id },
@@ -101,7 +101,6 @@ export class CategoriesService {
     return category;
   }
 
-  // ✅ SUBCATEGORIES WITH PAGINATION (UPGRADED 🔥)
   async findSubCategories(parentId: string, paginationDto: PaginationDto) {
     const { page = 1, limit = 10 } = paginationDto;
     const skip = (page - 1) * limit;
