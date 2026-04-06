@@ -22,7 +22,7 @@ import { CreateUserDto, UpdateUserDto, UserListQueryDto } from './dto/user.dto';
 @ApiTags('Users')
 @Controller('users')
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(private readonly usersService: UsersService) { }
 
   @Post()
   @ApiOperation({ summary: 'Create a new user' })
@@ -31,6 +31,7 @@ export class UsersController {
     return this.usersService.create(dto);
   }
 
+  //pagination for getting list of users
   @Get()
   @ApiOperation({ summary: 'List all users with pagination' })
   list(@Query() query: UserListQueryDto) {
