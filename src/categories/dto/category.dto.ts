@@ -4,7 +4,7 @@ import { IsString, IsOptional, IsBoolean, IsNumber } from 'class-validator';
 export class CreateCategoryDto {
   @ApiProperty()
   @IsString()
-  name: string;
+  name?: string;
 
   @ApiProperty({ required: false })
   @IsOptional()

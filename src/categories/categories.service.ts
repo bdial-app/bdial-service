@@ -1,5 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { PaginationDto } from './dto/pagination.dto';
 
 function slugify(name: string) {
   return name.toLowerCase().replace(/\s+/g, '-').replace(/[^\w-]+/g, '');
@@ -9,7 +10,9 @@ function slugify(name: string) {
 export class CategoriesService {
   constructor(private prisma: PrismaService) {}
 
-  async findAll(page = 1, limit = 10) {
+  // ✅ UPDATED: uses PaginationDto
+  async findAll(paginationDto: PaginationDto) {
+    const { page = 1, limit = 10 } = paginationDto;
     const skip = (page - 1) * limit;
 
     const [data, total] = await Promise.all([
@@ -32,12 +35,16 @@ export class CategoriesService {
 
     return {
       data,
-      total,
-      page,
-      limit,
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
     };
   }
 
+  // ✅ TOP LEVEL
   findTopLevel() {
     return this.prisma.category.findMany({
       where: { parentId: null, isActive: true },
@@ -45,40 +52,80 @@ export class CategoriesService {
     });
   }
 
+  // ✅ CREATE (auto slug)
   create(data: any) {
     return this.prisma.category.create({
       data: {
         ...data,
-        slug: slugify(data.name), // <--- slug generated automatically
+        slug: slugify(data.name),
       },
     });
   }
 
-update(
-  id: string,
-  data: { name?: string; isActive?: boolean; displayOrder?: number; parentId?: string; slug?: string}
-) {
-  if (!data || Object.keys(data).length === 0) {
-    throw new Error('No update data provided.');
-  }
-  if (data.name) {
-    data = { ...data, slug: slugify(data.name) };
-  }
-  return this.prisma.category.update({
-    where: { id },
-    data,
-  });
-}
-  findOne(id: string) {
-    return this.prisma.category.findUnique({
+  // ✅ UPDATE (with slug update)
+  update(
+    id: string,
+    data: {
+      name?: string;
+      isActive?: boolean;
+      displayOrder?: number;
+      parentId?: string;
+      slug?: string;
+    },
+  ) {
+    if (!data || Object.keys(data).length === 0) {
+      throw new Error('No update data provided.');
+    }
+
+    if (data.name) {
+      data = { ...data, slug: slugify(data.name) };
+    }
+
+    return this.prisma.category.update({
       where: { id },
-      include: { children: true },
+      data,
     });
   }
 
-  findSubcategories(parentId: string) {
-    return this.prisma.category.findMany({
-      where: { parentId, isActive: true },
+  // ✅ GET ONE (with validation)
+  async findOne(id: string) {
+    const category = await this.prisma.category.findUnique({
+      where: { id },
+      include: { children: true },
     });
+
+    if (!category) {
+      throw new NotFoundException('Category not found');
+    }
+
+    return category;
+  }
+
+  // ✅ SUBCATEGORIES WITH PAGINATION (UPGRADED 🔥)
+  async findSubCategories(parentId: string, paginationDto: PaginationDto) {
+    const { page = 1, limit = 10 } = paginationDto;
+    const skip = (page - 1) * limit;
+
+    const [data, total] = await Promise.all([
+      this.prisma.category.findMany({
+        where: { parentId, isActive: true },
+        skip,
+        take: limit,
+        orderBy: { displayOrder: 'asc' },
+      }),
+      this.prisma.category.count({
+        where: { parentId, isActive: true },
+      }),
+    ]);
+
+    return {
+      data,
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
   }
 }
