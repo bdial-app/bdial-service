@@ -84,6 +84,7 @@ model User {
   reviewReports   ReviewReport[] @relation("ReporterReports")
   moderatedReviews Review[]      @relation("ModeratorReviews")
   reviewedVerifications Verification[] @relation("ReviewerVerifications")
+  provider        Provider?      @relation("UserProvider")
 
   @@map("users")
 }
@@ -164,6 +165,7 @@ model Verification {
   ijamatExpiry    DateTime?          @map("ijamat_expiry") @db.Date
   ijamatDocUrl    String?            @map("ijamat_doc_url") @db.VarChar(500)
   ijamatStatus    IjamatStatus       @default(not_submitted) @map("ijamat_status")
+  status          VerificationStatus @default(pending)
   adminNotes      String?            @map("admin_notes")
   reviewedAt      DateTime?          @map("reviewed_at")
   reviewedBy      String?            @map("reviewed_by")
@@ -252,4 +254,30 @@ model ReviewReport {
 
   @@unique([reviewId, reporterId])
   @@map("review_reports")
+}
+
+model Provider {
+  id             String    @id @default(uuid())
+  userId         String    @unique @map("user_id")
+  brandName      String    @map("brand_name") @db.VarChar(150)
+  description    String?
+  address        String?
+  city           String    @db.VarChar(100)
+  area           String?   @db.VarChar(100)
+  pincode        String?   @db.VarChar(10)
+  latitude       Decimal?  @db.Decimal(9, 6)
+  longitude      Decimal?  @db.Decimal(9, 6)
+  contactNumber  String    @map("contact_number") @db.VarChar(15)
+  openTime       DateTime?  @map("open_time") @db.Time
+  closeTime      DateTime?  @map("close_time") @db.Time
+  isAvailable    Boolean   @default(true) @map("is_available")
+  profilePhotoUrl String?  @map("profile_photo_url") @db.VarChar(500)
+  status         String    @default("active") @db.VarChar(10)
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  user User @relation("UserProvider", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("providers")
 }

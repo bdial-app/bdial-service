@@ -25,11 +25,12 @@ async function bootstrap() {
   const config = new DocumentBuilder()
     .setTitle('Bohri Connect API')
     .setDescription(
-      'REST API for Bohri Connect — a women-empowerment-centric community business directory for the Dawoodi Bohra community.',
+      'REST API for Bohri Connect — a women-empowerment-centric community business directory for Dawoodi Bohra community.',
     )
     .setVersion('1.0')
     .addBearerAuth()
     .addTag('Auth', 'OTP-based authentication')
+    .addTag('Admin Auth', 'Admin OTP-based authentication')
     .addTag('Users', 'User profile management')
     .addTag('Categories', 'Service categories')
     .addTag('Listings', 'Business listings (public browse + provider CRUD)')
@@ -41,7 +42,7 @@ async function bootstrap() {
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, document);
 
-  const port = process.env.PORT || 3001;
+  const port = process.env.PORT || 3002;
   await app.listen(port);
   console.log(`🚀 Bohri Connect API running on http://localhost:${port}/api`);
   console.log(`📖 Swagger docs at http://localhost:${port}/api/docs`);
