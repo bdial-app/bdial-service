@@ -30,10 +30,12 @@ export class CategoriesController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'Get all active categories with nested structure' })
+  @ApiOperation({ summary: 'Get all active categories with pagination' })
   @ApiResponse({ status: 200, description: 'Categories retrieved successfully' })
-  findAll() {
-    return this.categoriesService.findAll();
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
+  findAll(@Query() paginationDto: PaginationDto) {
+    return this.categoriesService.findAll(paginationDto);
   }
 
   @Get(':id')

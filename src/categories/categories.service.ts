@@ -40,18 +40,34 @@ export class CategoriesService {
     });
   }
 
-  async findAll() {
-    // Get all active categories
-    const allCategories = await this.prisma.category.findMany({
-      where: { isActive: true },
-      orderBy: { displayOrder: 'asc' },
-      include: {
-        parent: true,
-      },
-    });
+  async findAll(paginationDto: PaginationDto) {
+    const { page = 1, limit = 10 } = paginationDto;
+    const skip = (page - 1) * limit;
 
-    // Build the tree structure
-    return this.buildCategoryTree(allCategories);
+    const [categories, total] = await Promise.all([
+      this.prisma.category.findMany({
+        where: { isActive: true },
+        skip,
+        take: limit,
+        orderBy: { displayOrder: 'asc' },
+        include: {
+          parent: true,
+        },
+      }),
+      this.prisma.category.count({
+        where: { isActive: true },
+      }),
+    ]);
+
+    return {
+      data: categories,
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
   }
 
   private buildCategoryTree(categories: any[], parentId: string | null = null): any[] {

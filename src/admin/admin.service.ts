@@ -3,7 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class AdminService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService) { }
 
   private assertAdmin(user: any) {
     if (user.role !== 'admin') throw new ForbiddenException('Admin access required');
@@ -55,12 +55,74 @@ export class AdminService {
     });
   }
 
-  async getVerifications(admin: any) {
+  async getVerifications(admin: any, page?: number, rows?: number) {
     this.assertAdmin(admin);
-    return this.prisma.verification.findMany({
+
+    // default values for page and rows
+    const currentPage = Math.max(1, page || 1);
+    const pageSize = Math.min(100, Math.max(1, rows || 10)); // Max 100 rows per page
+
+    const skip = (currentPage - 1) * pageSize;
+
+    const totalCount = await this.prisma.verification.count({
+      where: { aadhaarStatus: 'pending' },
+    });
+
+    // paginated results
+    const verifications = await this.prisma.verification.findMany({
       where: { aadhaarStatus: 'pending' },
       include: { user: { select: { id: true, name: true, mobileNumber: true } } },
+      orderBy: { reviewedAt: 'asc' },
+      skip,
+      take: pageSize,
     });
+
+    const totalPages = Math.ceil(totalCount / pageSize);
+    const hasNextPage = currentPage < totalPages;
+    const hasPreviousPage = currentPage > 1;
+
+    return {
+      data: verifications,
+      pagination: {
+        currentPage,
+        pageSize,
+        totalCount,
+        totalPages,
+        hasNextPage,
+        hasPreviousPage,
+      },
+    };
+  }
+
+  async getVerificationById(admin: any, verificationId: string) {
+    this.assertAdmin(admin);
+    
+    const verification = await this.prisma.verification.findUnique({
+      where: { id: verificationId },
+      include: { 
+        user: { 
+          select: { 
+            id: true, 
+            name: true, 
+            mobileNumber: true,
+            city: true,
+            area: true
+          } 
+        },
+        reviewer: {
+          select: {
+            id: true,
+            name: true
+          }
+        }
+      },
+    });
+
+    if (!verification) {
+      throw new NotFoundException(`Verification with ID ${verificationId} not found`);
+    }
+
+    return verification;
   }
 
   async reviewVerification(
@@ -106,6 +168,34 @@ export class AdminService {
     return this.prisma.user.update({
       where: { id: userId },
       data: { status: 'suspended' },
+    });
+  }
+
+  async updateVerificationStatus(
+    admin: any,
+    verificationId: string,
+    aadhaarStatus?: 'pending' | 'approved' | 'rejected',
+    ijamatStatus?: 'pending' | 'approved' | 'rejected' | 'not_submitted',
+    status?: 'pending' | 'approved' | 'rejected'
+  ) {
+    this.assertAdmin(admin);
+    
+    const verification = await this.prisma.verification.findUnique({
+      where: { id: verificationId },
+    });
+
+    if (!verification) {
+      throw new NotFoundException(`Verification with ID ${verificationId} not found`);
+    }
+
+    const data: any = {};
+    if (aadhaarStatus) data.aadhaarStatus = aadhaarStatus;
+    if (ijamatStatus) data.ijamatStatus = ijamatStatus;
+    if (status) data.status = status;
+
+    return this.prisma.verification.update({
+      where: { id: verificationId },
+      data,
     });
   }
 }
