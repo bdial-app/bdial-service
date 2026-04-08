@@ -44,8 +44,7 @@ export class CategoriesService {
     };
   }
 
-]
-
+  
   findTopLevel() {
     return this.prisma.category.findMany({
       where: { parentId: null, isActive: true },
@@ -53,6 +52,7 @@ export class CategoriesService {
     });
   }
 
+  // ✅ CREATE (auto slug)
   create(data: any) {
     return this.prisma.category.create({
       data: {
@@ -62,7 +62,7 @@ export class CategoriesService {
     });
   }
 
-
+  // ✅ UPDATE (with slug update)
   update(
     id: string,
     data: {
@@ -87,7 +87,7 @@ export class CategoriesService {
     });
   }
 
-  
+  // ✅ GET ONE (with validation)
   async findOne(id: string) {
     const category = await this.prisma.category.findUnique({
       where: { id },

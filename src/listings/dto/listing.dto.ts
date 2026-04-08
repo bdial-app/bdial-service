@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
 import {
   IsString,
   IsOptional,
@@ -13,7 +14,7 @@ export class CreateListingDto {
   @ApiProperty({ example: 'Fatema Ridha Studio' })
   @IsString()
   @MaxLength(150)
-  businessName: string;
+  businessName!: string;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -27,7 +28,7 @@ export class CreateListingDto {
 
   @ApiProperty({ example: 'Mumbai' })
   @IsString()
-  city: string;
+  city!: string;
 
   @ApiPropertyOptional({ example: 'Dadar' })
   @IsOptional()
@@ -102,6 +103,7 @@ export class ListingSearchDto {
   @ApiPropertyOptional({ example: true })
   @IsOptional()
   @IsBoolean()
+  @Transform(({ value }) => value === 'true' || value === true)
   isWomenLed?: boolean;
 
   @ApiPropertyOptional({ example: 1, default: 1 })
