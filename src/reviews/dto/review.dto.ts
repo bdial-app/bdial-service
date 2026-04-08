@@ -1,16 +1,24 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsInt, Min, Max, IsOptional } from 'class-validator';
+import { IsString, IsInt, Min, Max, IsOptional, IsNotEmpty } from 'class-validator';
+import { IsEnum } from 'class-validator';
+import { ReviewStatus } from '@prisma/client';
+
+export class UpdateReviewStatusDto {
+  @IsEnum(ReviewStatus)
+  status!: ReviewStatus;
+}
 
 export class CreateReviewDto {
   @ApiProperty({ example: 'uuid-of-listing' })
   @IsString()
-  listingId: string;
+  @IsNotEmpty()
+  listingId!: string;
 
   @ApiProperty({ example: 5, minimum: 1, maximum: 5 })
   @IsInt()
   @Min(1)
   @Max(5)
-  starRating: number;
+  starRating!: number;
 
   @ApiPropertyOptional({ example: 'Excellent work!' })
   @IsOptional()
