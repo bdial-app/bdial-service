@@ -24,7 +24,7 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import { ReviewsService } from './reviews.service';
 import { CreateReviewDto, ReportReviewDto } from './dto/review.dto';
-import {UpdateReviewStatusDto} from './dto/review.dto';
+import { UpdateReviewStatusDto } from './dto/review.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 
 @ApiTags('Reviews')
@@ -32,14 +32,12 @@ import { FileInterceptor } from '@nestjs/platform-express';
 export class ReviewsController {
   constructor(private readonly reviewsService: ReviewsService) {}
 
-
   @Get('listing/:listingId')
   @ApiOperation({ summary: 'Get all active reviews for a listing (public)' })
   @ApiParam({ name: 'listingId', type: String })
   getForListing(@Param('listingId') listingId: string) {
     return this.reviewsService.getForListing(listingId);
   }
-
 
   @Post()
   @ApiBearerAuth()
@@ -49,7 +47,6 @@ export class ReviewsController {
     return this.reviewsService.create(req.user.id, dto);
   }
 
- 
   @Post(':id/report')
   @ApiBearerAuth()
   @UseGuards(AuthGuard('jwt'))
@@ -63,7 +60,6 @@ export class ReviewsController {
     return this.reviewsService.report(id, req.user.id, dto);
   }
 
- 
   @Get(':id')
   @ApiOperation({ summary: 'Get review by ID' })
   @ApiParam({ name: 'id', type: String })
@@ -77,37 +73,36 @@ export class ReviewsController {
   @UseGuards(AuthGuard('jwt')) // later replace with AdminGuard
   @ApiOperation({ summary: 'Change review status (admin)' })
   @Patch(':id/status')
-
   updateStatus(
-  @Param('id') id: string,
-  @Body() dto: UpdateReviewStatusDto,
-  @Request() req: any,
-) {
-  return this.reviewsService.updateStatus(
-    id,
-    dto.status,   // ✅ correct type
-    req.user.id,
-  );
-}
+    @Param('id') id: string,
+    @Body() dto: UpdateReviewStatusDto,
+    @Request() req: any,
+  ) {
+    return this.reviewsService.updateStatus(
+      id,
+      dto.status, // ✅ correct type
+      req.user.id,
+    );
+  }
 
-@Post('upload-photo')
-@UseInterceptors(FileInterceptor('file'))
-@ApiConsumes('multipart/form-data')
-@ApiBody({
-  schema: {
-    type: 'object',
-    properties: {
-      review_id: { type: 'string' },
-      file: { type: 'string', format: 'binary' },
+  @Post('upload-photo')
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        review_id: { type: 'string' },
+        file: { type: 'string', format: 'binary' },
+      },
     },
-  },
-})
-uploadPhoto(
-  @Body('review_id') reviewId: string,
-  @UploadedFile() file: Express.Multer.File,
-) {
-  return this.reviewsService.uploadPhoto(reviewId, file);
-}
+  })
+  uploadPhoto(
+    @Body('review_id') reviewId: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    return this.reviewsService.uploadPhoto(reviewId, file);
+  }
 
   @Get()
   @ApiOperation({ summary: 'Get all reviews with pagination & filters' })

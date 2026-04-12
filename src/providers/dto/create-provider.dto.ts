@@ -68,10 +68,6 @@ export class CreateProviderDto {
   @Matches(/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/, { message: 'Close time must be in HH:MM format' })
   closeTime?: string;
 
-  @ApiPropertyOptional({ example: true, default: true })
-  @IsOptional()
-  @IsBoolean()
-  isAvailable?: boolean;
 
   @ApiPropertyOptional({ example: 'https://example.com/profile.jpg' })
   @IsOptional()
