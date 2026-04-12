@@ -3,7 +3,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PaginationDto } from './dto/pagination.dto';
 
 function slugify(name: string) {
-  return name.toLowerCase().replace(/\s+/g, '-').replace(/[^\w-]+/g, '');
+  return name
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^\w-]+/g, '');
 }
 
 @Injectable()
@@ -44,7 +47,6 @@ export class CategoriesService {
     };
   }
 
-  
   findTopLevel() {
     return this.prisma.category.findMany({
       where: { parentId: null, isActive: true },
