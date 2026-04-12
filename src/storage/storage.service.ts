@@ -49,8 +49,9 @@ export class StorageService {
           ContentType: file.mimetype,
         }),
       );
-    } catch (err) {
-      throw new InternalServerErrorException(`S3 upload failed: ${err.message}`);
+    } catch (err) {if (err instanceof Error) {
+    throw new InternalServerErrorException(`S3 upload failed: ${err.message}`);
+  }
     }
 
     // Supabase public URL format
@@ -65,13 +66,16 @@ export class StorageService {
   async delete(storageKey: string): Promise<void> {
     try {
       await this.s3.send(
-        new DeleteObjectCommand({
+         new DeleteObjectCommand({
           Bucket: this.bucket,
           Key: storageKey,
         }),
       );
     } catch (err) {
+      if(err instanceof Error){
       throw new InternalServerErrorException(`S3 delete failed: ${err.message}`);
+      }
     }
+
   }
 }
