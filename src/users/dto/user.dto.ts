@@ -1,7 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsEnum, IsOptional, Matches } from 'class-validator';
+import { IsString, IsEnum, IsOptional, IsNumber, Min } from 'class-validator';
+import { Type } from 'class-transformer';
 
-export class UpdateUserDto {
+export class CreateUserDto {
+  @ApiProperty({ example: '+919876543210' })
+  @IsString()
+  mobileNumber: string;
+
   @ApiProperty({ example: 'Fatema Hussain' })
   @IsString()
   name: string;
@@ -24,4 +29,47 @@ export class UpdateUserDto {
   @IsOptional()
   @IsString()
   pincode?: string;
+}
+
+export class UpdateUserDto {
+  @ApiPropertyOptional({ example: 'Fatema Hussain' })
+  @IsOptional()
+  @IsString()
+  name?: string;
+
+  @ApiPropertyOptional({ enum: ['male', 'female', 'other'] })
+  @IsOptional()
+  @IsEnum(['male', 'female', 'other'])
+  gender?: 'male' | 'female' | 'other';
+
+  @ApiPropertyOptional({ example: 'Mumbai' })
+  @IsOptional()
+  @IsString()
+  city?: string;
+
+  @ApiPropertyOptional({ example: 'Dadar' })
+  @IsOptional()
+  @IsString()
+  area?: string;
+
+  @ApiPropertyOptional({ example: '400014' })
+  @IsOptional()
+  @IsString()
+  pincode?: string;
+}
+
+export class UserListQueryDto {
+  @ApiPropertyOptional({ example: 1 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  page?: number = 1;
+
+  @ApiPropertyOptional({ example: 10, description: 'Number of rows per page (min: 1)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  limit?: number = 10;
 }

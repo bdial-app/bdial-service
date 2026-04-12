@@ -16,6 +16,14 @@ export class AuthController {
     return this.authService.sendOtp(dto);
   }
 
+  @Post('admin/send-otp')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Send OTP to admin mobile number' })
+  @ApiResponse({ status: 200, description: 'OTP sent successfully' })
+  sendAdminOtp(@Body() dto: SendOtpDto) {
+    return this.authService.sendAdminOtp(dto);
+  }
+
   @Post('verify-otp')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Verify OTP and get JWT token' })
