@@ -9,10 +9,10 @@ export class UpdateReviewStatusDto {
 }
 
 export class CreateReviewDto {
-  @ApiProperty({ example: 'uuid-of-listing' })
+  @ApiProperty({ example: 'uuid-of-provider' })
   @IsString()
   @IsNotEmpty()
-  listingId!: string;
+  providerId!: string;
 
   @ApiProperty({ example: 5, minimum: 1, maximum: 5 })
   @IsInt()

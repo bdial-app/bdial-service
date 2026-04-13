@@ -12,46 +12,46 @@ export class AdminService {
   async getDashboard(admin: any) {
     this.assertAdmin(admin);
     const [
-      pendingListings,
-      totalListings,
+      pendingProviders,
+      totalProviders,
       totalUsers,
       pendingVerifications,
       flaggedReviews,
     ] = await Promise.all([
-      this.prisma.listing.count({ where: { status: 'pending', deletedAt: null } }),
-      this.prisma.listing.count({ where: { deletedAt: null } }),
+      this.prisma.provider.count({ where: { status: 'inactive' } }),
+      this.prisma.provider.count({ where: { status: 'active' } }),
       this.prisma.user.count({ where: { status: 'active' } }),
       this.prisma.verification.count({ where: { aadhaarStatus: 'pending' } }),
       this.prisma.reviewReport.count({ where: { status: 'pending' } }),
     ]);
-    return { pendingListings, totalListings, totalUsers, pendingVerifications, flaggedReviews };
+    return { pendingProviders, totalProviders, totalUsers, pendingVerifications, flaggedReviews };
   }
 
-  async getPendingListings(admin: any) {
+  async getPendingProviders(admin: any) {
     this.assertAdmin(admin);
-    return this.prisma.listing.findMany({
-      where: { status: 'pending', deletedAt: null },
+    return this.prisma.provider.findMany({
+      where: { status: 'inactive' },
       include: {
-        provider: { select: { id: true, name: true, mobileNumber: true } },
-        listingCategories: { include: { category: true } },
+        user: { select: { id: true, name: true, mobileNumber: true } },
+        providerCategories: { include: { category: true } },
       },
-      orderBy: { submittedAt: 'asc' },
+      orderBy: { createdAt: 'asc' },
     });
   }
 
-  async approveListing(admin: any, listingId: string) {
+  async approveProvider(admin: any, providerId: string) {
     this.assertAdmin(admin);
-    return this.prisma.listing.update({
-      where: { id: listingId },
-      data: { status: 'live', approvedAt: new Date() },
+    return this.prisma.provider.update({
+      where: { id: providerId },
+      data: { status: 'active' },
     });
   }
 
-  async rejectListing(admin: any, listingId: string, note: string) {
+  async rejectProvider(admin: any, providerId: string, note: string) {
     this.assertAdmin(admin);
-    return this.prisma.listing.update({
-      where: { id: listingId },
-      data: { status: 'rejected', rejectionNote: note },
+    return this.prisma.provider.update({
+      where: { id: providerId },
+      data: { status: 'inactive' },
     });
   }
 

@@ -31,12 +31,12 @@ export class ProviderPaginationDto {
 
   @ApiPropertyOptional({
     description: 'Filter by provider status',
-    enum: ['active', 'suspended'],
+    enum: ['active', 'inactive'],
     example: 'active',
   })
   @IsOptional()
-  @IsEnum(['active', 'suspended'])
-  status?: 'active' | 'suspended';
+  @IsEnum(['active', 'inactive'])
+  status?: 'active' | 'inactive';
 
   @ApiPropertyOptional({
     description: 'Filter by availability',

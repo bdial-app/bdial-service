@@ -29,7 +29,7 @@ export class StorageService {
 
   /**
    * Upload a file buffer to S3.
-   * @param folder  e.g. 'listings', 'reviews', 'verifications'
+   * @param folder  e.g. 'providers', 'reviews', 'verifications'
    * @param file    Multer file object
    * @returns       { url, storageKey }
    */

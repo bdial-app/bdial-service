@@ -34,10 +34,4 @@ export class UsersController {
   updateMe(@Request() req, @Body() dto: UpdateUserDto) {
     return this.usersService.updateProfile(req.user.id, dto);
   }
-
-  @Get('me/listings')
-  @ApiOperation({ summary: 'Get my listings' })
-  getMyListings(@Request() req) {
-    return this.usersService.getMyListings(req.user.id);
-  }
 }

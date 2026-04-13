@@ -33,9 +33,9 @@ async function bootstrap() {
     .addTag('Admin Auth', 'Admin OTP-based authentication')
     .addTag('Users', 'User profile management')
     .addTag('Categories', 'Service categories')
-    .addTag('Listings', 'Business listings (public browse + provider CRUD)')
+    .addTag('Providers', 'Business providers (public browse + provider CRUD)')
     .addTag('Verifications', 'Aadhaar & iJamat document submission')
-    .addTag('Reviews', 'Listing reviews & ratings')
+    .addTag('Reviews', 'Provider reviews & ratings')
     .addTag('Admin', 'Admin panel operations')
     .build();
 

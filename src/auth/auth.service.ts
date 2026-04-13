@@ -26,7 +26,12 @@ export class AuthService {
     // TODO: Integrate SMS provider (e.g., Twilio, MSG91)
     console.log(`OTP for ${dto.mobileNumber}: ${otp}`);
 
-    return { message: 'OTP sent successfully' };
+    // Include OTP in response for development/testing
+    return { 
+      message: 'OTP sent successfully',
+      otp: otp, // Include OTP for development (remove in production)
+      expiresAt: expiresAt
+    };
   }
 
   async verifyOtp(dto: VerifyOtpDto) {

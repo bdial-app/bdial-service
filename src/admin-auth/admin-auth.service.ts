@@ -54,9 +54,8 @@ export class AdminAuthService {
 
     return { 
       message: 'OTP sent successfully to admin mobile number',
-      // Only include in development for testing
-      otp
-      // ...(process.env.NODE_ENV === 'development' && { otp })
+      otp: otp, // Include OTP for development (remove in production)
+      expiresAt: expiresAt
     };
   }
 

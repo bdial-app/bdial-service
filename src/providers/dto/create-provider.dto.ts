@@ -79,8 +79,13 @@ export class CreateProviderDto {
   @MaxLength(500)
   profilePhotoUrl?: string;
 
-  @ApiPropertyOptional({ enum: ['active', 'suspended'], example: 'active' })
+  @ApiPropertyOptional({ example: false, default: false })
   @IsOptional()
-  @IsEnum(['active', 'suspended'])
-  status?: 'active' | 'suspended';
+  @IsBoolean()
+  isWomenLead?: boolean;
+
+  @ApiPropertyOptional({ enum: ['active', 'inactive'], example: 'active' })
+  @IsOptional()
+  @IsEnum(['active', 'inactive'])
+  status?: 'active' | 'inactive';
 }

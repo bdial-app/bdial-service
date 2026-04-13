@@ -14,35 +14,37 @@ export class PhotosService {
     private storage: StorageService,
   ) {}
 
-  async uploadListingPhotos(
-    listingId: string,
+  async uploadProviderPhotos(
+    providerId: string,
     userId: string,
     files: Express.Multer.File[],
   ) {
     // Verify ownership
-    const listing = await this.prisma.listing.findUnique({
-      where: { id: listingId },
-      include: { _count: { select: { photos: true } } },
+    const provider = await this.prisma.provider.findUnique({
+      where: { id: providerId },
     });
-    if (!listing) throw new NotFoundException('Listing not found');
-    if (listing.providerId !== userId) throw new ForbiddenException();
+    if (!provider) throw new NotFoundException('Provider not found');
+    if (provider.userId !== userId) throw new ForbiddenException();
 
-    const existing = (listing as any)._count.photos;
-    if (existing + files.length > 10) {
+    // Check existing photos count
+    const existingPhotos = await this.prisma.photo.count({
+      where: { providerId },
+    });
+    if (existingPhotos + files.length > 10) {
       throw new BadRequestException(
-        `Max 10 photos per listing. You have ${existing}, uploading ${files.length} would exceed the limit.`,
+        `Max 10 photos per provider. You have ${existingPhotos}, uploading ${files.length} would exceed the limit.`,
       );
     }
 
     const uploaded = await Promise.all(
       files.map(async (file, i) => {
-        const { url, storageKey } = await this.storage.upload('listings', file);
+        const { url, storageKey } = await this.storage.upload('providers', file);
         return this.prisma.photo.create({
           data: {
-            listingId,
+            providerId,
             imageUrl: url,
             storageKey,
-            displayOrder: existing + i,
+            displayOrder: existingPhotos + i,
           },
         });
       }),
@@ -51,23 +53,26 @@ export class PhotosService {
     return uploaded;
   }
 
-  async deleteListingPhoto(photoId: string, userId: string) {
+  async deleteProviderPhoto(photoId: string, userId: string) {
     const photo = await this.prisma.photo.findUnique({
       where: { id: photoId },
-      include: { listing: true },
     });
     if (!photo) throw new NotFoundException('Photo not found');
-    if (photo.listing.providerId !== userId) throw new ForbiddenException();
+    
+    const provider = await this.prisma.provider.findUnique({
+      where: { id: photo.providerId },
+    });
+    if (!provider || provider.userId !== userId) throw new ForbiddenException();
 
     await this.storage.delete(photo.storageKey);
     await this.prisma.photo.delete({ where: { id: photoId } });
     return { message: 'Photo deleted' };
   }
 
-  async reorderPhotos(listingId: string, userId: string, orderedIds: string[]) {
-    const listing = await this.prisma.listing.findUnique({ where: { id: listingId } });
-    if (!listing) throw new NotFoundException('Listing not found');
-    if (listing.providerId !== userId) throw new ForbiddenException();
+  async reorderProviderPhotos(providerId: string, userId: string, orderedIds: string[]) {
+    const provider = await this.prisma.provider.findUnique({ where: { id: providerId } });
+    if (!provider) throw new NotFoundException('Provider not found');
+    if (provider.userId !== userId) throw new ForbiddenException();
 
     await Promise.all(
       orderedIds.map((id, index) =>

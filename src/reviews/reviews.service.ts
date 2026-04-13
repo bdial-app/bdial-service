@@ -17,8 +17,8 @@ export class ReviewsService {
   async create(userId: string, dto: CreateReviewDto) {
     const existing = await this.prisma.review.findUnique({
       where: {
-        listingId_reviewerId: {
-          listingId: dto.listingId!,
+        providerId_reviewerId: {
+          providerId: dto.providerId,
           reviewerId: userId,
         },
       },
@@ -27,23 +27,23 @@ export class ReviewsService {
 
 
     if (existing) {
-      throw new ConflictException('You have already reviewed this listing');
+      throw new ConflictException('You have already reviewed this provider');
     }
 
     return this.prisma.review.create({
       data: {
-        listingId: dto.listingId,
+        providerId: dto.providerId,
         reviewerId: userId,
-        starRating: dto.starRating!, // 👈 FIX (important)
+        starRating: dto.starRating!, 
         reviewText: dto.reviewText,
       },
     });
   }
 
  
-  async getForListing(listingId: string) {
+  async getForProvider(providerId: string) {
     return this.prisma.review.findMany({
-      where: { listingId, status: 'active' },
+      where: { providerId, status: 'active' },
       orderBy: { postedAt: 'desc' },
       include: {
         reviewer: { select: { id: true, name: true } },

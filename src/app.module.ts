@@ -7,7 +7,6 @@ import { AuthModule } from './auth/auth.module';
 import { AdminAuthModule } from './admin-auth/admin-auth.module';
 import { UsersModule } from './users/users.module';
 import { CategoriesModule } from './categories/categories.module';
-import { ListingsModule } from './listings/listings.module';
 import { VerificationsModule } from './verifications/verifications.module';
 import { ReviewsModule } from './reviews/reviews.module';
 import { AdminModule } from './admin/admin.module';
@@ -25,8 +24,7 @@ import { ProvidersModule } from './providers/providers.module';
     AdminAuthModule,
     UsersModule,
     CategoriesModule,
-    ListingsModule,
-    VerificationsModule,
+        VerificationsModule,
     ReviewsModule,
     AdminModule,
     ProvidersModule,

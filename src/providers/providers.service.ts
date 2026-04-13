@@ -34,8 +34,18 @@ export class ProvidersService {
       throw new ConflictException(`Provider already exists for user with ID '${userId}'`);
     }
 
+    const { userId: providerUserId, openTime, closeTime, ...providerData } = createProviderDto;
+    
+    // Convert HH:MM time strings to proper Date objects
+    const processedData = {
+      ...providerData,
+      userId: providerUserId,
+      ...(openTime && { openTime: new Date(`2000-01-01T${openTime}:00`) }),
+      ...(closeTime && { closeTime: new Date(`2000-01-01T${closeTime}:00`) }),
+    };
+    
     return this.prisma.provider.create({
-      data: createProviderDto,
+      data: processedData,
       include: {
         user: {
           select: {
@@ -216,9 +226,18 @@ export class ProvidersService {
       }
     }
 
+    const { userId, openTime, closeTime, ...providerUpdateData } = updateProviderDto;
+    
+    // Convert HH:MM time strings to proper Date objects for update
+    const processedUpdateData = {
+      ...providerUpdateData,
+      ...(openTime && { openTime: new Date(`2000-01-01T${openTime}:00`) }),
+      ...(closeTime && { closeTime: new Date(`2000-01-01T${closeTime}:00`) }),
+    };
+    
     return this.prisma.provider.update({
       where: { id },
-      data: updateProviderDto,
+      data: processedUpdateData,
       include: {
         user: {
           select: {

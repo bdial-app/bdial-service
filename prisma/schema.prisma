@@ -30,12 +30,6 @@ enum UserStatus {
   deleted
 }
 
-enum ListingStatus {
-  pending
-  live
-  rejected
-  inactive
-}
 
 enum VerificationStatus {
   pending
@@ -61,6 +55,11 @@ enum ReportStatus {
   dismissed
 }
 
+enum ProviderStatus {
+  active
+  inactive
+}
+
 // ─────────────────────── MODELS ───────────────────────
 
 model User {
@@ -78,7 +77,6 @@ model User {
   updatedAt    DateTime   @updatedAt @map("updated_at")
 
   // Relations
-  listings        Listing[]      @relation("ProviderListings")
   verification    Verification?  @relation("UserVerification")
   reviews         Review[]       @relation("ReviewerReviews")
   reviewReports   ReviewReport[] @relation("ReporterReports")
@@ -103,58 +101,25 @@ model Category {
   parent       Category?  @relation("CategoryParent", fields: [parentId], references: [id])
   children     Category[] @relation("CategoryParent")
 
-  // Listing join
-  listingCategories ListingCategory[]
+  // Provider join
+  providerCategories ProviderCategory[]
 
   @@map("categories")
 }
 
-model Listing {
-  id                  String        @id @default(uuid())
-  providerId          String        @map("provider_id")
-  businessName        String        @map("business_name") @db.VarChar(150)
-  description         String?
-  contactPhone        String?       @map("contact_phone") @db.VarChar(15)
-  city                String        @db.VarChar(100)
-  area                String?       @db.VarChar(100)
-  pincode             String?       @db.VarChar(10)
-  latitude            Decimal?      @db.Decimal(9, 6)
-  longitude           Decimal?      @db.Decimal(9, 6)
-  isWomenLed          Boolean       @default(false) @map("is_women_led")
-  communityVerified   Boolean       @default(false) @map("community_verified")
-  status              ListingStatus @default(pending)
-  rejectionNote       String?       @map("rejection_note")
-  submittedAt         DateTime      @default(now()) @map("submitted_at")
-  approvedAt          DateTime?     @map("approved_at")
-  deletedAt           DateTime?     @map("deleted_at")
-  updatedAt           DateTime      @updatedAt @map("updated_at")
-
-  // Relations
-  provider            User              @relation("ProviderListings", fields: [providerId], references: [id])
-  listingCategories   ListingCategory[]
-  photos              Photo[]
-  products            Product[]
-  reviews             Review[]
-
-  @@index([status, city])
-  @@index([isWomenLed, status])
-  @@index([providerId])
-  @@index([communityVerified, status])
-  @@map("listings")
-}
-
-model ListingCategory {
+model ProviderCategory {
   id         String   @id @default(uuid())
-  listingId  String   @map("listing_id")
+  providerId String   @map("provider_id")
   categoryId String   @map("category_id")
 
-  listing    Listing  @relation(fields: [listingId], references: [id])
+  provider   Provider  @relation(fields: [providerId], references: [id])
   category   Category @relation(fields: [categoryId], references: [id])
 
-  @@unique([listingId, categoryId])
-  @@index([categoryId, listingId])
-  @@map("listing_categories")
+  @@unique([providerId, categoryId])
+  @@index([categoryId, providerId])
+  @@map("provider_categories")
 }
+
 
 model Verification {
   id              String             @id @default(uuid())
@@ -179,21 +144,21 @@ model Verification {
 
 model Photo {
   id           String   @id @default(uuid())
-  listingId    String   @map("listing_id")
+  providerId   String   @map("provider_id")
   imageUrl     String   @map("image_url") @db.VarChar(500)
   storageKey   String   @map("storage_key") @db.VarChar(300)
   displayOrder Int      @default(0) @map("display_order")
   uploadedAt   DateTime @default(now()) @map("uploaded_at")
 
-  listing      Listing  @relation(fields: [listingId], references: [id])
+  provider     Provider  @relation(fields: [providerId], references: [id])
 
-  @@index([listingId, displayOrder])
+  @@index([providerId, displayOrder])
   @@map("photos")
 }
 
 model Product {
   id           String   @id @default(uuid())
-  listingId    String   @map("listing_id")
+  providerId   String   @map("provider_id")
   name         String   @db.VarChar(150)
   description  String?
   price        Decimal? @db.Decimal(10, 2)
@@ -202,15 +167,15 @@ model Product {
   isActive     Boolean  @default(true) @map("is_active")
   displayOrder Int      @default(0) @map("display_order")
 
-  listing      Listing  @relation(fields: [listingId], references: [id])
+  provider     Provider  @relation(fields: [providerId], references: [id])
 
-  @@index([listingId, isActive])
+  @@index([providerId, isActive])
   @@map("products")
 }
 
 model Review {
   id          String       @id @default(uuid())
-  listingId   String       @map("listing_id")
+  providerId  String       @map("provider_id")
   reviewerId  String       @map("reviewer_id")
   starRating  Int          @map("star_rating") @db.SmallInt
   reviewText  String?      @map("review_text")
@@ -219,14 +184,14 @@ model Review {
   moderatedAt DateTime?    @map("moderated_at")
   moderatedBy String?      @map("moderated_by")
 
-  listing     Listing      @relation(fields: [listingId], references: [id])
+  provider    Provider     @relation(fields: [providerId], references: [id])
   reviewer    User         @relation("ReviewerReviews", fields: [reviewerId], references: [id])
   moderator   User?        @relation("ModeratorReviews", fields: [moderatedBy], references: [id])
   photos      ReviewPhoto[]
   reports     ReviewReport[]
 
-  @@unique([listingId, reviewerId])
-  @@index([listingId, status])
+  @@unique([providerId, reviewerId])
+  @@index([providerId, status])
   @@map("reviews")
 }
 
@@ -272,12 +237,17 @@ model Provider {
   closeTime      DateTime?  @map("close_time") @db.Time
   isAvailable    Boolean   @default(true) @map("is_available")
   profilePhotoUrl String?  @map("profile_photo_url") @db.VarChar(500)
-  status         String    @default("active") @db.VarChar(10)
+  isWomenLead   Boolean   @default(false) @map("is_women_lead")
+  status         ProviderStatus @default(active)
   createdAt      DateTime  @default(now()) @map("created_at")
   updatedAt      DateTime  @updatedAt @map("updated_at")
 
   // Relations
-  user User @relation("UserProvider", fields: [userId], references: [id], onDelete: Cascade)
+  user               User               @relation("UserProvider", fields: [userId], references: [id], onDelete: Cascade)
+  providerCategories ProviderCategory[]
+  photos             Photo[]
+  products           Product[]
+  reviews            Review[]
 
   @@map("providers")
 }

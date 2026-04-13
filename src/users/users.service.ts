@@ -69,27 +69,6 @@ export class UsersService {
     const user = await this.prisma.user.findUnique({
       where: { id },
       include: {
-        listings: {
-          where: { deletedAt: null },
-          select: {
-            id: true,
-            businessName: true,
-            status: true,
-            submittedAt: true,
-            approvedAt: true,
-            city: true,
-            area: true,
-            isWomenLed: true,
-            communityVerified: true,
-            _count: {
-              select: {
-                reviews: true,
-                photos: true,
-              },
-            },
-          },
-          orderBy: { submittedAt: 'desc' },
-        },
         verification: {
           select: {
             id: true,
@@ -99,9 +78,9 @@ export class UsersService {
             adminNotes: true,
           },
         },
+        provider: true,
         _count: {
           select: {
-            listings: true,
             reviews: true,
           },
         },
@@ -165,9 +144,6 @@ export class UsersService {
           deletedAt: true,
           _count: {
             select: {
-              listings: {
-                where: { deletedAt: null },
-              },
               reviews: true,
             },
           },
@@ -187,11 +163,4 @@ export class UsersService {
     };
   }
 
-  async getMyListings(userId: string) {
-    return this.prisma.listing.findMany({
-      where: { providerId: userId, deletedAt: null },
-      include: { listingCategories: { include: { category: true } } },
-      orderBy: { submittedAt: 'desc' },
-    });
-  }
 }
