@@ -32,6 +32,15 @@ export class CreateProviderDto {
   @MaxLength(100)
   area?: string;
 
+  @Transform(({ value }) => {
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return value;
+})
+  @IsOptional()
+  @IsBoolean()
+  isAvailable?: boolean;
+
   @ApiPropertyOptional({ example: '400014' })
   @IsOptional()
   @IsString()
