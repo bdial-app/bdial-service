@@ -2,6 +2,7 @@ import { Controller, Get, Post, Patch, Param, Body, UseGuards, Request, Query } 
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiBody, ApiQuery, ApiParam } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import { AdminService } from './admin.service';
+import { PaginationDto } from './dto/pagination.dto';
 
 @ApiTags('Admin')
 @ApiBearerAuth()

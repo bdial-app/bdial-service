@@ -17,6 +17,7 @@ import {
   ApiOperation,
   ApiResponse,
   ApiParam,
+  ApiBody,
   ApiQuery,
   ApiBearerAuth,
   ApiConsumes,
@@ -51,12 +52,41 @@ export class ProvidersController {
   @ApiResponse({ status: 400, description: 'Bad Request' })
   @ApiResponse({ status: 404, description: 'User not found' })
   @ApiResponse({ status: 409, description: 'Provider already exists for user' })
-  becomeProvider(
-    @Body() becomeProviderDto: BecomeProviderDto,
-    @UploadedFile() file?: Express.Multer.File,
-  ) {
-    return this.providersService.becomeProvider(becomeProviderDto, file);
-  }
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary', // 👈 THIS shows file upload in Swagger
+        },
+        userId: { type: 'string' },
+        brandName: { type: 'string' },
+        description: { type: 'string' },
+        address: { type: 'string' },
+        city: { type: 'string' },
+        area: { type: 'string' },
+        pincode: { type: 'string' },
+        latitude: { type: 'string' },
+        longitude: { type: 'string' },
+        contactNumber: { type: 'string' },
+        openTime: { type: 'string' },
+        closeTime: { type: 'string' },
+        isAvailable: { type: 'boolean' },
+        profilePhotoUrl: { type: 'string' },
+        ijamatNumber: { type: 'string'},
+        ijamatExpiry: { type: 'string'},
+        ijamatDocUrl: { type: 'string'}
+      },
+      required: ['file', 'userId', 'brandName', 'city'], // adjust required fields here
+    },
+  })
+becomeProvider(
+  @UploadedFile() file: Express.Multer.File,
+  @Body() dto: BecomeProviderDto,
+) {
+  return this.providersService.becomeProvider(dto, file);
+}
 
   @Get()
   @ApiOperation({ summary: 'Get providers list with pagination and filters' })

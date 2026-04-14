@@ -34,7 +34,7 @@ export class ReviewsService {
       data: {
         listingId: dto.listingId,
         reviewerId: userId,
-        starRating: dto.starRating!, // 👈 FIX (important)
+        starRating: dto.starRating!,
         reviewText: dto.reviewText,
       },
     });
@@ -123,13 +123,13 @@ export class ReviewsService {
     throw new NotFoundException('Review not found');
   }
 
-  // 2. Upload to storage
+
   const { url, storageKey } = await this.storageService.upload(
     'reviews',
     file,
   );
 
-  // 3. Save in DB
+ 
   const photo = await this.prisma.reviewPhoto.create({
     data: {
       reviewId,
@@ -169,7 +169,7 @@ const where = {
   },
 };
 
-// Run both queries together
+
 const [data, total] = await Promise.all([
   this.prisma.review.findMany({
     skip,

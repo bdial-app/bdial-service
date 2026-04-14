@@ -10,6 +10,7 @@ import { CreateProviderDto } from './dto/create-provider.dto';
 import { UpdateProviderDto } from './dto/update-provider.dto';
 import { ProviderPaginationDto } from './dto/provider-pagination.dto';
 import { BecomeProviderDto } from './dto/become-provider.dto';
+import { Prisma } from '@prisma/client';
 
 @Injectable()
 export class ProvidersService {
@@ -18,10 +19,44 @@ export class ProvidersService {
     private storage: StorageService,
   ) {}
 
-  async create(createProviderDto: CreateProviderDto) {
-    const { userId, contactNumber } = createProviderDto;
+  private toTime(value?: string | null): Date | null {
+    if (!value) return null;
 
-    // Check if user exists
+    const [hours, minutes] = value.split(':').map(Number);
+
+    const date = new Date();
+    date.setUTCHours(hours, minutes, 0, 0);
+
+    return date;
+  }
+
+  private buildCreateProviderData(
+    providerData: CreateProviderDto,
+  ): Prisma.ProviderUncheckedCreateInput {
+    return {
+      ...providerData,
+      openTime: this.toTime(providerData.openTime),
+      closeTime: this.toTime(providerData.closeTime),
+    };
+  }
+
+  private buildUpdateProviderData(
+    providerData: UpdateProviderDto,
+  ): Prisma.ProviderUncheckedUpdateInput {
+    return {
+      ...providerData,
+      ...(providerData.openTime !== undefined && {
+        openTime: this.toTime(providerData.openTime),
+      }),
+      ...(providerData.closeTime !== undefined && {
+        closeTime: this.toTime(providerData.closeTime),
+      }),
+    };
+  }
+
+  async create(createProviderDto: CreateProviderDto) {
+    const { userId } = createProviderDto;
+
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
     });
@@ -30,7 +65,6 @@ export class ProvidersService {
       throw new NotFoundException(`User with ID '${userId}' not found`);
     }
 
-    // Check if provider already exists for this user
     const existingProvider = await this.prisma.provider.findUnique({
       where: { userId },
     });
@@ -42,7 +76,10 @@ export class ProvidersService {
     }
 
     return this.prisma.provider.create({
-      data: createProviderDto,
+      data: this.buildCreateProviderData({
+        ...createProviderDto,
+        status: createProviderDto.status ?? 'active',
+      }),
       include: {
         user: {
           select: {
@@ -67,16 +104,15 @@ export class ProvidersService {
       ...providerData
     } = becomeProviderDto;
 
-    // Check if file is provided
     if (!file) {
-      throw new BadRequestException('Aadhaar card document file is required');
+      throw new BadRequestException(
+        'Aadhaar card document file is required',
+      );
     }
 
-    // Upload Aadhaar Doc
     const uploadResult = await this.storage.upload('verifications', file);
     const aadhaarDocUrl = uploadResult.url;
 
-    // Check if user exists
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
     });
@@ -85,7 +121,6 @@ export class ProvidersService {
       throw new NotFoundException(`User with ID '${userId}' not found`);
     }
 
-    // Check if provider already exists for this user
     const existingProvider = await this.prisma.provider.findUnique({
       where: { userId },
     });
@@ -96,21 +131,23 @@ export class ProvidersService {
       );
     }
 
-    // Use transaction to create both provider and verification
     return this.prisma.$transaction(async (tx) => {
       const provider = await tx.provider.create({
-        data: {
+        data: this.buildCreateProviderData({
           ...providerData,
+          status: 'active',
           userId,
-        },
+        }),
       });
 
       const verification = await tx.verification.create({
         data: {
           userId,
-          aadhaarDocUrl, // This will now be a string
+          aadhaarDocUrl,
           ijamatNumber,
-          ijamatExpiry: ijamatExpiry ? new Date(ijamatExpiry) : null,
+          ijamatExpiry: ijamatExpiry
+            ? new Date(ijamatExpiry)
+            : null,
           ijamatDocUrl,
           status: 'pending',
         },
@@ -146,7 +183,6 @@ export class ProvidersService {
     const { page = 1, limit = 10, status, city, search } = paginationDto;
     const skip = (page - 1) * limit;
 
-    // Build where conditions
     const where: any = {};
 
     if (status) {
@@ -202,7 +238,9 @@ export class ProvidersService {
     });
 
     if (!existingProvider) {
-      throw new NotFoundException(`Provider with ID '${id}' not found`);
+      throw new NotFoundException(
+        `Provider with ID '${id}' not found`,
+      );
     }
 
     // If userId is being updated, check if it exists and is unique
@@ -220,9 +258,10 @@ export class ProvidersService {
         );
       }
 
-      const existingProviderForUser = await this.prisma.provider.findUnique({
-        where: { userId: updateProviderDto.userId },
-      });
+      const existingProviderForUser =
+        await this.prisma.provider.findUnique({
+          where: { userId: updateProviderDto.userId },
+        });
 
       if (existingProviderForUser) {
         throw new ConflictException(
@@ -233,7 +272,7 @@ export class ProvidersService {
 
     return this.prisma.provider.update({
       where: { id },
-      data: updateProviderDto,
+      data: this.buildUpdateProviderData(updateProviderDto),
       include: {
         user: {
           select: {

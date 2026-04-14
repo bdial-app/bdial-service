@@ -1,15 +1,15 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsOptional, IsBoolean, IsUUID, MaxLength, Matches, IsEnum } from 'class-validator';
-
+import { IsString, IsOptional, IsBoolean, IsUUID, MaxLength, Matches, IsEnum, IsEmpty } from 'class-validator';
+import {Transform} from 'class-transformer';
 export class CreateProviderDto {
   @ApiProperty({ example: 'uuid-of-user' })
   @IsUUID()
-  userId: string;
+  userId!: string;
 
   @ApiProperty({ example: 'Fatema Beauty Salon' })
   @IsString()
   @MaxLength(150)
-  brandName: string;
+  brandName!: string;
 
   @ApiPropertyOptional({ example: 'Professional beauty services for women' })
   @IsOptional()
@@ -24,7 +24,7 @@ export class CreateProviderDto {
   @ApiProperty({ example: 'Mumbai' })
   @IsString()
   @MaxLength(100)
-  city: string;
+  city!: string;
 
   @ApiPropertyOptional({ example: 'Dadar' })
   @IsOptional()
@@ -38,23 +38,24 @@ export class CreateProviderDto {
   @MaxLength(10)
   pincode?: string;
 
-  @ApiPropertyOptional({ example: '19.0760' })
-  @IsOptional()
-  @IsString()
-  @Matches(/^-?\d+\.?\d*$/, { message: 'Latitude must be a valid decimal' })
-  latitude?: string;
+ @Transform(({ value }) => value === '' ? undefined : value)
+@IsOptional()
+@IsString()
+@Matches(/^-?\d+\.?\d*$/, { message: 'Latitude must be a valid decimal' })
+latitude?: string;
 
-  @ApiPropertyOptional({ example: '72.8777' })
-  @IsOptional()
-  @IsString()
-  @Matches(/^-?\d+\.?\d*$/, { message: 'Longitude must be a valid decimal' })
-  longitude?: string;
+
+@Transform(({ value }) => value === '' ? undefined : value)
+@IsOptional()
+@IsString()
+@Matches(/^-?\d+\.?\d*$/, { message: 'Longitude must be a valid decimal' })
+longitude?: string;
 
   @ApiProperty({ example: '+919876543210' })
   @IsString()
   @Matches(/^\+\d{10,15}$/, { message: 'Contact number must be a valid international format' })
   @MaxLength(15)
-  contactNumber: string;
+  contactNumber!: string;
 
   @ApiPropertyOptional({ example: '09:00' })
   @IsOptional()

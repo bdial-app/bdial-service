@@ -67,7 +67,7 @@ export class ReviewsController {
     return this.reviewsService.findOne(id);
   }
 
-  // ✅ 5. Admin: Change status (MODERATION)
+  //Admin can change the status
   @Patch(':id/status')
   @ApiBearerAuth()
   @UseGuards(AuthGuard('jwt')) // later replace with AdminGuard

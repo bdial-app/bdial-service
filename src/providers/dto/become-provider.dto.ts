@@ -3,9 +3,7 @@ import { CreateProviderDto } from './create-provider.dto';
 import { IsString, IsOptional, MinLength } from 'class-validator';
 
 export class BecomeProviderDto extends CreateProviderDto {
-  @ApiPropertyOptional({ type: 'string', format: 'binary', description: 'Aadhaar card image file' })
-  file?: any;
-
+  
   @ApiPropertyOptional({ description: 'iJamat card number (optional)' })
   @IsOptional()
   @IsString()

@@ -61,6 +61,11 @@ enum ReportStatus {
   dismissed
 }
 
+enum ProviderStatus {
+  active
+  suspended
+}
+
 // ─────────────────────── MODELS ───────────────────────
 
 model User {
@@ -272,7 +277,7 @@ model Provider {
   closeTime      DateTime?  @map("close_time") @db.Time
   isAvailable    Boolean   @default(true) @map("is_available")
   profilePhotoUrl String?  @map("profile_photo_url") @db.VarChar(500)
-  status         String    @default("active") @db.VarChar(10)
+  status         ProviderStatus @default(active)
   createdAt      DateTime  @default(now()) @map("created_at")
   updatedAt      DateTime  @updatedAt @map("updated_at")
 

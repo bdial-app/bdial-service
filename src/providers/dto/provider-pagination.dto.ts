@@ -1,6 +1,6 @@
 import { IsInt, IsOptional, Min, Max, IsEnum, IsString } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 
 export class ProviderPaginationDto {
   @ApiPropertyOptional({

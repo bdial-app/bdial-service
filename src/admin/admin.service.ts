@@ -9,6 +9,16 @@ export class AdminService {
     if (user.role !== 'admin') throw new ForbiddenException('Admin access required');
   }
 
+  private buildPagination(page = 1, limit = 10, total = 0) {
+  return {
+    currentPage: page,
+    pageSize: limit,
+    totalCount: total,
+    totalPages: Math.ceil(total / limit),
+    hasNextPage: page * limit < total,
+    hasPreviousPage: page > 1,
+  };
+}
   async getDashboard(admin: any) {
     this.assertAdmin(admin);
     const [
@@ -27,18 +37,33 @@ export class AdminService {
     return { pendingListings, totalListings, totalUsers, pendingVerifications, flaggedReviews };
   }
 
-  async getPendingListings(admin: any) {
-    this.assertAdmin(admin);
-    return this.prisma.listing.findMany({
+ async getPendingListings(admin: any, page = 1, limit = 10) {
+  this.assertAdmin(admin);
+
+  const skip = (page - 1) * limit;
+
+  const [data, total] = await this.prisma.$transaction([
+    this.prisma.listing.findMany({
       where: { status: 'pending', deletedAt: null },
       include: {
         provider: { select: { id: true, name: true, mobileNumber: true } },
         listingCategories: { include: { category: true } },
       },
       orderBy: { submittedAt: 'asc' },
-    });
-  }
+      skip,
+      take: limit,
+    }),
 
+    this.prisma.listing.count({
+      where: { status: 'pending', deletedAt: null },
+    }),
+  ]);
+
+  return {
+    data,
+    pagination: this.buildPagination(page, limit, total),
+  };
+}
   async approveListing(admin: any, listingId: string) {
     this.assertAdmin(admin);
     return this.prisma.listing.update({
