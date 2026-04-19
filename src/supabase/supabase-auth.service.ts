@@ -3,8 +3,8 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 @Injectable()
 export class SupabaseAuthService {
-  private supabase: SupabaseClient;
-  private supabaseAdmin: SupabaseClient; // Separate client for admin operations
+  private supabase?: SupabaseClient;
+  private supabaseAdmin?: SupabaseClient; // Separate client for admin operations
   private readonly logger = new Logger(SupabaseAuthService.name);
 
   constructor() {
@@ -16,6 +16,7 @@ export class SupabaseAuthService {
       this.logger.warn(
         'Supabase credentials not configured. Auth will use local OTP only.',
       );
+      return; // Exit early to avoid initializing with empty strings
     }
 
     // Regular client for user operations
@@ -53,6 +54,11 @@ export class SupabaseAuthService {
     metadata?: Record<string, any>,
   ): Promise<string | null> {
     try {
+      if (!this.supabaseAdmin) {
+        this.logger.warn('createOrUpdateUser: Supabase admin client not configured');
+        return null;
+      }
+
       if (!email && !phone) {
         throw new Error('Either email or phone is required');
       }
@@ -97,6 +103,10 @@ export class SupabaseAuthService {
    */
   async getUserProfile(userId: string) {
     try {
+      if (!this.supabaseAdmin) {
+        this.logger.warn('getUserProfile: Supabase admin client not configured');
+        return null;
+      }
       // Use admin client for user profile retrieval
       const { data, error } = await this.supabaseAdmin.auth.admin.getUserById(userId);
 
@@ -132,6 +142,10 @@ export class SupabaseAuthService {
    */
   async getGoogleOAuthUrl(redirectUrl: string): Promise<string | null> {
     try {
+      if (!this.supabase) {
+        this.logger.warn('getGoogleOAuthUrl: Supabase client not configured');
+        return null;
+      }
       const { data, error } = await this.supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
@@ -159,6 +173,9 @@ export class SupabaseAuthService {
     error?: string;
   }> {
     try {
+      if (!this.supabase) {
+        return { user: null, error: 'Supabase client not configured' };
+      }
       const { data, error } = await this.supabase.auth.exchangeCodeForSession(code);
 
       if (error) {
@@ -190,7 +207,11 @@ export class SupabaseAuthService {
    */
   async getUser(userId: string) {
     try {
-      const { data, error } = await this.supabase.auth.admin.getUserById(userId);
+      if (!this.supabaseAdmin) {
+        this.logger.warn('getUser: Supabase admin client not configured');
+        return null;
+      }
+      const { data, error } = await this.supabaseAdmin.auth.admin.getUserById(userId);
 
       if (error) {
         this.logger.error(`Error getting user ${userId}:`, error);
@@ -212,6 +233,10 @@ export class SupabaseAuthService {
     metadata: Record<string, any>,
   ): Promise<boolean> {
     try {
+      if (!this.supabaseAdmin) {
+        this.logger.warn('updateUserMetadata: Supabase admin client not configured');
+        return false;
+      }
       // Use admin client for metadata updates
       const { error } = await this.supabaseAdmin.auth.admin.updateUserById(userId, {
         user_metadata: metadata,
@@ -239,6 +264,9 @@ export class SupabaseAuthService {
     error?: string;
   }> {
     try {
+      if (!this.supabase) {
+        return { user: null, error: 'Supabase client not configured' };
+      }
       const { data, error } = await this.supabase.auth.getUser(token);
 
       if (error) {
@@ -274,6 +302,9 @@ export class SupabaseAuthService {
     error?: string;
   }> {
     try {
+      if (!this.supabase) {
+        return { session: null, error: 'Supabase client not configured' };
+      }
       const { data, error } = await this.supabase.auth.exchangeCodeForSession(code);
 
       if (error) {

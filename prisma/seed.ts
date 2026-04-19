@@ -1,4 +1,4 @@
-import { PrismaClient } from '../node_modules/.prisma/client';
+import { PrismaClient } from '.prisma/client';
 
 const prisma = new PrismaClient();
 
@@ -7,35 +7,40 @@ const categories = [
     id: 'cat-001',
     name: 'Bohri Ridha & Burka Tailoring',
     slug: 'bohri-ridha-burka-tailoring',
-    description: 'Custom stitching of traditional Bohri Ridha, Burka, and related garments',
+    description:
+      'Custom stitching of traditional Bohri Ridha, Burka, and related garments',
     displayOrder: 1,
   },
   {
     id: 'cat-002',
     name: 'Tuition & Classes',
     slug: 'tuition-classes',
-    description: 'Academic tuitions, Quran classes, language, music, arts and crafts',
+    description:
+      'Academic tuitions, Quran classes, language, music, arts and crafts',
     displayOrder: 2,
   },
   {
     id: 'cat-003',
     name: 'Beauty & Mehandi',
     slug: 'beauty-mehandi',
-    description: 'Beauty services, bridal makeup, Mehandi (henna), skincare, haircare',
+    description:
+      'Beauty services, bridal makeup, Mehandi (henna), skincare, haircare',
     displayOrder: 3,
   },
   {
     id: 'cat-004',
     name: 'Jewellery & Accessories',
     slug: 'jewellery-accessories',
-    description: 'Handmade or resale jewellery, Bohri traditional accessories, bags',
+    description:
+      'Handmade or resale jewellery, Bohri traditional accessories, bags',
     displayOrder: 4,
   },
   {
     id: 'cat-005',
     name: 'Others',
     slug: 'others',
-    description: 'Any other community-approved services not covered in the above categories',
+    description:
+      'Any other community-approved services not covered in the above categories',
     displayOrder: 5,
   },
 ];
