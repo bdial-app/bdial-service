@@ -3,11 +3,15 @@ import {
   Get,
   Post,
   Patch,
+  Delete,
   Body,
   Param,
   Query,
   BadRequestException,
+  UseInterceptors,
+  UploadedFile,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiTags,
   ApiOperation,
@@ -15,6 +19,7 @@ import {
   ApiResponse,
   ApiParam,
   ApiQuery,
+  ApiConsumes,
 } from '@nestjs/swagger';
 
 import { CategoriesService } from './categories.service';
@@ -110,5 +115,59 @@ export class CategoriesController {
     }
 
     return this.categoriesService.update(id, body);
+  }
+
+  @Post(':id/icon')
+  @UseInterceptors(FileInterceptor('icon'))
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Upload or update category icon (PNG or SVG)' })
+  @ApiParam({ name: 'id', description: 'Category ID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Icon uploaded successfully',
+  })
+  @ApiResponse({ status: 400, description: 'Invalid file or file type' })
+  @ApiResponse({ status: 404, description: 'Category not found' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        icon: {
+          type: 'string',
+          format: 'binary',
+          description: 'PNG or SVG image file (max 5MB)',
+        },
+      },
+    },
+  })
+  uploadIcon(
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!id || id === 'undefined' || id === 'null') {
+      throw new BadRequestException('Valid category ID is required');
+    }
+
+    if (!file) {
+      throw new BadRequestException('No file uploaded');
+    }
+
+    return this.categoriesService.uploadIcon(id, file);
+  }
+
+  @Delete(':id/icon')
+  @ApiOperation({ summary: 'Delete category icon' })
+  @ApiParam({ name: 'id', description: 'Category ID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Icon deleted successfully',
+  })
+  @ApiResponse({ status: 404, description: 'Category not found' })
+  deleteIcon(@Param('id') id: string) {
+    if (!id || id === 'undefined' || id === 'null') {
+      throw new BadRequestException('Valid category ID is required');
+    }
+
+    return this.categoriesService.deleteIcon(id);
   }
 }

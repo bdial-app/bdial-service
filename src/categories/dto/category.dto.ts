@@ -20,6 +20,11 @@ export class CreateCategoryDto {
   @IsNumber()
   @IsOptional()
   displayOrder?: number;
+
+  @ApiPropertyOptional({ description: 'Icon URL' })
+  @IsOptional()
+  @IsString()
+  icon?: string;
 }
 
 export class UpdateCategoryDto {
@@ -42,4 +47,9 @@ export class UpdateCategoryDto {
   @IsOptional()
   @IsString()
   parentId?: string;
+
+  @ApiPropertyOptional({ description: 'Icon URL' })
+  @IsOptional()
+  @IsString()
+  icon?: string;
 }
