@@ -4,7 +4,9 @@ import {
   ConflictException,
   BadRequestException,
 } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository, DataSource, ILike } from 'typeorm';
+import { Provider, User, Verification } from '../entities';
 import { StorageService } from '../storage/storage.service';
 import { CreateProviderDto } from './dto/create-provider.dto';
 import { UpdateProviderDto } from './dto/update-provider.dto';
@@ -14,131 +16,75 @@ import { BecomeProviderDto } from './dto/become-provider.dto';
 @Injectable()
 export class ProvidersService {
   constructor(
-    private prisma: PrismaService,
+    @InjectRepository(Provider) private providerRepo: Repository<Provider>,
+    @InjectRepository(User) private userRepo: Repository<User>,
+    @InjectRepository(Verification) private verRepo: Repository<Verification>,
     private storage: StorageService,
+    private dataSource: DataSource,
   ) {}
 
   async create(createProviderDto: CreateProviderDto) {
-    const { userId, contactNumber } = createProviderDto;
+    const { userId } = createProviderDto;
+    const user = await this.userRepo.findOneBy({ id: userId });
+    if (!user) throw new NotFoundException(`User with ID '${userId}' not found`);
 
-    // Check if user exists
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
+    const existingProvider = await this.providerRepo.findOneBy({ userId });
+    if (existingProvider) throw new ConflictException(`Provider already exists for user with ID '${userId}'`);
+
+    const { latitude, longitude, ...rest } = createProviderDto;
+    const provider = this.providerRepo.create({
+      ...rest,
+      latitude: latitude ? parseFloat(latitude) : null,
+      longitude: longitude ? parseFloat(longitude) : null,
     });
-
-    if (!user) {
-      throw new NotFoundException(`User with ID '${userId}' not found`);
-    }
-
-    // Check if provider already exists for this user
-    const existingProvider = await this.prisma.provider.findUnique({
-      where: { userId },
-    });
-
-    if (existingProvider) {
-      throw new ConflictException(
-        `Provider already exists for user with ID '${userId}'`,
-      );
-    }
-
-    return this.prisma.provider.create({
-      data: createProviderDto,
-      include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            mobileNumber: true,
-          },
-        },
-      },
-    });
+    const saved = await this.providerRepo.save(provider);
+    return this.providerRepo.findOne({ where: { id: saved.id }, relations: ['user'] });
   }
 
-  async becomeProvider(
-    becomeProviderDto: BecomeProviderDto,
-    file?: Express.Multer.File,
-  ) {
-    const {
-      userId,
-      ijamatNumber,
-      ijamatExpiry,
-      ijamatDocUrl,
-      ...providerData
-    } = becomeProviderDto;
+  async becomeProvider(becomeProviderDto: BecomeProviderDto, file?: Express.Multer.File) {
+    const { userId, ijamatNumber, ijamatExpiry, ijamatDocUrl, ...providerData } = becomeProviderDto;
 
-    // Check if file is provided
-    if (!file) {
-      throw new BadRequestException('Aadhaar card document file is required');
-    }
+    if (!file) throw new BadRequestException('Aadhaar card document file is required');
 
-    // Upload Aadhaar Doc
     const uploadResult = await this.storage.upload('verifications', file);
     const aadhaarDocUrl = uploadResult.url;
 
-    // Check if user exists
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-    });
+    const user = await this.userRepo.findOneBy({ id: userId });
+    if (!user) throw new NotFoundException(`User with ID '${userId}' not found`);
 
-    if (!user) {
-      throw new NotFoundException(`User with ID '${userId}' not found`);
-    }
+    const existingProvider = await this.providerRepo.findOneBy({ userId });
+    if (existingProvider) throw new ConflictException(`Provider already exists for user with ID '${userId}'`);
 
-    // Check if provider already exists for this user
-    const existingProvider = await this.prisma.provider.findUnique({
-      where: { userId },
-    });
-
-    if (existingProvider) {
-      throw new ConflictException(
-        `Provider already exists for user with ID '${userId}'`,
-      );
-    }
-
-    // Use transaction to create both provider and verification
-    return this.prisma.$transaction(async (tx) => {
-      const provider = await tx.provider.create({
-        data: {
-          ...providerData,
-          userId,
-        },
+    return this.dataSource.transaction(async (manager) => {
+      const { latitude, longitude, file: _file, ...cleanData } = providerData as any;
+      const provider = manager.create(Provider, {
+        ...cleanData,
+        userId,
+        latitude: latitude ? parseFloat(latitude) : null,
+        longitude: longitude ? parseFloat(longitude) : null,
       });
+      const savedProvider = await manager.save(provider);
 
-      const verification = await tx.verification.create({
-        data: {
-          userId,
-          aadhaarDocUrl, // This will now be a string
-          ijamatNumber,
-          ijamatExpiry: ijamatExpiry ? new Date(ijamatExpiry) : null,
-          ijamatDocUrl,
-          status: 'pending',
-        },
+      const verification = manager.create(Verification, {
+        userId,
+        aadhaarDocUrl,
+        ijamatNumber,
+        ijamatExpiry: ijamatExpiry ? new Date(ijamatExpiry) : null,
+        ijamatDocUrl,
+        status: 'pending',
       });
+      const savedVerification = await manager.save(verification);
 
-      return { provider, verification };
+      return { provider: savedProvider, verification: savedVerification };
     });
   }
 
   async findOne(id: string) {
-    const provider = await this.prisma.provider.findUnique({
+    const provider = await this.providerRepo.findOne({
       where: { id },
-      include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            mobileNumber: true,
-            gender: true,
-          },
-        },
-      },
+      relations: ['user'],
     });
-
-    if (!provider) {
-      throw new NotFoundException(`Provider with ID '${id}' not found`);
-    }
-
+    if (!provider) throw new NotFoundException(`Provider with ID '${id}' not found`);
     return provider;
   }
 
@@ -146,104 +92,37 @@ export class ProvidersService {
     const { page = 1, limit = 10, status, city, search } = paginationDto;
     const skip = (page - 1) * limit;
 
-    // Build where conditions
-    const where: any = {};
+    const qb = this.providerRepo.createQueryBuilder('provider')
+      .leftJoinAndSelect('provider.user', 'user');
 
-    if (status) {
-      where.status = status;
-    }
-
-    if (city) {
-      where.city = { contains: city, mode: 'insensitive' };
-    }
-
+    if (status) qb.andWhere('provider.status = :status', { status });
+    if (city) qb.andWhere('provider.city ILIKE :city', { city: `%${city}%` });
     if (search) {
-      where.OR = [
-        { brandName: { contains: search, mode: 'insensitive' } },
-        { description: { contains: search, mode: 'insensitive' } },
-        { address: { contains: search, mode: 'insensitive' } },
-      ];
+      qb.andWhere('(provider.brand_name ILIKE :search OR provider.description ILIKE :search OR provider.address ILIKE :search)', { search: `%${search}%` });
     }
 
-    const [providers, total] = await Promise.all([
-      this.prisma.provider.findMany({
-        where,
-        skip,
-        take: limit,
-        orderBy: { createdAt: 'desc' },
-        include: {
-          user: {
-            select: {
-              id: true,
-              name: true,
-              mobileNumber: true,
-              gender: true,
-            },
-          },
-        },
-      }),
-      this.prisma.provider.count({ where }),
-    ]);
+    qb.orderBy('provider.created_at', 'DESC').skip(skip).take(limit);
 
-    return {
-      data: providers,
-      meta: {
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
-      },
-    };
+    const [providers, total] = await qb.getManyAndCount();
+    return { data: providers, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
   }
 
   async update(id: string, updateProviderDto: UpdateProviderDto) {
-    const existingProvider = await this.prisma.provider.findUnique({
-      where: { id },
-    });
+    const existingProvider = await this.providerRepo.findOneBy({ id });
+    if (!existingProvider) throw new NotFoundException(`Provider with ID '${id}' not found`);
 
-    if (!existingProvider) {
-      throw new NotFoundException(`Provider with ID '${id}' not found`);
+    if (updateProviderDto.userId && updateProviderDto.userId !== existingProvider.userId) {
+      const user = await this.userRepo.findOneBy({ id: updateProviderDto.userId });
+      if (!user) throw new NotFoundException(`User with ID '${updateProviderDto.userId}' not found`);
+      const existing = await this.providerRepo.findOneBy({ userId: updateProviderDto.userId });
+      if (existing) throw new ConflictException(`Provider already exists for user with ID '${updateProviderDto.userId}'`);
     }
 
-    // If userId is being updated, check if it exists and is unique
-    if (
-      updateProviderDto.userId &&
-      updateProviderDto.userId !== existingProvider.userId
-    ) {
-      const user = await this.prisma.user.findUnique({
-        where: { id: updateProviderDto.userId },
-      });
-
-      if (!user) {
-        throw new NotFoundException(
-          `User with ID '${updateProviderDto.userId}' not found`,
-        );
-      }
-
-      const existingProviderForUser = await this.prisma.provider.findUnique({
-        where: { userId: updateProviderDto.userId },
-      });
-
-      if (existingProviderForUser) {
-        throw new ConflictException(
-          `Provider already exists for user with ID '${updateProviderDto.userId}'`,
-        );
-      }
-    }
-
-    return this.prisma.provider.update({
-      where: { id },
-      data: updateProviderDto,
-      include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            mobileNumber: true,
-            gender: true,
-          },
-        },
-      },
-    });
+    const { latitude, longitude, ...rest } = updateProviderDto;
+    const updateData: any = { ...rest };
+    if (latitude !== undefined) updateData.latitude = latitude ? parseFloat(latitude) : null;
+    if (longitude !== undefined) updateData.longitude = longitude ? parseFloat(longitude) : null;
+    await this.providerRepo.update(id, updateData);
+    return this.providerRepo.findOne({ where: { id }, relations: ['user'] });
   }
 }

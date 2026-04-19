@@ -18,14 +18,7 @@
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
-    "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate dev",
-    "prisma:migrate:prod": "prisma migrate deploy",
-    "prisma:studio": "prisma studio",
-    "prisma:push": "prisma db push"
-  },
-  "prisma": {
-    "seed": "ts-node prisma/seed.ts"
+    "typeorm": "typeorm-ts-node-commonjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1019.0",
@@ -38,7 +31,7 @@
     "@nestjs/passport": "^11.0.5",
     "@nestjs/platform-express": "^11.0.1",
     "@nestjs/swagger": "^11.2.6",
-    "@prisma/client": "^7.7.0",
+    "@nestjs/typeorm": "^11.0.1",
     "@supabase/supabase-js": "^2.103.3",
     "bcryptjs": "^3.0.3",
     "class-transformer": "^0.5.1",
@@ -48,9 +41,11 @@
     "nest": "^0.1.6",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
+    "pg": "^8.20.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "swagger-ui-express": "^5.0.1",
+    "typeorm": "^0.3.28",
     "uuid": "^13.0.0"
   },
   "devDependencies": {
@@ -73,7 +68,6 @@
     "globals": "^16.0.0",
     "jest": "^30.0.0",
     "prettier": "^3.4.2",
-    "prisma": "^5.22.0",
     "source-map-support": "^0.5.21",
     "supertest": "^7.0.0",
     "ts-jest": "^29.2.5",

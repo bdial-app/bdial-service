@@ -3,7 +3,6 @@ import { ApiTags, ApiOperation, ApiBearerAuth, ApiParam } from '@nestjs/swagger'
 import { AuthGuard } from '@nestjs/passport';
 import { VerificationsService } from './verifications.service';
 import { CreateVerificationDto } from './dto/verification.dto';
-import { VerificationStatus } from '@prisma/client';
 
 @ApiTags('Verifications')
 @ApiBearerAuth()
@@ -37,7 +36,7 @@ export class VerificationsController {
   @ApiParam({ name: 'userId', description: 'User ID' })
   async updateAadhaarStatus(
     @Param('userId') userId: string,
-    @Body('status') status: VerificationStatus,
+    @Body('status') status: string,
   ) {
     return this.verService.updateAadhaarStatus(userId, status);
   }

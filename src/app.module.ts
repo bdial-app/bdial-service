@@ -1,8 +1,10 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import * as path from 'path';
+import { buildTypeOrmOptions } from './config/data-source';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
-import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
 import { AdminAuthModule } from './admin-auth/admin-auth.module';
 import { UsersModule } from './users/users.module';
@@ -18,8 +20,14 @@ import { SupabaseModule } from './supabase/supabase.module';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true }),
-    PrismaModule,
+    ConfigModule.forRoot({ isGlobal: true, envFilePath: path.join(__dirname, '..', '..', '.env') }),
+    TypeOrmModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        ...buildTypeOrmOptions(config.getOrThrow<string>('DATABASE_URL')),
+        logging: config.get('NODE_ENV') === 'development' ? ['error'] : false,
+      }),
+    }),
     StorageModule,
     PhotosModule,
     SupabaseModule,

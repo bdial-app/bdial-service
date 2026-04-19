@@ -1,116 +1,67 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository, IsNull } from 'typeorm';
+import { Category } from '../entities';
 import { StorageService } from '../storage/storage.service';
 import { PaginationDto } from './dto/pagination.dto';
 
 function slugify(name: string) {
-  return name
-    .toLowerCase()
-    .replace(/\s+/g, '-')
-    .replace(/[^\w-]+/g, '');
+  return name.toLowerCase().replace(/\s+/g, '-').replace(/[^\w-]+/g, '');
 }
 
-// Allowed file extensions and MIME types for icons
 const ALLOWED_ICON_EXTENSIONS = ['png', 'svg'];
 const ALLOWED_ICON_MIME_TYPES = ['image/png', 'image/svg+xml', 'image/svg'];
-const MAX_ICON_SIZE = 5 * 1024 * 1024; // 5MB
+const MAX_ICON_SIZE = 5 * 1024 * 1024;
 
 @Injectable()
 export class CategoriesService {
   constructor(
-    private prisma: PrismaService,
+    @InjectRepository(Category) private categoryRepo: Repository<Category>,
     private storageService: StorageService,
   ) {}
 
-  // ✅ UPDATED: uses PaginationDto
   async findAll(paginationDto: PaginationDto) {
     const { page = 1, limit = 10 } = paginationDto;
     const skip = (page - 1) * limit;
 
-    const [data, total] = await Promise.all([
-      this.prisma.category.findMany({
-        where: { isActive: true },
-        skip,
-        take: limit,
-        orderBy: { displayOrder: 'asc' },
-        include: {
-          children: {
-            where: { isActive: true },
-            orderBy: { displayOrder: 'asc' },
-          },
-        },
-      }),
-      this.prisma.category.count({
-        where: { isActive: true },
-      }),
-    ]);
+    const [data, total] = await this.categoryRepo.findAndCount({
+      where: { isActive: true },
+      skip,
+      take: limit,
+      order: { displayOrder: 'ASC' },
+      relations: ['children'],
+    });
 
-    return {
-      data,
-      meta: {
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
-      },
-    };
+    return { data, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
   }
 
   findTopLevel() {
-    return this.prisma.category.findMany({
-      where: { parentId: null, isActive: true },
-      orderBy: { displayOrder: 'asc' },
+    return this.categoryRepo.find({
+      where: { parentId: IsNull(), isActive: true },
+      order: { displayOrder: 'ASC' },
     });
   }
 
-  // ✅ CREATE (auto slug)
   create(data: any) {
-    return this.prisma.category.create({
-      data: {
-        ...data,
-        slug: slugify(data.name),
-      },
-    });
+    const entity = this.categoryRepo.create({ ...data, slug: slugify(data.name) });
+    return this.categoryRepo.save(entity);
   }
 
-  // ✅ UPDATE (with slug update)
-  update(
-    id: string,
-    data: {
-      name?: string;
-      isActive?: boolean;
-      displayOrder?: number;
-      parentId?: string;
-      slug?: string;
-      icon?: string;
-      iconStorageKey?: string;
-    },
-  ) {
+  async update(id: string, data: any) {
     if (!data || Object.keys(data).length === 0) {
       throw new Error('No update data provided.');
     }
-
-    if (data.name) {
-      data = { ...data, slug: slugify(data.name) };
-    }
-
-    return this.prisma.category.update({
-      where: { id },
-      data,
-    });
+    if (data.name) data.slug = slugify(data.name);
+    await this.categoryRepo.update(id, data);
+    return this.categoryRepo.findOneBy({ id });
   }
 
-  // ✅ GET ONE (with validation)
   async findOne(id: string) {
-    const category = await this.prisma.category.findUnique({
+    const category = await this.categoryRepo.findOne({
       where: { id },
-      include: { children: true },
+      relations: ['children'],
     });
-
-    if (!category) {
-      throw new NotFoundException('Category not found');
-    }
-
+    if (!category) throw new NotFoundException('Category not found');
     return category;
   }
 
@@ -118,131 +69,51 @@ export class CategoriesService {
     const { page = 1, limit = 10 } = paginationDto;
     const skip = (page - 1) * limit;
 
-    const [data, total] = await Promise.all([
-      this.prisma.category.findMany({
-        where: { parentId, isActive: true },
-        skip,
-        take: limit,
-        orderBy: { displayOrder: 'asc' },
-      }),
-      this.prisma.category.count({
-        where: { parentId, isActive: true },
-      }),
-    ]);
-
-    return {
-      data,
-      meta: {
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
-      },
-    };
-  }
-
-  /**
-   * Upload an icon for a category
-   * @param categoryId - The category ID
-   * @param file - The uploaded file (PNG or SVG)
-   * @returns Updated category with icon URL
-   */
-  async uploadIcon(
-    categoryId: string,
-    file: Express.Multer.File,
-  ): Promise<any> {
-    // Validate category exists
-    const category = await this.prisma.category.findUnique({
-      where: { id: categoryId },
+    const [data, total] = await this.categoryRepo.findAndCount({
+      where: { parentId, isActive: true },
+      skip,
+      take: limit,
+      order: { displayOrder: 'ASC' },
     });
 
-    if (!category) {
-      throw new NotFoundException('Category not found');
-    }
+    return { data, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
+  }
 
-    // Validate file extension
+  async uploadIcon(categoryId: string, file: Express.Multer.File): Promise<any> {
+    const category = await this.categoryRepo.findOneBy({ id: categoryId });
+    if (!category) throw new NotFoundException('Category not found');
+
     const fileExt = file.originalname.split('.').pop()?.toLowerCase();
     if (!fileExt || !ALLOWED_ICON_EXTENSIONS.includes(fileExt)) {
-      throw new BadRequestException(
-        `Invalid file type. Only PNG and SVG files are allowed. Received: .${fileExt}`,
-      );
+      throw new BadRequestException(`Invalid file type. Only PNG and SVG files are allowed. Received: .${fileExt}`);
     }
-
-    // Validate MIME type
     if (!ALLOWED_ICON_MIME_TYPES.includes(file.mimetype)) {
-      throw new BadRequestException(
-        `Invalid MIME type. Only PNG and SVG are allowed. Received: ${file.mimetype}`,
-      );
+      throw new BadRequestException(`Invalid MIME type. Received: ${file.mimetype}`);
     }
-
-    // Validate file size
     if (file.size > MAX_ICON_SIZE) {
-      throw new BadRequestException(
-        `File size exceeds 5MB limit. Received: ${(file.size / 1024 / 1024).toFixed(2)}MB`,
-      );
+      throw new BadRequestException(`File size exceeds 5MB limit.`);
     }
 
-    // Delete old icon if it exists
     if (category.iconStorageKey) {
-      try {
-        await this.storageService.delete(category.iconStorageKey);
-      } catch (error) {
-        console.error('Failed to delete old icon:', error);
-        // Continue with upload even if delete fails
-      }
+      try { await this.storageService.delete(category.iconStorageKey); } catch (e) { console.error('Failed to delete old icon:', e); }
     }
 
-    // Upload new icon
-    const { url, storageKey } = await this.storageService.upload(
-      'categories',
-      file,
-    );
-
-    // Update category with new icon
-    const updatedCategory = await this.prisma.category.update({
-      where: { id: categoryId },
-      data: {
-        icon: url,
-        iconStorageKey: storageKey,
-      },
-    });
-
-    return updatedCategory;
+    const { url, storageKey } = await this.storageService.upload('categories', file);
+    category.icon = url;
+    category.iconStorageKey = storageKey;
+    return this.categoryRepo.save(category);
   }
 
-  /**
-   * Delete icon from a category
-   * @param categoryId - The category ID
-   * @returns Updated category
-   */
   async deleteIcon(categoryId: string): Promise<any> {
-    const category = await this.prisma.category.findUnique({
-      where: { id: categoryId },
-    });
+    const category = await this.categoryRepo.findOneBy({ id: categoryId });
+    if (!category) throw new NotFoundException('Category not found');
 
-    if (!category) {
-      throw new NotFoundException('Category not found');
-    }
-
-    // Delete from S3 if storage key exists
     if (category.iconStorageKey) {
-      try {
-        await this.storageService.delete(category.iconStorageKey);
-      } catch (error) {
-        console.error('Failed to delete icon from storage:', error);
-        // Continue even if delete fails
-      }
+      try { await this.storageService.delete(category.iconStorageKey); } catch (e) { console.error('Failed to delete icon:', e); }
     }
 
-    // Update category to remove icon
-    const updatedCategory = await this.prisma.category.update({
-      where: { id: categoryId },
-      data: {
-        icon: null,
-        iconStorageKey: null,
-      },
-    });
-
-    return updatedCategory;
+    category.icon = null;
+    category.iconStorageKey = null;
+    return this.categoryRepo.save(category);
   }
 }

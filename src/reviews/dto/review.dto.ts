@@ -1,7 +1,13 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsString, IsInt, Min, Max, IsOptional, IsNotEmpty } from 'class-validator';
-import { IsEnum } from 'class-validator';
-import { ReviewStatus } from '@prisma/client';
+import { IsEnum, IsIn } from 'class-validator';
+
+export enum ReviewStatus {
+  pending = 'pending',
+  approved = 'approved',
+  rejected = 'rejected',
+  flagged = 'flagged',
+}
 
 export class UpdateReviewStatusDto {
   @IsEnum(ReviewStatus)

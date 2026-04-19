@@ -1,80 +1,58 @@
 import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { Verification, Provider } from '../entities';
 import { CreateVerificationDto } from './dto/verification.dto';
-import { VerificationStatus } from '@prisma/client';
 
 @Injectable()
 export class VerificationsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    @InjectRepository(Verification) private verRepo: Repository<Verification>,
+    @InjectRepository(Provider) private providerRepo: Repository<Provider>,
+  ) {}
 
   async submit(userId: string, dto: CreateVerificationDto) {
-    const existing = await this.prisma.verification.findUnique({
-      where: { userId },
-    });
+    const existing = await this.verRepo.findOneBy({ userId });
     if (existing) {
-      return this.prisma.verification.update({
-        where: { userId },
-        data: {
-          aadhaarDocUrl: dto.aadhaarDocUrl,
-          aadhaarStatus: 'pending',
-          ijamatNumber: dto.ijamatNumber,
-          ijamatExpiry: dto.ijamatExpiry ? new Date(dto.ijamatExpiry) : undefined,
-          ijamatDocUrl: dto.ijamatDocUrl,
-          ijamatStatus: dto.ijamatDocUrl ? 'pending' : 'not_submitted',
-        },
-      });
+      existing.aadhaarDocUrl = dto.aadhaarDocUrl;
+      existing.aadhaarStatus = 'pending';
+      existing.ijamatNumber = dto.ijamatNumber ?? existing.ijamatNumber;
+      existing.ijamatExpiry = dto.ijamatExpiry ? new Date(dto.ijamatExpiry) : existing.ijamatExpiry;
+      existing.ijamatDocUrl = dto.ijamatDocUrl ?? existing.ijamatDocUrl;
+      existing.ijamatStatus = dto.ijamatDocUrl ? 'pending' : 'not_submitted';
+      return this.verRepo.save(existing);
     }
-    return this.prisma.verification.create({
-      data: {
-        userId,
-        aadhaarDocUrl: dto.aadhaarDocUrl,
-        ijamatNumber: dto.ijamatNumber,
-        ijamatExpiry: dto.ijamatExpiry ? new Date(dto.ijamatExpiry) : undefined,
-        ijamatDocUrl: dto.ijamatDocUrl,
-        ijamatStatus: dto.ijamatDocUrl ? 'pending' : 'not_submitted',
-        status: 'pending',
-      },
+
+    const verification = this.verRepo.create({
+      userId,
+      aadhaarDocUrl: dto.aadhaarDocUrl,
+      ijamatNumber: dto.ijamatNumber,
+      ijamatExpiry: dto.ijamatExpiry ? new Date(dto.ijamatExpiry) : undefined,
+      ijamatDocUrl: dto.ijamatDocUrl,
+      ijamatStatus: dto.ijamatDocUrl ? 'pending' : 'not_submitted',
+      status: 'pending',
     });
+    return this.verRepo.save(verification);
   }
 
   async getMyVerification(userId: string) {
-    const v = await this.prisma.verification.findUnique({ where: { userId } });
+    const v = await this.verRepo.findOneBy({ userId });
     if (!v) throw new NotFoundException('No verification submitted');
-    // Strip sensitive doc URLs from response (shown only to admins in admin module)
     const { aadhaarDocUrl, ijamatDocUrl, ...safe } = v;
     return safe;
   }
 
   async getVerificationStatus(userId: string) {
-    const provider = await this.prisma.provider.findUnique({
-      where: { userId },
-    });
-
-    if (!provider) {
-      return null;
-    }
-
-    const verification = await this.prisma.verification.findUnique({
-      where: { userId },
-    });
-
+    const provider = await this.providerRepo.findOneBy({ userId });
+    if (!provider) return null;
+    const verification = await this.verRepo.findOneBy({ userId });
     return verification ? verification.status : 'pending';
   }
 
-  async updateAadhaarStatus(userId: string, status: VerificationStatus) {
-    const verification = await this.prisma.verification.findUnique({
-      where: { userId },
-    });
-
-    if (!verification) {
-      throw new NotFoundException(`Verification record not found for user ${userId}`);
-    }
-
-    return this.prisma.verification.update({
-      where: { userId },
-      data: {
-        aadhaarStatus: status,
-      },
-    });
+  async updateAadhaarStatus(userId: string, status: string) {
+    const verification = await this.verRepo.findOneBy({ userId });
+    if (!verification) throw new NotFoundException(`Verification record not found for user ${userId}`);
+    verification.aadhaarStatus = status;
+    return this.verRepo.save(verification);
   }
 }

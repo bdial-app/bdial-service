@@ -1,11 +1,12 @@
 import { Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
 import { ListingsController } from './listings.controller';
 import { ListingsService } from './listings.service';
 import { AuthModule } from '../auth/auth.module';
-import { PrismaModule } from '../prisma/prisma.module';
+import { Listing, ListingCategory, User } from '../entities';
 
 @Module({
-  imports: [AuthModule, PrismaModule],
+  imports: [AuthModule, TypeOrmModule.forFeature([Listing, ListingCategory, User])],
   controllers: [ListingsController],
   providers: [ListingsService],
 })

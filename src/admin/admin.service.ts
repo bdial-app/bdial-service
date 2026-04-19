@@ -1,9 +1,17 @@
 import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository, IsNull } from 'typeorm';
+import { Listing, User, Verification, Review, ReviewReport } from '../entities';
 
 @Injectable()
 export class AdminService {
-  constructor(private prisma: PrismaService) { }
+  constructor(
+    @InjectRepository(Listing) private listingRepo: Repository<Listing>,
+    @InjectRepository(User) private userRepo: Repository<User>,
+    @InjectRepository(Verification) private verificationRepo: Repository<Verification>,
+    @InjectRepository(Review) private reviewRepo: Repository<Review>,
+    @InjectRepository(ReviewReport) private reportRepo: Repository<ReviewReport>,
+  ) {}
 
   private assertAdmin(user: any) {
     if (user.role !== 'admin') throw new ForbiddenException('Admin access required');
@@ -11,76 +19,53 @@ export class AdminService {
 
   async getDashboard(admin: any) {
     this.assertAdmin(admin);
-    const [
-      pendingListings,
-      totalListings,
-      totalUsers,
-      pendingVerifications,
-      flaggedReviews,
-    ] = await Promise.all([
-      this.prisma.listing.count({ where: { status: 'pending', deletedAt: null } }),
-      this.prisma.listing.count({ where: { deletedAt: null } }),
-      this.prisma.user.count({ where: { status: 'active' } }),
-      this.prisma.verification.count({ where: { aadhaarStatus: 'pending' } }),
-      this.prisma.reviewReport.count({ where: { status: 'pending' } }),
-    ]);
+    const [pendingListings, totalListings, totalUsers, pendingVerifications, flaggedReviews] =
+      await Promise.all([
+        this.listingRepo.count({ where: { status: 'pending', deletedAt: IsNull() } }),
+        this.listingRepo.count({ where: { deletedAt: IsNull() } }),
+        this.userRepo.count({ where: { status: 'active' } }),
+        this.verificationRepo.count({ where: { aadhaarStatus: 'pending' } }),
+        this.reportRepo.count({ where: { status: 'pending' } }),
+      ]);
     return { pendingListings, totalListings, totalUsers, pendingVerifications, flaggedReviews };
   }
 
   async getPendingListings(admin: any) {
     this.assertAdmin(admin);
-    return this.prisma.listing.findMany({
-      where: { status: 'pending', deletedAt: null },
-      include: {
-        provider: { select: { id: true, name: true, mobileNumber: true } },
-        listingCategories: { include: { category: true } },
-      },
-      orderBy: { submittedAt: 'asc' },
+    return this.listingRepo.find({
+      where: { status: 'pending', deletedAt: IsNull() },
+      relations: ['provider', 'listingCategories', 'listingCategories.category'],
+      order: { submittedAt: 'ASC' },
     });
   }
 
   async approveListing(admin: any, listingId: string) {
     this.assertAdmin(admin);
-    return this.prisma.listing.update({
-      where: { id: listingId },
-      data: { status: 'live', approvedAt: new Date() },
-    });
+    await this.listingRepo.update(listingId, { status: 'live', approvedAt: new Date() });
+    return this.listingRepo.findOneBy({ id: listingId });
   }
 
   async rejectListing(admin: any, listingId: string, note: string) {
     this.assertAdmin(admin);
-    return this.prisma.listing.update({
-      where: { id: listingId },
-      data: { status: 'rejected', rejectionNote: note },
-    });
+    await this.listingRepo.update(listingId, { status: 'rejected', rejectionNote: note });
+    return this.listingRepo.findOneBy({ id: listingId });
   }
 
   async getVerifications(admin: any, page?: number, rows?: number) {
     this.assertAdmin(admin);
-
-    // default values for page and rows
     const currentPage = Math.max(1, page || 1);
-    const pageSize = Math.min(100, Math.max(1, rows || 10)); // Max 100 rows per page
-
+    const pageSize = Math.min(100, Math.max(1, rows || 10));
     const skip = (currentPage - 1) * pageSize;
 
-    const totalCount = await this.prisma.verification.count({
+    const [verifications, totalCount] = await this.verificationRepo.findAndCount({
       where: { aadhaarStatus: 'pending' },
-    });
-
-    // paginated results
-    const verifications = await this.prisma.verification.findMany({
-      where: { aadhaarStatus: 'pending' },
-      include: { user: { select: { id: true, name: true, mobileNumber: true } } },
-      orderBy: { reviewedAt: 'asc' },
+      relations: ['user'],
+      order: { reviewedAt: 'ASC' },
       skip,
       take: pageSize,
     });
 
     const totalPages = Math.ceil(totalCount / pageSize);
-    const hasNextPage = currentPage < totalPages;
-    const hasPreviousPage = currentPage > 1;
-
     return {
       data: verifications,
       pagination: {
@@ -88,40 +73,21 @@ export class AdminService {
         pageSize,
         totalCount,
         totalPages,
-        hasNextPage,
-        hasPreviousPage,
+        hasNextPage: currentPage < totalPages,
+        hasPreviousPage: currentPage > 1,
       },
     };
   }
 
   async getVerificationById(admin: any, verificationId: string) {
     this.assertAdmin(admin);
-    
-    const verification = await this.prisma.verification.findUnique({
+    const verification = await this.verificationRepo.findOne({
       where: { id: verificationId },
-      include: { 
-        user: { 
-          select: { 
-            id: true, 
-            name: true, 
-            mobileNumber: true,
-            city: true,
-            area: true
-          } 
-        },
-        reviewer: {
-          select: {
-            id: true,
-            name: true
-          }
-        }
-      },
+      relations: ['user', 'reviewer'],
     });
-
     if (!verification) {
       throw new NotFoundException(`Verification with ID ${verificationId} not found`);
     }
-
     return verification;
   }
 
@@ -140,35 +106,32 @@ export class AdminService {
       reviewedBy: admin.id,
     };
     if (ijamatStatus) data.ijamatStatus = ijamatStatus;
-
-    return this.prisma.verification.update({
-      where: { id: verificationId },
-      data,
-    });
+    await this.verificationRepo.update(verificationId, data);
+    return this.verificationRepo.findOneBy({ id: verificationId });
   }
 
   async removeReview(admin: any, reviewId: string) {
     this.assertAdmin(admin);
-    return this.prisma.review.update({
-      where: { id: reviewId },
-      data: { status: 'removed', moderatedAt: new Date(), moderatedBy: admin.id },
+    await this.reviewRepo.update(reviewId, {
+      status: 'removed',
+      moderatedAt: new Date(),
+      moderatedBy: admin.id,
     });
+    return this.reviewRepo.findOneBy({ id: reviewId });
   }
 
   async getPendingReports(admin: any) {
     this.assertAdmin(admin);
-    return this.prisma.reviewReport.findMany({
+    return this.reportRepo.find({
       where: { status: 'pending' },
-      include: { review: true, reporter: { select: { id: true, name: true } } },
+      relations: ['review', 'reporter'],
     });
   }
 
   async suspendUser(admin: any, userId: string) {
     this.assertAdmin(admin);
-    return this.prisma.user.update({
-      where: { id: userId },
-      data: { status: 'suspended' },
-    });
+    await this.userRepo.update(userId, { status: 'suspended' });
+    return this.userRepo.findOneBy({ id: userId });
   }
 
   async updateVerificationStatus(
@@ -176,26 +139,18 @@ export class AdminService {
     verificationId: string,
     aadhaarStatus?: 'pending' | 'approved' | 'rejected',
     ijamatStatus?: 'pending' | 'approved' | 'rejected' | 'not_submitted',
-    status?: 'pending' | 'approved' | 'rejected'
+    status?: 'pending' | 'approved' | 'rejected',
   ) {
     this.assertAdmin(admin);
-    
-    const verification = await this.prisma.verification.findUnique({
-      where: { id: verificationId },
-    });
-
+    const verification = await this.verificationRepo.findOneBy({ id: verificationId });
     if (!verification) {
       throw new NotFoundException(`Verification with ID ${verificationId} not found`);
     }
-
     const data: any = {};
     if (aadhaarStatus) data.aadhaarStatus = aadhaarStatus;
     if (ijamatStatus) data.ijamatStatus = ijamatStatus;
     if (status) data.status = status;
-
-    return this.prisma.verification.update({
-      where: { id: verificationId },
-      data,
-    });
+    await this.verificationRepo.update(verificationId, data);
+    return this.verificationRepo.findOneBy({ id: verificationId });
   }
 }
