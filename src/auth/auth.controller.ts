@@ -1,6 +1,7 @@
-import { Controller, Post, Body, HttpCode, HttpStatus, Get, Query, BadRequestException, UseGuards, Request } from '@nestjs/common';
+import { Controller, Post, Body, HttpCode, HttpStatus, Get, Query, BadRequestException, UseGuards, Request, Inject } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
+import { ConfigService } from '@nestjs/config';
 import { AuthService } from './auth.service';
 import {
   SendOtpDto,
@@ -16,7 +17,10 @@ import {
 @ApiTags('Auth')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly config: ConfigService,
+  ) {}
 
   @Post('send-otp')
   @HttpCode(HttpStatus.OK)
@@ -187,8 +191,8 @@ export class AuthController {
     return {
       message:
         'Use Supabase client library on frontend to initiate OAuth. Backend handles token verification.',
-      oauthRedirectUrl: process.env.SUPABASE_OAUTH_REDIRECT_URL,
-      successRedirectUrl: process.env.OAUTH_SUCCESS_REDIRECT_URL,
+      oauthRedirectUrl: this.config.get<string>('SUPABASE_OAUTH_REDIRECT_URL'),
+      successRedirectUrl: this.config.get<string>('OAUTH_SUCCESS_REDIRECT_URL'),
     };
   }
 

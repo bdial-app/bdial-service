@@ -98,10 +98,10 @@ export class ProvidersService {
     if (status) qb.andWhere('provider.status = :status', { status });
     if (city) qb.andWhere('provider.city ILIKE :city', { city: `%${city}%` });
     if (search) {
-      qb.andWhere('(provider.brand_name ILIKE :search OR provider.description ILIKE :search OR provider.address ILIKE :search)', { search: `%${search}%` });
+      qb.andWhere('(provider.brandName ILIKE :search OR provider.description ILIKE :search OR provider.address ILIKE :search)', { search: `%${search}%` });
     }
 
-    qb.orderBy('provider.created_at', 'DESC').skip(skip).take(limit);
+    qb.orderBy('provider.createdAt', 'DESC').skip(skip).take(limit);
 
     const [providers, total] = await qb.getManyAndCount();
     return { data: providers, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };

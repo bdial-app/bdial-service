@@ -55,23 +55,23 @@ export class ListingsService {
       .leftJoinAndSelect('listing.photos', 'photo')
       .leftJoinAndSelect('listing.reviews', 'review', 'review.status = :rs', { rs: 'active' })
       .where('listing.status = :status', { status: 'live' })
-      .andWhere('listing.deleted_at IS NULL');
+      .andWhere('listing.deletedAt IS NULL');
 
     if (keyword) {
-      qb.andWhere('(listing.business_name ILIKE :kw OR listing.description ILIKE :kw)', { kw: `%${keyword}%` });
+      qb.andWhere('(listing.businessName ILIKE :kw OR listing.description ILIKE :kw)', { kw: `%${keyword}%` });
     }
     if (city) {
       qb.andWhere('listing.city ILIKE :city', { city: `%${city}%` });
     }
     if (isWomenLed !== undefined) {
       const val = isWomenLed === true || isWomenLed === ('true' as any);
-      qb.andWhere('listing.is_women_led = :wl', { wl: val });
+      qb.andWhere('listing.isWomenLed = :wl', { wl: val });
     }
     if (categoryId) {
-      qb.andWhere('lc.category_id = :catId', { catId: categoryId });
+      qb.andWhere('lc.categoryId = :catId', { catId: categoryId });
     }
 
-    qb.orderBy('listing.approved_at', 'DESC')
+    qb.orderBy('listing.approvedAt', 'DESC')
       .skip(skip)
       .take(Number(limit));
 

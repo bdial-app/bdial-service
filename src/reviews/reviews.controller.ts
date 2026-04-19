@@ -92,13 +92,13 @@ export class ReviewsController {
     schema: {
       type: 'object',
       properties: {
-        review_id: { type: 'string' },
+        reviewId: { type: 'string' },
         file: { type: 'string', format: 'binary' },
       },
     },
   })
   uploadPhoto(
-    @Body('review_id') reviewId: string,
+    @Body('reviewId') reviewId: string,
     @UploadedFile() file: Express.Multer.File,
   ) {
     return this.reviewsService.uploadPhoto(reviewId, file);

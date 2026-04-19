@@ -83,7 +83,7 @@ export class ReviewsService {
     const photo = this.reviewPhotoRepo.create({ reviewId, imageUrl: url, storageKey });
     const saved = await this.reviewPhotoRepo.save(photo);
 
-    return { review_id: reviewId, url, storageKey, image_url: saved.imageUrl };
+    return { reviewId, url, storageKey, imageUrl: saved.imageUrl };
   }
 
   async findAll(query: any) {
@@ -93,7 +93,7 @@ export class ReviewsService {
 
     const qb = this.reviewRepo.createQueryBuilder('review')
       .leftJoinAndSelect('review.reviewer', 'reviewer')
-      .orderBy('review.posted_at', 'DESC')
+      .orderBy('review.postedAt', 'DESC')
       .skip(skip)
       .take(limit);
 
@@ -101,7 +101,7 @@ export class ReviewsService {
       qb.andWhere('reviewer.name ILIKE :name', { name: `%${query.name}%` });
     }
     if (query.contact) {
-      qb.andWhere('reviewer.mobile_number ILIKE :contact', { contact: `%${query.contact}%` });
+      qb.andWhere('reviewer.mobileNumber ILIKE :contact', { contact: `%${query.contact}%` });
     }
 
     const [data, total] = await qb.getManyAndCount();

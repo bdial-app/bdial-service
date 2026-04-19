@@ -1,8 +1,5 @@
-import * as dotenv from 'dotenv';
-import * as path from 'path';
-dotenv.config({ path: path.join(__dirname, '..', '..', '.env') });
-
 import { NestFactory } from '@nestjs/core';
+import { ConfigService } from '@nestjs/config';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
@@ -48,7 +45,8 @@ async function bootstrap() {
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, document);
 
-  const port = process.env.PORT || 3002;
+  const configService = app.get(ConfigService);
+  const port = configService.get<number>('PORT', 3001);
   await app.listen(port);
   console.log(`🚀 Bohri Connect API running on http://localhost:${port}/api`);
   console.log(`📖 Swagger docs at http://localhost:${port}/api/docs`);

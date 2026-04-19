@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 @Injectable()
@@ -7,10 +8,10 @@ export class SupabaseAuthService {
   private supabaseAdmin?: SupabaseClient; // Separate client for admin operations
   private readonly logger = new Logger(SupabaseAuthService.name);
 
-  constructor() {
-    const supabaseUrl = process.env.SUPABASE_URL || '';
-    const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || '';
-    const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+  constructor(private readonly config: ConfigService) {
+    const supabaseUrl = this.config.get<string>('SUPABASE_URL', '');
+    const supabaseAnonKey = this.config.get<string>('SUPABASE_ANON_KEY', '');
+    const supabaseServiceRoleKey = this.config.get<string>('SUPABASE_SERVICE_ROLE_KEY', '');
 
     if (!supabaseUrl || !supabaseAnonKey) {
       this.logger.warn(
@@ -373,9 +374,9 @@ export class SupabaseAuthService {
    */
   getOAuthConfig() {
     return {
-      supabaseUrl: process.env.SUPABASE_URL,
-      supabaseAnonKey: process.env.SUPABASE_ANON_KEY,
-      oauthRedirectUrl: process.env.SUPABASE_OAUTH_REDIRECT_URL,
+      supabaseUrl: this.config.get<string>('SUPABASE_URL'),
+      supabaseAnonKey: this.config.get<string>('SUPABASE_ANON_KEY'),
+      oauthRedirectUrl: this.config.get<string>('SUPABASE_OAUTH_REDIRECT_URL'),
       oauthProviders: ['google', 'github'], // Configured providers
     };
   }

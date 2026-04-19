@@ -86,19 +86,19 @@ export class UsersService {
     const qb = this.userRepo.createQueryBuilder('user');
 
     if (status === 'deleted') {
-      qb.where('user.deleted_at IS NOT NULL');
+      qb.where('user.deletedAt IS NOT NULL');
     } else {
-      qb.where('user.deleted_at IS NULL');
+      qb.where('user.deletedAt IS NULL');
       if (status) qb.andWhere('user.status = :status', { status });
     }
 
     if (role) qb.andWhere('user.role = :role', { role });
 
     if (search) {
-      qb.andWhere('(user.name ILIKE :search OR user.mobile_number ILIKE :search)', { search: `%${search}%` });
+      qb.andWhere('(user.name ILIKE :search OR user.mobileNumber ILIKE :search)', { search: `%${search}%` });
     }
 
-    qb.orderBy('user.created_at', 'DESC').skip(skip).take(limit);
+    qb.orderBy('user.createdAt', 'DESC').skip(skip).take(limit);
 
     const [users, total] = await qb.getManyAndCount();
     return { data: users, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
