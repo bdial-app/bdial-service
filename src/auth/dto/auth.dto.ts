@@ -6,7 +6,10 @@ import { IsString, Matches, Length } from 'class-validator';
 export class SendOtpDto {
   @ApiProperty({ example: '9876543210', description: 'Mobile number (10 digits)' })
   @IsString()
-  @Matches(/^[6-9]\d{9}$/, { message: 'Invalid Indian mobile number' })
+  // @Matches(/^[6-9]\d{9}$/, { message: 'Invalid Indian mobile number' })
+  //for testing otp api's uncomment below line
+  @Matches(/^[0-9]\d{9}$/, { message: 'Invalid Indian mobile number' })
+
   mobileNumber: string;
 }
 

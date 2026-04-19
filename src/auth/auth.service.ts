@@ -2,6 +2,7 @@ import {
   Injectable,
   BadRequestException,
   NotFoundException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
@@ -32,6 +33,18 @@ export class AuthService {
       otp: otp, // Include OTP for development (remove in production)
       expiresAt: expiresAt
     };
+  }
+
+  async sendAdminOtp(dto: SendOtpDto) {
+    const user = await this.prisma.user.findUnique({
+      where: { mobileNumber: dto.mobileNumber },
+    });
+
+    if (!user || user.role !== 'admin') {
+      throw new ForbiddenException('this user is not admin');
+    }
+
+    return this.sendOtp(dto);
   }
 
   async verifyOtp(dto: VerifyOtpDto) {

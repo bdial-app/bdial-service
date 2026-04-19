@@ -39,13 +39,6 @@ export class ProviderPaginationDto {
   status?: 'active' | 'inactive';
 
   @ApiPropertyOptional({
-    description: 'Filter by availability',
-    example: true,
-  })
-  @IsOptional()
-  isAvailable?: boolean;
-
-  @ApiPropertyOptional({
     description: 'Filter by city',
     example: 'Mumbai',
   })

@@ -64,7 +64,6 @@ export class ProvidersController {
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
   @ApiQuery({ name: 'status', required: false, enum: ['active', 'suspended'] })
-  @ApiQuery({ name: 'isAvailable', required: false, type: Boolean })
   @ApiQuery({ name: 'city', required: false, type: String })
   @ApiQuery({ name: 'search', required: false, type: String })
   getProvidersList(@Query() paginationDto: ProviderPaginationDto) {

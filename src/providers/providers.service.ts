@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ConflictException,
+  BadRequestException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { CreateProviderDto } from './dto/create-provider.dto';
@@ -31,7 +36,9 @@ export class ProvidersService {
     });
 
     if (existingProvider) {
-      throw new ConflictException(`Provider already exists for user with ID '${userId}'`);
+      throw new ConflictException(
+        `Provider already exists for user with ID '${userId}'`,
+      );
     }
 
     const { userId: providerUserId, openTime, closeTime, ...providerData } = createProviderDto;
@@ -58,13 +65,16 @@ export class ProvidersService {
     });
   }
 
-  async becomeProvider(becomeProviderDto: BecomeProviderDto, file?: Express.Multer.File) {
-    const { 
-      userId, 
-      ijamatNumber, 
-      ijamatExpiry, 
+  async becomeProvider(
+    becomeProviderDto: BecomeProviderDto,
+    file?: Express.Multer.File,
+  ) {
+    const {
+      userId,
+      ijamatNumber,
+      ijamatExpiry,
       ijamatDocUrl,
-      ...providerData 
+      ...providerData
     } = becomeProviderDto;
 
     // Check if file is provided
@@ -91,7 +101,9 @@ export class ProvidersService {
     });
 
     if (existingProvider) {
-      throw new ConflictException(`Provider already exists for user with ID '${userId}'`);
+      throw new ConflictException(
+        `Provider already exists for user with ID '${userId}'`,
+      );
     }
 
     // Use transaction to create both provider and verification
@@ -141,7 +153,7 @@ export class ProvidersService {
   }
 
   async findAll(paginationDto: ProviderPaginationDto) {
-    const { page = 1, limit = 10, status, isAvailable, city, search } = paginationDto;
+    const { page = 1, limit = 10, status, city, search } = paginationDto;
     const skip = (page - 1) * limit;
 
     // Build where conditions
@@ -149,10 +161,6 @@ export class ProvidersService {
 
     if (status) {
       where.status = status;
-    }
-
-    if (isAvailable !== undefined) {
-      where.isAvailable = isAvailable;
     }
 
     if (city) {
@@ -174,15 +182,15 @@ export class ProvidersService {
         take: limit,
         orderBy: { createdAt: 'desc' },
         include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            mobileNumber: true,
-            gender: true,
+          user: {
+            select: {
+              id: true,
+              name: true,
+              mobileNumber: true,
+              gender: true,
+            },
           },
         },
-      },
       }),
       this.prisma.provider.count({ where }),
     ]);
@@ -208,13 +216,18 @@ export class ProvidersService {
     }
 
     // If userId is being updated, check if it exists and is unique
-    if (updateProviderDto.userId && updateProviderDto.userId !== existingProvider.userId) {
+    if (
+      updateProviderDto.userId &&
+      updateProviderDto.userId !== existingProvider.userId
+    ) {
       const user = await this.prisma.user.findUnique({
         where: { id: updateProviderDto.userId },
       });
 
       if (!user) {
-        throw new NotFoundException(`User with ID '${updateProviderDto.userId}' not found`);
+        throw new NotFoundException(
+          `User with ID '${updateProviderDto.userId}' not found`,
+        );
       }
 
       const existingProviderForUser = await this.prisma.provider.findUnique({
@@ -222,7 +235,9 @@ export class ProvidersService {
       });
 
       if (existingProviderForUser) {
-        throw new ConflictException(`Provider already exists for user with ID '${updateProviderDto.userId}'`);
+        throw new ConflictException(
+          `Provider already exists for user with ID '${updateProviderDto.userId}'`,
+        );
       }
     }
 
