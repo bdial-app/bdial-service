@@ -10,6 +10,7 @@ import { Review } from '../entities/review.entity';
 import { ReviewPhoto } from '../entities/review-photo.entity';
 import { ReviewReport } from '../entities/review-report.entity';
 import { Provider } from '../entities/provider.entity';
+import { SavedLocation } from '../entities/saved-location.entity';
 
 export const ALL_ENTITIES = [
   User,
@@ -23,6 +24,7 @@ export const ALL_ENTITIES = [
   ReviewPhoto,
   ReviewReport,
   Provider,
+  SavedLocation,
 ];
 
 export function buildTypeOrmOptions(url: string): DataSourceOptions {

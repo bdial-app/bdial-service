@@ -9,3 +9,4 @@ export { Review } from './review.entity';
 export { ReviewPhoto } from './review-photo.entity';
 export { ReviewReport } from './review-report.entity';
 export { Provider } from './provider.entity';
+export { SavedLocation } from './saved-location.entity';

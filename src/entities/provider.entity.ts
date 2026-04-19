@@ -59,6 +59,9 @@ export class Provider {
   @Column({ type: 'varchar', length: 10, default: 'active' })
   status: string;
 
+  @Column({ name: 'is_featured', type: 'boolean', default: false })
+  isFeatured: boolean;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

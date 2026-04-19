@@ -8,10 +8,12 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, ILike } from 'typeorm';
 import { Provider, User, Verification } from '../entities';
 import { StorageService } from '../storage/storage.service';
+import { GeocodeService } from '../geocode/geocode.service';
 import { CreateProviderDto } from './dto/create-provider.dto';
 import { UpdateProviderDto } from './dto/update-provider.dto';
 import { ProviderPaginationDto } from './dto/provider-pagination.dto';
 import { BecomeProviderDto } from './dto/become-provider.dto';
+import { NearbyProvidersDto } from './dto/nearby-providers.dto';
 
 @Injectable()
 export class ProvidersService {
@@ -21,6 +23,7 @@ export class ProvidersService {
     @InjectRepository(Verification) private verRepo: Repository<Verification>,
     private storage: StorageService,
     private dataSource: DataSource,
+    private geocodeService: GeocodeService,
   ) {}
 
   async create(createProviderDto: CreateProviderDto) {
@@ -124,5 +127,153 @@ export class ProvidersService {
     if (longitude !== undefined) updateData.longitude = longitude ? parseFloat(longitude) : null;
     await this.providerRepo.update(id, updateData);
     return this.providerRepo.findOne({ where: { id }, relations: ['user'] });
+  }
+
+  /**
+   * Find providers near a lat/lng using the Haversine formula.
+   * Optionally enriches with Google Distance Matrix (road distance + travel time).
+   * Flow 1-c: Location-based provider discovery.
+   */
+  async findNearby(dto: NearbyProvidersDto) {
+    const { lat, lng, radius = 10, page = 1, limit = 10, search, city, sortBy = 'distance' } = dto;
+    const offset = (page - 1) * limit;
+
+    // Haversine formula in SQL (returns distance in km)
+    const haversine = `
+      6371 * acos(
+        LEAST(1.0, cos(radians(:lat)) * cos(radians(provider.latitude))
+        * cos(radians(provider.longitude) - radians(:lng))
+        + sin(radians(:lat)) * sin(radians(provider.latitude)))
+      )
+    `;
+
+    const qb = this.providerRepo
+      .createQueryBuilder('provider')
+      .leftJoinAndSelect('provider.user', 'user')
+      .addSelect(haversine, 'distance')
+      .where('provider.latitude IS NOT NULL')
+      .andWhere('provider.longitude IS NOT NULL')
+      .andWhere('provider.status = :status', { status: 'active' })
+      .andWhere(`${haversine} <= :radius`, { lat, lng, radius })
+      .setParameters({ lat, lng, radius });
+
+    if (city) qb.andWhere('provider.city ILIKE :city', { city: `%${city}%` });
+    if (search) {
+      qb.andWhere(
+        '(provider.brandName ILIKE :search OR provider.description ILIKE :search)',
+        { search: `%${search}%` },
+      );
+    }
+
+    // Sort
+    if (sortBy === 'distance') {
+      qb.orderBy('distance', 'ASC');
+    } else if (sortBy === 'newest') {
+      qb.orderBy('provider.createdAt', 'DESC');
+    } else {
+      qb.orderBy('distance', 'ASC');
+    }
+
+    // Get total before pagination
+    const total = await qb.getCount();
+
+    // Get paginated results with distance
+    const { raw, entities } = await qb.offset(offset).limit(limit).getRawAndEntities();
+
+    // Merge Haversine distance into entities
+    let data = entities.map((provider, i) => ({
+      ...provider,
+      distance: parseFloat(parseFloat(raw[i]?.distance ?? '0').toFixed(2)),
+      roadDistance: null as string | null,
+      roadDistanceMeters: null as number | null,
+      travelTime: null as string | null,
+      travelTimeSeconds: null as number | null,
+    }));
+
+    // Enrich with Distance Matrix (road distance + travel time)
+    try {
+      const destinations = data
+        .filter((p) => p.latitude && p.longitude)
+        .map((p) => ({ lat: Number(p.latitude), lng: Number(p.longitude) }));
+
+      if (destinations.length > 0) {
+        const matrix = await this.geocodeService.getDistanceMatrix(
+          { lat, lng },
+          destinations,
+        );
+        let mi = 0;
+        data = data.map((p) => {
+          if (p.latitude && p.longitude && mi < matrix.length) {
+            const m = matrix[mi++];
+            return {
+              ...p,
+              roadDistance: m.distanceText,
+              roadDistanceMeters: m.distanceValue,
+              travelTime: m.durationText,
+              travelTimeSeconds: m.durationValue,
+            };
+          }
+          return p;
+        });
+      }
+    } catch {
+      // Distance Matrix unavailable — Haversine distance still present
+    }
+
+    return {
+      data,
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit), radius },
+    };
+  }
+
+  /**
+   * Get featured providers near a location.
+   * Flow 1-b: Returns providers marked as is_featured, ordered by distance.
+   * Falls back to nearest active providers if none are featured.
+   */
+  async findFeatured(lat: number, lng: number, radius: number = 25) {
+    const haversine = `
+      6371 * acos(
+        LEAST(1.0, cos(radians(:lat)) * cos(radians(provider.latitude))
+        * cos(radians(provider.longitude) - radians(:lng))
+        + sin(radians(:lat)) * sin(radians(provider.latitude)))
+      )
+    `;
+
+    // First try: featured providers within radius
+    let { raw, entities } = await this.providerRepo
+      .createQueryBuilder('provider')
+      .leftJoinAndSelect('provider.user', 'user')
+      .addSelect(haversine, 'distance')
+      .where('provider.latitude IS NOT NULL')
+      .andWhere('provider.longitude IS NOT NULL')
+      .andWhere('provider.status = :status', { status: 'active' })
+      .andWhere('provider.isFeatured = :featured', { featured: true })
+      .andWhere(`${haversine} <= :radius`)
+      .setParameters({ lat, lng, radius })
+      .orderBy('distance', 'ASC')
+      .limit(10)
+      .getRawAndEntities();
+
+    // Fallback: if no featured providers, return nearest active ones
+    if (entities.length === 0) {
+      ({ raw, entities } = await this.providerRepo
+        .createQueryBuilder('provider')
+        .leftJoinAndSelect('provider.user', 'user')
+        .addSelect(haversine, 'distance')
+        .where('provider.latitude IS NOT NULL')
+        .andWhere('provider.longitude IS NOT NULL')
+        .andWhere('provider.status = :status', { status: 'active' })
+        .andWhere(`${haversine} <= :radius`)
+        .setParameters({ lat, lng, radius })
+        .orderBy('distance', 'ASC')
+        .limit(10)
+        .getRawAndEntities());
+    }
+
+    return entities.map((provider, i) => ({
+      ...provider,
+      distance: parseFloat(parseFloat(raw[i]?.distance ?? '0').toFixed(2)),
+    }));
   }
 }

@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsEnum, IsOptional, IsUUID, MaxLength, Matches } from 'class-validator';
+import { IsString, IsEnum, IsOptional, IsUUID, MaxLength, Matches, IsLatitude, IsLongitude } from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class CreateUserDto {
   @ApiProperty({ example: '+919876543210' })
@@ -44,4 +45,16 @@ export class CreateUserDto {
   @IsString()
   @MaxLength(10)
   pincode?: string;
+
+  @ApiPropertyOptional({ example: 18.5204, description: 'User latitude' })
+  @IsOptional()
+  @IsLatitude()
+  @Type(() => Number)
+  latitude?: number;
+
+  @ApiPropertyOptional({ example: 73.8567, description: 'User longitude' })
+  @IsOptional()
+  @IsLongitude()
+  @Type(() => Number)
+  longitude?: number;
 }

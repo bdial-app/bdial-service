@@ -27,6 +27,7 @@ import { CreateProviderDto } from './dto/create-provider.dto';
 import { UpdateProviderDto } from './dto/update-provider.dto';
 import { ProviderPaginationDto } from './dto/provider-pagination.dto';
 import { BecomeProviderDto } from './dto/become-provider.dto';
+import { NearbyProvidersDto } from './dto/nearby-providers.dto';
 
 @ApiTags('Providers')
 @Controller('providers')
@@ -56,6 +57,31 @@ export class ProvidersController {
     @UploadedFile() file?: Express.Multer.File,
   ) {
     return this.providersService.becomeProvider(becomeProviderDto, file);
+  }
+
+  @Get('nearby')
+  @ApiOperation({ summary: 'Get providers near a location with Haversine distance (Flow 1-c)' })
+  @ApiResponse({ status: 200, description: 'Nearby providers with distance in km' })
+  getNearbyProviders(@Query() dto: NearbyProvidersDto) {
+    return this.providersService.findNearby(dto);
+  }
+
+  @Get('featured')
+  @ApiOperation({ summary: 'Get featured/top providers near a location (Flow 1-b)' })
+  @ApiResponse({ status: 200, description: 'Top 10 nearest active providers' })
+  @ApiQuery({ name: 'lat', required: true, type: Number })
+  @ApiQuery({ name: 'lng', required: true, type: Number })
+  @ApiQuery({ name: 'radius', required: false, type: Number, example: 25 })
+  getFeaturedProviders(
+    @Query('lat') lat: string,
+    @Query('lng') lng: string,
+    @Query('radius') radius?: string,
+  ) {
+    return this.providersService.findFeatured(
+      parseFloat(lat),
+      parseFloat(lng),
+      radius ? parseFloat(radius) : 25,
+    );
   }
 
   @Get()

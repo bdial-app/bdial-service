@@ -79,4 +79,9 @@ export class CreateProviderDto {
   @IsOptional()
   @IsEnum(['active', 'suspended'])
   status?: 'active' | 'suspended';
+
+  @ApiPropertyOptional({ example: false, description: 'Mark as featured provider' })
+  @IsOptional()
+  @IsBoolean()
+  isFeatured?: boolean;
 }

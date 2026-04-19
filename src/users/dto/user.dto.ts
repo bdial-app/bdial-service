@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsEnum, IsOptional, IsNumber, Min } from 'class-validator';
+import { IsString, IsEnum, IsOptional, IsNumber, Min, IsLatitude, IsLongitude } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class CreateUserDto {
@@ -29,6 +29,18 @@ export class CreateUserDto {
   @IsOptional()
   @IsString()
   pincode?: string;
+
+  @ApiPropertyOptional({ example: 18.5204, description: 'User latitude' })
+  @IsOptional()
+  @IsLatitude()
+  @Type(() => Number)
+  latitude?: number;
+
+  @ApiPropertyOptional({ example: 73.8567, description: 'User longitude' })
+  @IsOptional()
+  @IsLongitude()
+  @Type(() => Number)
+  longitude?: number;
 }
 
 export class UpdateUserDto {
@@ -56,6 +68,18 @@ export class UpdateUserDto {
   @IsOptional()
   @IsString()
   pincode?: string;
+
+  @ApiPropertyOptional({ example: 18.5204, description: 'User latitude' })
+  @IsOptional()
+  @IsLatitude()
+  @Type(() => Number)
+  latitude?: number;
+
+  @ApiPropertyOptional({ example: 73.8567, description: 'User longitude' })
+  @IsOptional()
+  @IsLongitude()
+  @Type(() => Number)
+  longitude?: number;
 }
 
 export class UserListQueryDto {

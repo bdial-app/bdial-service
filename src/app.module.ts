@@ -16,6 +16,8 @@ import { StorageModule } from './storage/storage.module';
 import { PhotosModule } from './photos/photos.module';
 import { ProvidersModule } from './providers/providers.module';
 import { SupabaseModule } from './supabase/supabase.module';
+import { GeocodeModule } from './geocode/geocode.module';
+import { SavedLocationsModule } from './saved-locations/saved-locations.module';
 
 @Module({
   imports: [
@@ -39,6 +41,8 @@ import { SupabaseModule } from './supabase/supabase.module';
     ReviewsModule,
     AdminModule,
     ProvidersModule,
+    GeocodeModule,
+    SavedLocationsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
