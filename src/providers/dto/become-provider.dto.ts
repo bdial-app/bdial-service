@@ -4,6 +4,7 @@ import { IsString, IsOptional, MinLength } from 'class-validator';
 
 export class BecomeProviderDto extends CreateProviderDto {
   @ApiPropertyOptional({ type: 'string', format: 'binary', description: 'Aadhaar card image file' })
+  @IsOptional()
   file?: any;
 
   @ApiPropertyOptional({ description: 'iJamat card number (optional)' })

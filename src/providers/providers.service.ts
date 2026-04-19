@@ -17,6 +17,8 @@ import { NearbyProvidersDto } from './dto/nearby-providers.dto';
 
 @Injectable()
 export class ProvidersService {
+  private providerOtpStore = new Map<string, { otp: string; expiresAt: Date }>();
+
   constructor(
     @InjectRepository(Provider) private providerRepo: Repository<Provider>,
     @InjectRepository(User) private userRepo: Repository<User>,
@@ -25,6 +27,48 @@ export class ProvidersService {
     private dataSource: DataSource,
     private geocodeService: GeocodeService,
   ) {}
+
+  async sendProviderOtp(mobileNumber: string) {
+    if (!mobileNumber || !/^\d{10}$/.test(mobileNumber.trim())) {
+      throw new BadRequestException('Mobile number must be exactly 10 digits');
+    }
+    const mobile = mobileNumber.trim();
+
+    const existing = this.providerOtpStore.get(mobile);
+    if (existing && new Date() < existing.expiresAt) {
+      const remaining = Math.ceil((existing.expiresAt.getTime() - Date.now()) / 1000);
+      throw new BadRequestException({ message: 'OTP already sent', retryAfterSeconds: remaining, error_code: 'OTP_RATE_LIMITED' });
+    }
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+    this.providerOtpStore.set(mobile, { otp, expiresAt });
+    console.log(`[Provider OTP] ${mobile}: ${otp} (Expires: ${expiresAt.toISOString()})`);
+
+    return { message: 'OTP sent successfully', data: { mobileNumber: mobile, expiresIn: '5 minutes' } };
+  }
+
+  async verifyProviderOtp(mobileNumber: string, otp: string) {
+    if (!mobileNumber || !otp) {
+      throw new BadRequestException('Mobile number and OTP are required');
+    }
+    const mobile = mobileNumber.trim();
+    const code = otp.trim();
+
+    if (!/^\d{10}$/.test(mobile)) throw new BadRequestException('Mobile number must be exactly 10 digits');
+    if (!/^\d{6}$/.test(code)) throw new BadRequestException('OTP must be exactly 6 digits');
+
+    const record = this.providerOtpStore.get(mobile);
+    if (!record) throw new BadRequestException({ message: 'No OTP found for this number', error_code: 'OTP_NOT_FOUND' });
+    if (new Date() > record.expiresAt) {
+      this.providerOtpStore.delete(mobile);
+      throw new BadRequestException({ message: 'OTP has expired', error_code: 'OTP_EXPIRED' });
+    }
+    if (record.otp !== code) throw new BadRequestException({ message: 'Invalid OTP', error_code: 'INVALID_OTP' });
+    this.providerOtpStore.delete(mobile);
+
+    return { message: 'OTP verified successfully', verified: true };
+  }
 
   async create(createProviderDto: CreateProviderDto) {
     const { userId } = createProviderDto;
@@ -80,6 +124,28 @@ export class ProvidersService {
 
       return { provider: savedProvider, verification: savedVerification };
     });
+  }
+
+  async getMyProviderStatus(userId: string) {
+    const provider = await this.providerRepo.findOneBy({ userId });
+    if (!provider) {
+      return { providerStatus: 'not_applied', verificationStatus: null, provider: null, verification: null };
+    }
+
+    const verification = await this.verRepo.findOneBy({ userId });
+    const verificationStatus = verification?.status ?? null;
+
+    // Map verification status to a provider-application status
+    let providerStatus: string;
+    if (!verification || verificationStatus === 'pending') {
+      providerStatus = 'pending';
+    } else if (verificationStatus === 'approved') {
+      providerStatus = 'approved';
+    } else {
+      providerStatus = 'rejected';
+    }
+
+    return { providerStatus, verificationStatus, provider, verification };
   }
 
   async findOne(id: string) {

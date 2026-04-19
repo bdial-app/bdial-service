@@ -10,6 +10,9 @@ import {
   BadRequestException,
   UseInterceptors,
   UploadedFile,
+  Request,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
@@ -42,6 +45,22 @@ export class ProvidersController {
   @ApiResponse({ status: 409, description: 'Provider already exists for user' })
   create(@Body() createProviderDto: CreateProviderDto) {
     return this.providersService.create(createProviderDto);
+  }
+
+  @Post('send-otp')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Send OTP to provider contact number for verification' })
+  @ApiResponse({ status: 200, description: 'OTP sent successfully' })
+  sendProviderOtp(@Body() body: { mobileNumber: string }) {
+    return this.providersService.sendProviderOtp(body.mobileNumber);
+  }
+
+  @Post('verify-otp')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Verify provider contact number OTP' })
+  @ApiResponse({ status: 200, description: 'OTP verified successfully' })
+  verifyProviderOtp(@Body() body: { mobileNumber: string; otp: string }) {
+    return this.providersService.verifyProviderOtp(body.mobileNumber, body.otp);
   }
 
   @Post('become-provider')
@@ -94,6 +113,15 @@ export class ProvidersController {
   @ApiQuery({ name: 'search', required: false, type: String })
   getProvidersList(@Query() paginationDto: ProviderPaginationDto) {
     return this.providersService.findAll(paginationDto);
+  }
+
+  @Get('my-status')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @ApiOperation({ summary: 'Get current user provider & verification status' })
+  @ApiResponse({ status: 200, description: 'Provider status retrieved' })
+  getMyProviderStatus(@Request() req) {
+    return this.providersService.getMyProviderStatus(req.user.id);
   }
 
   @Get(':id')
