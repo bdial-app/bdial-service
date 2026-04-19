@@ -14,6 +14,7 @@ import { AdminModule } from './admin/admin.module';
 import { StorageModule } from './storage/storage.module';
 import { PhotosModule } from './photos/photos.module';
 import { ProvidersModule } from './providers/providers.module';
+import { SupabaseModule } from './supabase/supabase.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { ProvidersModule } from './providers/providers.module';
     PrismaModule,
     StorageModule,
     PhotosModule,
+    SupabaseModule,
     AuthModule,
     AdminAuthModule,
     UsersModule,

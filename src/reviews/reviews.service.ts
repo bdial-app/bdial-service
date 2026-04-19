@@ -6,7 +6,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { ReviewStatus } from '@prisma/client';
 import { CreateReviewDto, ReportReviewDto } from './dto/review.dto';
-import { StorageService } from 'src/storage/storage.service';
+import { StorageService } from '../storage/storage.service';
 
 @Injectable()
 export class ReviewsService {
