@@ -45,7 +45,7 @@ export class ProvidersService {
     this.providerOtpStore.set(mobile, { otp, expiresAt });
     console.log(`[Provider OTP] ${mobile}: ${otp} (Expires: ${expiresAt.toISOString()})`);
 
-    return { message: 'OTP sent successfully', data: { mobileNumber: mobile, expiresIn: '5 minutes' } };
+    return { message: 'OTP sent successfully', data: { mobileNumber: mobile, expiresIn: '5 minutes', otp } };
   }
 
   async verifyProviderOtp(mobileNumber: string, otp: string) {

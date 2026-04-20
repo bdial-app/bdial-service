@@ -52,7 +52,7 @@ export class AuthService {
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
     otpStore.set(mobileNumber, { otp, expiresAt });
     console.log(`[Login OTP] ${mobileNumber}: ${otp} (Expires: ${expiresAt.toISOString()})`);
-    return { message: 'OTP sent successfully', data: { mobileNumber, expiresIn: '5 minutes' } };
+    return { message: 'OTP sent successfully', data: { mobileNumber, expiresIn: '5 minutes', otp } };
   }
 
   async sendAdminOtp(dto: SendOtpDto) {
