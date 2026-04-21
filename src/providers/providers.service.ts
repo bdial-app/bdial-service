@@ -167,9 +167,10 @@ export class ProvidersService {
   }
 
   async getMyProviderStatus(userId: string) {
+    const user = await this.providerRepo.manager.getRepository('User').findOneBy({ id: userId }) as any;
     const provider = await this.providerRepo.findOneBy({ userId });
     if (!provider) {
-      return { providerStatus: 'not_applied', verificationStatus: null, provider: null, verification: null };
+      return { providerStatus: 'not_applied', verificationStatus: null, provider: null, verification: null, preferredMode: user?.preferredMode ?? 'customer' };
     }
 
     const verification = await this.verRepo.findOneBy({ userId });
@@ -194,7 +195,7 @@ export class ProvidersService {
       providerStatus = 'pending';
     }
 
-    return { providerStatus, verificationStatus, provider, verification };
+    return { providerStatus, verificationStatus, provider, verification, preferredMode: user?.preferredMode ?? 'customer' };
   }
 
   async findOne(id: string) {

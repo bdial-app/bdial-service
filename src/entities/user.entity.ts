@@ -68,6 +68,9 @@ export class User {
   @Column({ name: 'deleted_at', type: 'timestamptz', nullable: true })
   deletedAt: Date | null;
 
+  @Column({ name: 'preferred_mode', type: 'varchar', length: 20, default: 'customer' })
+  preferredMode: string;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

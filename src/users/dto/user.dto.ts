@@ -80,6 +80,11 @@ export class UpdateUserDto {
   @IsLongitude()
   @Type(() => Number)
   longitude?: number;
+
+  @ApiPropertyOptional({ enum: ['customer', 'provider'], example: 'provider' })
+  @IsOptional()
+  @IsEnum(['customer', 'provider'])
+  preferredMode?: 'customer' | 'provider';
 }
 
 export class UserListQueryDto {
