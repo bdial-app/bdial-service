@@ -75,11 +75,6 @@ export class CreateProviderDto {
   @MaxLength(500)
   profilePhotoUrl?: string;
 
-  @ApiPropertyOptional({ enum: ['active', 'suspended'], example: 'active' })
-  @IsOptional()
-  @IsEnum(['active', 'suspended'])
-  status?: 'active' | 'suspended';
-
   @ApiPropertyOptional({ example: false, description: 'Mark as featured provider' })
   @IsOptional()
   @IsBoolean()

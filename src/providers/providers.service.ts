@@ -107,6 +107,7 @@ export class ProvidersService {
       const provider = manager.create(Provider, {
         ...cleanData,
         userId,
+        status: 'pending',
         latitude: latitude ? parseFloat(latitude) : null,
         longitude: longitude ? parseFloat(longitude) : null,
       });
@@ -135,12 +136,13 @@ export class ProvidersService {
     const verification = await this.verRepo.findOneBy({ userId });
     const verificationStatus = verification?.status ?? null;
 
-    // Map verification status to a provider-application status
+    // Map to a provider-application status
+    // Provider is approved if: provider.status is 'active' OR verification is 'approved'
     let providerStatus: string;
-    if (!verification || verificationStatus === 'pending') {
-      providerStatus = 'pending';
-    } else if (verificationStatus === 'approved') {
+    if (provider.status === 'active' || verificationStatus === 'approved') {
       providerStatus = 'approved';
+    } else if (!verification || verificationStatus === 'pending') {
+      providerStatus = 'pending';
     } else {
       providerStatus = 'rejected';
     }
