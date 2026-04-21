@@ -7,7 +7,6 @@ import {
   OneToMany,
   OneToOne,
 } from 'typeorm';
-import { Listing } from './listing.entity';
 import { Verification } from './verification.entity';
 import { Review } from './review.entity';
 import { ReviewReport } from './review-report.entity';
@@ -76,8 +75,6 @@ export class User {
   updatedAt: Date;
 
   // Relations
-  @OneToMany(() => Listing, (listing) => listing.provider)
-  listings: Listing[];
 
   @OneToOne(() => Verification, (v) => v.user)
   verification: Verification;

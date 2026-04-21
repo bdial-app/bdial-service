@@ -5,9 +5,11 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   OneToOne,
+  OneToMany,
   JoinColumn,
 } from 'typeorm';
 import { User } from './user.entity';
+import { Listing } from './listing.entity';
 
 @Entity('providers')
 export class Provider {
@@ -71,4 +73,7 @@ export class Provider {
   @OneToOne(() => User, (u) => u.provider, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })
   user: User;
+
+  @OneToMany(() => Listing, (l) => l.provider)
+  listings: Listing[];
 }

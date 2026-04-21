@@ -8,7 +8,7 @@ import {
   JoinColumn,
   Index,
 } from 'typeorm';
-import { User } from './user.entity';
+import { Provider } from './provider.entity';
 import { ListingCategory } from './listing-category.entity';
 import { Photo } from './photo.entity';
 import { Product } from './product.entity';
@@ -75,9 +75,9 @@ export class Listing {
   updatedAt: Date;
 
   // Relations
-  @ManyToOne(() => User, (u) => u.listings)
+  @ManyToOne(() => Provider, (p) => p.listings)
   @JoinColumn({ name: 'provider_id' })
-  provider: User;
+  provider: Provider;
 
   @OneToMany(() => ListingCategory, (lc) => lc.listing)
   listingCategories: ListingCategory[];
