@@ -153,6 +153,18 @@ export class ProvidersController {
     return this.providersService.findOne(id);
   }
 
+  @Get(':id/details')
+  @ApiOperation({
+    summary:
+      'Get provider details aggregate (provider + listings + photos + products + reviews + stats)',
+  })
+  @ApiResponse({ status: 200, description: 'Provider details retrieved successfully' })
+  @ApiResponse({ status: 404, description: 'Provider not found' })
+  @ApiParam({ name: 'id', description: 'Provider ID (UUID)' })
+  getProviderDetails(@Param('id', ParseUUIDPipe) id: string) {
+    return this.providersService.findDetails(id);
+  }
+
   @Patch(':id')
   @ApiOperation({ summary: 'Update provider by ID' })
   @ApiResponse({ status: 200, description: 'Provider updated successfully' })

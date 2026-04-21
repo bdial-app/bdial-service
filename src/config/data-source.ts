@@ -11,6 +11,9 @@ import { ReviewPhoto } from '../entities/review-photo.entity';
 import { ReviewReport } from '../entities/review-report.entity';
 import { Provider } from '../entities/provider.entity';
 import { SavedLocation } from '../entities/saved-location.entity';
+import { PromoBanner } from '../entities/promo-banner.entity';
+import { Booking } from '../entities/booking.entity';
+import { SavedItem } from '../entities/saved-item.entity';
 
 export const ALL_ENTITIES = [
   User,
@@ -25,6 +28,9 @@ export const ALL_ENTITIES = [
   ReviewReport,
   Provider,
   SavedLocation,
+  PromoBanner,
+  Booking,
+  SavedItem,
 ];
 
 export function buildTypeOrmOptions(url: string): DataSourceOptions {

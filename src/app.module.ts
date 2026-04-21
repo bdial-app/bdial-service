@@ -18,6 +18,9 @@ import { ProvidersModule } from './providers/providers.module';
 import { SupabaseModule } from './supabase/supabase.module';
 import { GeocodeModule } from './geocode/geocode.module';
 import { SavedLocationsModule } from './saved-locations/saved-locations.module';
+import { HomeModule } from './home/home.module';
+import { ProductsModule } from './products/products.module';
+import { SavedItemsModule } from './saved-items/saved-items.module';
 
 @Module({
   imports: [
@@ -43,6 +46,9 @@ import { SavedLocationsModule } from './saved-locations/saved-locations.module';
     ProvidersModule,
     GeocodeModule,
     SavedLocationsModule,
+    HomeModule,
+    ProductsModule,
+    SavedItemsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -10,3 +10,6 @@ export { ReviewPhoto } from './review-photo.entity';
 export { ReviewReport } from './review-report.entity';
 export { Provider } from './provider.entity';
 export { SavedLocation } from './saved-location.entity';
+export { PromoBanner } from './promo-banner.entity';
+export { Booking } from './booking.entity';
+export { SavedItem } from './saved-item.entity';
