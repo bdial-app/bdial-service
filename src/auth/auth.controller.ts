@@ -48,6 +48,14 @@ export class AuthController {
 
   // ─────────────────────── REGISTRATION FLOW ────────────────────────
 
+  @Post('register/send-otp')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Send OTP to a mobile number for new-user registration' })
+  @ApiResponse({ status: 200, description: 'OTP sent successfully' })
+  sendRegistrationOtp(@Body() dto: SendOtpDto) {
+    return this.authService.sendRegistrationOtp(dto);
+  }
+
   @Post('register/check-availability')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Check if email or phone is available' })

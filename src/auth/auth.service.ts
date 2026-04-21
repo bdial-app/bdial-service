@@ -50,8 +50,41 @@ export class AuthService {
 
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
+    // Check if user exists — new users go straight to registration
+    const existingUser = await this.userRepo.findOneBy({ mobileNumber });
+    if (!existingUser) {
+      return { userExists: false, message: 'User not found. Please register.', data: { mobileNumber } };
+    }
+
     otpStore.set(mobileNumber, { otp, expiresAt });
     console.log(`[Login OTP] ${mobileNumber}: ${otp} (Expires: ${expiresAt.toISOString()})`);
+    return { userExists: true, message: 'OTP sent successfully', data: { mobileNumber, expiresIn: '5 minutes', otp } };
+  }
+
+  // Send OTP for new-user registration (no user-existence check)
+  async sendRegistrationOtp(dto: SendOtpDto) {
+    if (!dto.mobileNumber) {
+      throw new BadRequestException({ statusCode: 400, message: 'Mobile number is required', required: ['mobileNumber'] });
+    }
+    const mobileNumber = dto.mobileNumber.trim();
+    if (!mobileNumber) {
+      throw new BadRequestException({ statusCode: 400, message: 'Mobile number cannot be empty or whitespace only', field: 'mobileNumber' });
+    }
+    if (!/^\d{10}$/.test(mobileNumber)) {
+      throw new BadRequestException({ statusCode: 400, message: 'Mobile number must be exactly 10 digits', field: 'mobileNumber', received_length: mobileNumber.length });
+    }
+
+    const existingOtp = otpStore.get(mobileNumber);
+    if (existingOtp && new Date() < existingOtp.expiresAt) {
+      const remainingTime = Math.ceil((existingOtp.expiresAt.getTime() - Date.now()) / 1000);
+      throw new BadRequestException({ statusCode: 429, message: 'OTP already sent to this phone number', field: 'mobileNumber', retryAfterSeconds: remainingTime, error_code: 'OTP_RATE_LIMITED' });
+    }
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+    otpStore.set(mobileNumber, { otp, expiresAt });
+    console.log(`[Registration OTP] ${mobileNumber}: ${otp} (Expires: ${expiresAt.toISOString()})`);
     return { message: 'OTP sent successfully', data: { mobileNumber, expiresIn: '5 minutes', otp } };
   }
 
