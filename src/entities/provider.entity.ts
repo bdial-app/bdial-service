@@ -58,8 +58,8 @@ export class Provider {
   @Column({ name: 'profile_photo_url', type: 'varchar', length: 500, nullable: true })
   profilePhotoUrl: string | null;
 
-  @Column({ type: 'enum', enum: ['pending', 'in_review', 'active', 'suspended'], default: 'pending' })
-  status: 'pending' | 'in_review' | 'active' | 'suspended';
+  @Column({ type: 'enum', enum: ['pending', 'in_review', 'active', 'suspended', 'unverified'], default: 'pending' })
+  status: 'pending' | 'in_review' | 'active' | 'suspended' | 'unverified';
 
   @Column({ name: 'is_featured', type: 'boolean', default: false })
   isFeatured: boolean;

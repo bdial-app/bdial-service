@@ -13,6 +13,7 @@ import {
   Request,
   HttpCode,
   HttpStatus,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
@@ -124,15 +125,31 @@ export class ProvidersController {
     return this.providersService.getMyProviderStatus(req.user.id);
   }
 
+  @Post('submit-verification')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiOperation({ summary: 'Submit identity verification document for existing provider' })
+  @ApiResponse({ status: 201, description: 'Verification submitted successfully' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 404, description: 'Provider not found' })
+  @ApiResponse({ status: 409, description: 'Verification already approved' })
+  submitVerification(
+    @Request() req,
+    @UploadedFile() file: Express.Multer.File,
+    @Body('docType') docType?: string,
+  ) {
+    if (!file) throw new BadRequestException('Identity document file is required');
+    return this.providersService.submitVerification(req.user.id, file, docType);
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get provider by ID' })
   @ApiResponse({ status: 200, description: 'Provider retrieved successfully' })
   @ApiResponse({ status: 404, description: 'Provider not found' })
-  @ApiParam({ name: 'id', description: 'Provider ID' })
-  getProviderById(@Param('id') id: string) {
-    if (!id || id === 'undefined' || id === 'null') {
-      throw new BadRequestException('Valid provider ID is required');
-    }
+  @ApiParam({ name: 'id', description: 'Provider ID (UUID)' })
+  getProviderById(@Param('id', ParseUUIDPipe) id: string) {
     return this.providersService.findOne(id);
   }
 
@@ -141,14 +158,11 @@ export class ProvidersController {
   @ApiResponse({ status: 200, description: 'Provider updated successfully' })
   @ApiResponse({ status: 404, description: 'Provider not found' })
   @ApiResponse({ status: 409, description: 'Provider already exists for user' })
-  @ApiParam({ name: 'id', description: 'Provider ID' })
+  @ApiParam({ name: 'id', description: 'Provider ID (UUID)' })
   updateProvider(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() updateProviderDto: UpdateProviderDto,
   ) {
-    if (!id || id === 'undefined' || id === 'null') {
-      throw new BadRequestException('Valid provider ID is required');
-    }
     return this.providersService.update(id, updateProviderDto);
   }
 }

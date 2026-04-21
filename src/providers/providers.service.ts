@@ -17,7 +17,7 @@ import { NearbyProvidersDto } from './dto/nearby-providers.dto';
 
 @Injectable()
 export class ProvidersService {
-  private providerOtpStore = new Map<string, { otp: string; expiresAt: Date }>();
+  private providerOtpStore = new Map<string, { otp: string; expiresAt: Date; sentAt: Date }>();
 
   constructor(
     @InjectRepository(Provider) private providerRepo: Repository<Provider>,
@@ -36,13 +36,16 @@ export class ProvidersService {
 
     const existing = this.providerOtpStore.get(mobile);
     if (existing && new Date() < existing.expiresAt) {
-      const remaining = Math.ceil((existing.expiresAt.getTime() - Date.now()) / 1000);
-      throw new BadRequestException({ message: 'OTP already sent', retryAfterSeconds: remaining, error_code: 'OTP_RATE_LIMITED' });
+      const timeSinceSent = Date.now() - existing.sentAt.getTime();
+      if (timeSinceSent < 60 * 1000) {
+        const remaining = Math.ceil((60 * 1000 - timeSinceSent) / 1000);
+        throw new BadRequestException({ message: 'OTP recently sent. Please wait before resending.', retryAfterSeconds: remaining, error_code: 'OTP_RATE_LIMITED' });
+      }
     }
 
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-    this.providerOtpStore.set(mobile, { otp, expiresAt });
+    this.providerOtpStore.set(mobile, { otp, expiresAt, sentAt: new Date() });
     console.log(`[Provider OTP] ${mobile}: ${otp} (Expires: ${expiresAt.toISOString()})`);
 
     return { message: 'OTP sent successfully', data: { mobileNumber: mobile, expiresIn: '5 minutes', otp } };
@@ -91,10 +94,11 @@ export class ProvidersService {
   async becomeProvider(becomeProviderDto: BecomeProviderDto, file?: Express.Multer.File) {
     const { userId, ijamatNumber, ijamatExpiry, ijamatDocUrl, ...providerData } = becomeProviderDto;
 
-    if (!file) throw new BadRequestException('Aadhaar card document file is required');
-
-    const uploadResult = await this.storage.upload('verifications', file);
-    const aadhaarDocUrl = uploadResult.url;
+    let aadhaarDocUrl: string | null = null;
+    if (file) {
+      const uploadResult = await this.storage.upload('verifications', file);
+      aadhaarDocUrl = uploadResult.url;
+    }
 
     const user = await this.userRepo.findOneBy({ id: userId });
     if (!user) throw new NotFoundException(`User with ID '${userId}' not found`);
@@ -107,24 +111,59 @@ export class ProvidersService {
       const provider = manager.create(Provider, {
         ...cleanData,
         userId,
-        status: 'pending',
+        status: aadhaarDocUrl ? 'pending' : 'unverified',
         latitude: latitude ? parseFloat(latitude) : null,
         longitude: longitude ? parseFloat(longitude) : null,
       });
       const savedProvider = await manager.save(provider);
 
-      const verification = manager.create(Verification, {
-        userId,
-        aadhaarDocUrl,
-        ijamatNumber,
-        ijamatExpiry: ijamatExpiry ? new Date(ijamatExpiry) : null,
-        ijamatDocUrl,
-        status: 'pending',
-      });
-      const savedVerification = await manager.save(verification);
+      let savedVerification: Verification | null = null;
+      if (aadhaarDocUrl) {
+        const verification = manager.create(Verification, {
+          userId,
+          aadhaarDocUrl,
+          ijamatNumber,
+          ijamatExpiry: ijamatExpiry ? new Date(ijamatExpiry) : null,
+          ijamatDocUrl,
+          status: 'pending',
+        });
+        savedVerification = await manager.save(verification);
+      }
 
       return { provider: savedProvider, verification: savedVerification };
     });
+  }
+
+  async submitVerification(userId: string, file: Express.Multer.File, docType?: string) {
+    const provider = await this.providerRepo.findOneBy({ userId });
+    if (!provider) throw new NotFoundException('Provider not found. Please register as a provider first.');
+
+    const existingVerification = await this.verRepo.findOneBy({ userId });
+    if (existingVerification && existingVerification.status === 'approved') {
+      throw new ConflictException('Verification already approved.');
+    }
+
+    const uploadResult = await this.storage.upload('verifications', file);
+    const aadhaarDocUrl = uploadResult.url;
+
+    // Update provider status from 'unverified' to 'pending' when docs are submitted
+    if (provider.status === 'unverified') {
+      provider.status = 'pending';
+      await this.providerRepo.save(provider);
+    }
+
+    if (existingVerification) {
+      existingVerification.aadhaarDocUrl = aadhaarDocUrl;
+      existingVerification.status = 'pending';
+      return this.verRepo.save(existingVerification);
+    }
+
+    const verification = this.verRepo.create({
+      userId,
+      aadhaarDocUrl,
+      status: 'pending',
+    });
+    return this.verRepo.save(verification);
   }
 
   async getMyProviderStatus(userId: string) {
@@ -137,14 +176,22 @@ export class ProvidersService {
     const verificationStatus = verification?.status ?? null;
 
     // Map to a provider-application status
-    // Provider is approved if: provider.status is 'active' OR verification is 'approved'
     let providerStatus: string;
     if (provider.status === 'active' || verificationStatus === 'approved') {
+      // Fully approved & verified
       providerStatus = 'approved';
-    } else if (!verification || verificationStatus === 'pending') {
+    } else if (provider.status === 'unverified') {
+      // Provider registered but never submitted verification docs
+      // They can still access the dashboard, just not verified
+      providerStatus = 'approved';
+    } else if (verificationStatus === 'pending') {
+      // Verification docs submitted, awaiting review
       providerStatus = 'pending';
-    } else {
+    } else if (verificationStatus === 'rejected') {
       providerStatus = 'rejected';
+    } else {
+      // Fallback: provider exists with pending/in_review status
+      providerStatus = 'pending';
     }
 
     return { providerStatus, verificationStatus, provider, verification };
@@ -221,7 +268,7 @@ export class ProvidersService {
       .addSelect(haversine, 'distance')
       .where('provider.latitude IS NOT NULL')
       .andWhere('provider.longitude IS NOT NULL')
-      .andWhere('provider.status = :status', { status: 'active' })
+      .andWhere('provider.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
       .andWhere(`${haversine} <= :radius`, { lat, lng, radius })
       .setParameters({ lat, lng, radius });
 
@@ -233,13 +280,16 @@ export class ProvidersService {
       );
     }
 
-    // Sort
+    // Sort - verified (active) providers always rank above unverified
     if (sortBy === 'distance') {
-      qb.orderBy('distance', 'ASC');
+      qb.orderBy("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'ASC')
+        .addOrderBy('distance', 'ASC');
     } else if (sortBy === 'newest') {
-      qb.orderBy('provider.createdAt', 'DESC');
+      qb.orderBy("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'ASC')
+        .addOrderBy('provider.createdAt', 'DESC');
     } else {
-      qb.orderBy('distance', 'ASC');
+      qb.orderBy("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'ASC')
+        .addOrderBy('distance', 'ASC');
     }
 
     // Get total before pagination
@@ -315,15 +365,16 @@ export class ProvidersService {
       .addSelect(haversine, 'distance')
       .where('provider.latitude IS NOT NULL')
       .andWhere('provider.longitude IS NOT NULL')
-      .andWhere('provider.status = :status', { status: 'active' })
+      .andWhere('provider.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
       .andWhere('provider.isFeatured = :featured', { featured: true })
       .andWhere(`${haversine} <= :radius`)
       .setParameters({ lat, lng, radius })
-      .orderBy('distance', 'ASC')
+      .orderBy("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'ASC')
+      .addOrderBy('distance', 'ASC')
       .limit(10)
       .getRawAndEntities();
 
-    // Fallback: if no featured providers, return nearest active ones
+    // Fallback: if no featured providers, return nearest ones
     if (entities.length === 0) {
       ({ raw, entities } = await this.providerRepo
         .createQueryBuilder('provider')
@@ -331,10 +382,11 @@ export class ProvidersService {
         .addSelect(haversine, 'distance')
         .where('provider.latitude IS NOT NULL')
         .andWhere('provider.longitude IS NOT NULL')
-        .andWhere('provider.status = :status', { status: 'active' })
+        .andWhere('provider.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
         .andWhere(`${haversine} <= :radius`)
         .setParameters({ lat, lng, radius })
-        .orderBy('distance', 'ASC')
+        .orderBy("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'ASC')
+        .addOrderBy('distance', 'ASC')
         .limit(10)
         .getRawAndEntities());
     }

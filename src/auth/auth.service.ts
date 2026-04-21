@@ -20,7 +20,8 @@ import {
   CompleteProfileDto,
 } from './dto/auth.dto';
 
-const otpStore = new Map<string, { otp: string; expiresAt: Date }>();
+const OTP_RESEND_COOLDOWN_MS = 60 * 1000; // 60s cooldown between resends
+const otpStore = new Map<string, { otp: string; expiresAt: Date; sentAt: Date }>();
 
 @Injectable()
 export class AuthService {
@@ -42,22 +43,25 @@ export class AuthService {
       throw new BadRequestException({ statusCode: 400, message: 'Mobile number must be exactly 10 digits', field: 'mobileNumber', received_length: mobileNumber.length });
     }
 
-    const existingOtp = otpStore.get(mobileNumber);
-    if (existingOtp && new Date() < existingOtp.expiresAt) {
-      const remainingTime = Math.ceil((existingOtp.expiresAt.getTime() - Date.now()) / 1000);
-      throw new BadRequestException({ statusCode: 429, message: 'OTP already sent to this phone number', field: 'mobileNumber', retryAfterSeconds: remainingTime, error_code: 'OTP_RATE_LIMITED' });
-    }
-
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-
     // Check if user exists — new users go straight to registration
     const existingUser = await this.userRepo.findOneBy({ mobileNumber });
     if (!existingUser) {
       return { userExists: false, message: 'User not found. Please register.', data: { mobileNumber } };
     }
 
-    otpStore.set(mobileNumber, { otp, expiresAt });
+    const existingOtp = otpStore.get(mobileNumber);
+    if (existingOtp && new Date() < existingOtp.expiresAt) {
+      const timeSinceSent = Date.now() - existingOtp.sentAt.getTime();
+      if (timeSinceSent < OTP_RESEND_COOLDOWN_MS) {
+        const remainingCooldown = Math.ceil((OTP_RESEND_COOLDOWN_MS - timeSinceSent) / 1000);
+        throw new BadRequestException({ statusCode: 429, message: 'OTP recently sent. Please wait before resending.', field: 'mobileNumber', retryAfterSeconds: remainingCooldown, error_code: 'OTP_RATE_LIMITED' });
+      }
+    }
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
+    otpStore.set(mobileNumber, { otp, expiresAt, sentAt: new Date() });
     console.log(`[Login OTP] ${mobileNumber}: ${otp} (Expires: ${expiresAt.toISOString()})`);
     return { userExists: true, message: 'OTP sent successfully', data: { mobileNumber, expiresIn: '5 minutes', otp } };
   }
@@ -77,13 +81,16 @@ export class AuthService {
 
     const existingOtp = otpStore.get(mobileNumber);
     if (existingOtp && new Date() < existingOtp.expiresAt) {
-      const remainingTime = Math.ceil((existingOtp.expiresAt.getTime() - Date.now()) / 1000);
-      throw new BadRequestException({ statusCode: 429, message: 'OTP already sent to this phone number', field: 'mobileNumber', retryAfterSeconds: remainingTime, error_code: 'OTP_RATE_LIMITED' });
+      const timeSinceSent = Date.now() - existingOtp.sentAt.getTime();
+      if (timeSinceSent < OTP_RESEND_COOLDOWN_MS) {
+        const remainingCooldown = Math.ceil((OTP_RESEND_COOLDOWN_MS - timeSinceSent) / 1000);
+        throw new BadRequestException({ statusCode: 429, message: 'OTP recently sent. Please wait before resending.', field: 'mobileNumber', retryAfterSeconds: remainingCooldown, error_code: 'OTP_RATE_LIMITED' });
+      }
     }
 
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-    otpStore.set(mobileNumber, { otp, expiresAt });
+    otpStore.set(mobileNumber, { otp, expiresAt, sentAt: new Date() });
     console.log(`[Registration OTP] ${mobileNumber}: ${otp} (Expires: ${expiresAt.toISOString()})`);
     return { message: 'OTP sent successfully', data: { mobileNumber, expiresIn: '5 minutes', otp } };
   }
@@ -271,13 +278,16 @@ export class AuthService {
 
     const existingOtp = otpStore.get(`reg_phone_${mobileNumber}`);
     if (existingOtp && new Date() < existingOtp.expiresAt) {
-      const remainingTime = Math.ceil((existingOtp.expiresAt.getTime() - Date.now()) / 1000);
-      throw new BadRequestException({ statusCode: 429, message: 'OTP already sent', retryAfterSeconds: remainingTime, error_code: 'OTP_RATE_LIMITED' });
+      const timeSinceSent = Date.now() - existingOtp.sentAt.getTime();
+      if (timeSinceSent < OTP_RESEND_COOLDOWN_MS) {
+        const remainingCooldown = Math.ceil((OTP_RESEND_COOLDOWN_MS - timeSinceSent) / 1000);
+        throw new BadRequestException({ statusCode: 429, message: 'OTP recently sent. Please wait before resending.', retryAfterSeconds: remainingCooldown, error_code: 'OTP_RATE_LIMITED' });
+      }
     }
 
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-    otpStore.set(`reg_phone_${mobileNumber}`, { otp, expiresAt, mobileNumber, name, gender: dto.gender.toLowerCase() } as any);
+    otpStore.set(`reg_phone_${mobileNumber}`, { otp, expiresAt, sentAt: new Date(), mobileNumber, name, gender: dto.gender.toLowerCase() } as any);
     console.log(`[Phone Registration OTP] ${mobileNumber}: ${otp}`);
 
     return { step: 'phone_verification', message: 'OTP sent to your phone. Please verify to complete registration.', data: { mobileNumber, expiresIn: '5 minutes' } };
@@ -353,13 +363,16 @@ export class AuthService {
 
     const existingOtp = otpStore.get(`reg_email_${email}`);
     if (existingOtp && new Date() < existingOtp.expiresAt) {
-      const remainingTime = Math.ceil((existingOtp.expiresAt.getTime() - Date.now()) / 1000);
-      throw new BadRequestException({ statusCode: 429, message: 'Verification OTP already sent', retryAfterSeconds: remainingTime, error_code: 'OTP_RATE_LIMITED' });
+      const timeSinceSent = Date.now() - existingOtp.sentAt.getTime();
+      if (timeSinceSent < OTP_RESEND_COOLDOWN_MS) {
+        const remainingCooldown = Math.ceil((OTP_RESEND_COOLDOWN_MS - timeSinceSent) / 1000);
+        throw new BadRequestException({ statusCode: 429, message: 'OTP recently sent. Please wait before resending.', retryAfterSeconds: remainingCooldown, error_code: 'OTP_RATE_LIMITED' });
+      }
     }
 
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
-    otpStore.set(`reg_email_${email}`, { otp, expiresAt });
+    otpStore.set(`reg_email_${email}`, { otp, expiresAt, sentAt: new Date() });
     otpStore.set(`pending_reg_${email}`, { email, name, password, gender: dto.gender.toLowerCase(), otp, expiresAt } as any);
     console.log(`[Email Registration OTP] ${email}: ${otp}`);
 
