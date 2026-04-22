@@ -97,13 +97,36 @@ export class ProvidersService {
     return this.providerRepo.findOne({ where: { id: saved.id }, relations: ['user'] });
   }
 
-  async becomeProvider(becomeProviderDto: BecomeProviderDto, file?: Express.Multer.File) {
-    const { userId, ijamatNumber, ijamatExpiry, ijamatDocUrl, categoryIds, ...providerData } = becomeProviderDto;
+  async becomeProvider(
+    becomeProviderDto: BecomeProviderDto,
+    file?: Express.Multer.File,
+    bannerImage?: Express.Multer.File,
+    profileImage?: Express.Multer.File,
+    productImages?: Express.Multer.File[],
+  ) {
+    const { userId, ijamatNumber, ijamatExpiry, ijamatDocUrl, categoryIds, products: productsJson, ...providerData } = becomeProviderDto;
 
-    let aadhaarDocUrl: string | null = null;
-    if (file) {
-      const uploadResult = await this.storage.upload('verifications', file);
-      aadhaarDocUrl = uploadResult.url;
+    // Upload files in parallel (outside transaction)
+    const [aadhaarUpload, bannerUpload, profileUpload] = await Promise.all([
+      file ? this.storage.upload('verifications', file) : Promise.resolve(null),
+      bannerImage ? this.storage.upload('providers', bannerImage) : Promise.resolve(null),
+      profileImage ? this.storage.upload('providers', profileImage) : Promise.resolve(null),
+    ]);
+
+    // Upload product images in parallel
+    const productImageUploads = productImages?.length
+      ? await Promise.all(productImages.map((img) => this.storage.upload('products', img)))
+      : [];
+
+    // Parse products JSON (each product may have imageCount for multi-image)
+    let parsedProducts: Array<{ name: string; description?: string; price?: number; currency?: string; imageCount?: number }> = [];
+    if (productsJson) {
+      try {
+        parsedProducts = JSON.parse(productsJson);
+        if (!Array.isArray(parsedProducts)) parsedProducts = [];
+      } catch {
+        throw new BadRequestException('Invalid products JSON');
+      }
     }
 
     const user = await this.userRepo.findOneBy({ id: userId });
@@ -113,7 +136,7 @@ export class ProvidersService {
     if (existingProvider) throw new ConflictException(`Provider already exists for user with ID '${userId}'`);
 
     return this.dataSource.transaction(async (manager) => {
-      const { latitude, longitude, file: _file, ...cleanData } = providerData as any;
+      const { latitude, longitude, file: _file, bannerImage: _bi, profileImage: _pi, bannerImageUrl: _biu, profilePhotoUrl: _ppu, ...cleanData } = providerData as any;
       const provider = manager.create(Provider, {
         ...cleanData,
         userId,
@@ -121,6 +144,8 @@ export class ProvidersService {
         isWomenLed: user.gender === 'female',
         latitude: latitude ? parseFloat(latitude) : null,
         longitude: longitude ? parseFloat(longitude) : null,
+        bannerImageUrl: bannerUpload?.url || (providerData as any).bannerImageUrl || null,
+        profilePhotoUrl: profileUpload?.url || (providerData as any).profilePhotoUrl || null,
       });
       const savedProvider = await manager.save(provider);
 
@@ -132,11 +157,47 @@ export class ProvidersService {
         await manager.save(cats);
       }
 
+      // Save products with multi-image support
+      // Images are a flat array; each product's imageCount tells us how many belong to it
+      const savedProducts: Product[] = [];
+      let imgOffset = 0;
+      if (parsedProducts.length > 0) {
+        for (let i = 0; i < parsedProducts.length; i++) {
+          const p = parsedProducts[i];
+          const count = p.imageCount ?? 0;
+          const productPhotos = productImageUploads.slice(imgOffset, imgOffset + count);
+          imgOffset += count;
+          const photoUrl = productPhotos[0]?.url || null;
+          const product = manager.create(Product, {
+            providerId: savedProvider.id,
+            name: p.name,
+            description: p.description || null,
+            price: p.price != null ? p.price : null,
+            currency: p.currency || 'INR',
+            photoUrl,
+            isActive: true,
+            displayOrder: i,
+          });
+          savedProducts.push(await manager.save(product));
+
+          // Save additional product photos as provider gallery photos
+          for (let j = 1; j < productPhotos.length; j++) {
+            const photo = manager.create(Photo, {
+              providerId: savedProvider.id,
+              imageUrl: productPhotos[j].url,
+              storageKey: productPhotos[j].storageKey,
+              displayOrder: j,
+            });
+            await manager.save(photo);
+          }
+        }
+      }
+
       let savedVerification: Verification | null = null;
-      if (aadhaarDocUrl) {
+      if (aadhaarUpload) {
         const verification = manager.create(Verification, {
           userId,
-          aadhaarDocUrl,
+          aadhaarDocUrl: aadhaarUpload.url,
           ijamatNumber,
           ijamatExpiry: ijamatExpiry ? new Date(ijamatExpiry) : null,
           ijamatDocUrl,
@@ -145,7 +206,7 @@ export class ProvidersService {
         savedVerification = await manager.save(verification);
       }
 
-      return { provider: savedProvider, verification: savedVerification };
+      return { provider: savedProvider, verification: savedVerification, products: savedProducts };
     });
   }
 

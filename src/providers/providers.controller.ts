@@ -10,12 +10,13 @@ import {
   BadRequestException,
   UseInterceptors,
   UploadedFile,
+  UploadedFiles,
   Request,
   HttpCode,
   HttpStatus,
   ParseUUIDPipe,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor, FileFieldsInterceptor } from '@nestjs/platform-express';
 import {
   ApiTags,
   ApiOperation,
@@ -66,17 +67,33 @@ export class ProvidersController {
 
   @Post('become-provider')
   @ApiConsumes('multipart/form-data')
-  @UseInterceptors(FileInterceptor('file'))
-  @ApiOperation({ summary: 'Become a provider (creates provider and verification records)' })
+  @UseInterceptors(FileFieldsInterceptor([
+    { name: 'file', maxCount: 1 },
+    { name: 'bannerImage', maxCount: 1 },
+    { name: 'profileImage', maxCount: 1 },
+    { name: 'productImages', maxCount: 20 },
+  ]))
+  @ApiOperation({ summary: 'Become a provider (creates provider, uploads photos, creates products, and verification records)' })
   @ApiResponse({ status: 201, description: 'Provider and verification created successfully' })
   @ApiResponse({ status: 400, description: 'Bad Request' })
   @ApiResponse({ status: 404, description: 'User not found' })
   @ApiResponse({ status: 409, description: 'Provider already exists for user' })
   becomeProvider(
     @Body() becomeProviderDto: BecomeProviderDto,
-    @UploadedFile() file?: Express.Multer.File,
+    @UploadedFiles() files: {
+      file?: Express.Multer.File[];
+      bannerImage?: Express.Multer.File[];
+      profileImage?: Express.Multer.File[];
+      productImages?: Express.Multer.File[];
+    },
   ) {
-    return this.providersService.becomeProvider(becomeProviderDto, file);
+    return this.providersService.becomeProvider(
+      becomeProviderDto,
+      files?.file?.[0],
+      files?.bannerImage?.[0],
+      files?.profileImage?.[0],
+      files?.productImages,
+    );
   }
 
   @Get('nearby')

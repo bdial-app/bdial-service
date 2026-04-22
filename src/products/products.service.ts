@@ -102,6 +102,7 @@ export class ProductsService {
       product,
       provider: {
         id: provider.id,
+        userId: provider.userId,
         brandName: provider.brandName,
         description: provider.description,
         profilePhotoUrl: provider.profilePhotoUrl,

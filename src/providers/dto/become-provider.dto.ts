@@ -1,4 +1,5 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiPropertyOptional } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
 import { CreateProviderDto } from './create-provider.dto';
 import { IsString, IsOptional, IsArray, IsUUID } from 'class-validator';
 
@@ -6,6 +7,14 @@ export class BecomeProviderDto extends CreateProviderDto {
   @ApiPropertyOptional({ type: 'string', format: 'binary', description: 'Aadhaar card image file' })
   @IsOptional()
   file?: any;
+
+  @ApiPropertyOptional({ type: 'string', format: 'binary', description: 'Banner image file' })
+  @IsOptional()
+  bannerImage?: any;
+
+  @ApiPropertyOptional({ type: 'string', format: 'binary', description: 'Profile image file' })
+  @IsOptional()
+  profileImage?: any;
 
   @ApiPropertyOptional({ description: 'iJamat card number (optional)' })
   @IsOptional()
@@ -23,7 +32,13 @@ export class BecomeProviderDto extends CreateProviderDto {
 
   @ApiPropertyOptional({ description: 'Category IDs to associate with this provider', type: [String] })
   @IsOptional()
+  @Transform(({ value }) => (Array.isArray(value) ? value : value ? [value] : []))
   @IsArray()
   @IsUUID('4', { each: true })
   categoryIds?: string[];
+
+  @ApiPropertyOptional({ description: 'Products JSON array: [{name, description?, price?, currency?}]' })
+  @IsOptional()
+  @IsString()
+  products?: string;
 }
