@@ -335,7 +335,7 @@ export class ProvidersService {
    * Flow 1-c: Location-based provider discovery.
    */
   async findNearby(dto: NearbyProvidersDto) {
-    const { lat, lng, radius = 10, page = 1, limit = 10, search, city, sortBy = 'distance' } = dto;
+    const { lat, lng, radius = 10, page = 1, limit = 10, search, city, sortBy = 'distance', categoryIds } = dto;
     const offset = (page - 1) * limit;
 
     // Haversine formula in SQL (returns distance in km)
@@ -362,6 +362,12 @@ export class ProvidersService {
       qb.andWhere(
         '(provider.brandName ILIKE :search OR provider.description ILIKE :search)',
         { search: `%${search}%` },
+      );
+    }
+    if (categoryIds?.length) {
+      qb.andWhere(
+        `provider.id IN (SELECT pc.provider_id FROM provider_categories pc WHERE pc.category_id IN (:...categoryIds))`,
+        { categoryIds },
       );
     }
 

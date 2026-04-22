@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsLatitude, IsLongitude, IsOptional, IsInt, Min, Max, IsString, IsEnum } from 'class-validator';
-import { Type } from 'class-transformer';
+import { IsLatitude, IsLongitude, IsOptional, IsInt, Min, Max, IsString, IsEnum, IsArray, IsUUID } from 'class-validator';
+import { Type, Transform } from 'class-transformer';
 
 export class NearbyProvidersDto {
   @ApiProperty({ example: 18.5204, description: 'User latitude' })
@@ -49,4 +49,11 @@ export class NearbyProvidersDto {
   @IsOptional()
   @IsEnum(['distance', 'rating', 'newest'])
   sortBy?: 'distance' | 'rating' | 'newest' = 'distance';
+
+  @ApiPropertyOptional({ description: 'Filter by category IDs', type: [String] })
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? [value] : value))
+  @IsArray()
+  @IsUUID('4', { each: true })
+  categoryIds?: string[];
 }
