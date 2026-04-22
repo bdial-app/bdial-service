@@ -6,16 +6,16 @@ import {
   JoinColumn,
   Index,
 } from 'typeorm';
-import { Listing } from './listing.entity';
+import { Provider } from './provider.entity';
 
 @Entity('photos')
-@Index(['listingId', 'displayOrder'])
+@Index(['providerId', 'displayOrder'])
 export class Photo {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ name: 'listing_id', type: 'uuid' })
-  listingId: string;
+  @Column({ name: 'provider_id', type: 'uuid' })
+  providerId: string;
 
   @Column({ name: 'image_url', type: 'varchar', length: 500 })
   imageUrl: string;
@@ -29,7 +29,7 @@ export class Photo {
   @Column({ name: 'uploaded_at', type: 'timestamptz', default: () => 'now()' })
   uploadedAt: Date;
 
-  @ManyToOne(() => Listing, (l) => l.photos)
-  @JoinColumn({ name: 'listing_id' })
-  listing: Listing;
+  @ManyToOne(() => Provider, (p) => p.photos)
+  @JoinColumn({ name: 'provider_id' })
+  provider: Provider;
 }

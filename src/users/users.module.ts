@@ -4,10 +4,10 @@ import { UsersController } from './users.controller';
 import { AdminUsersController } from './admin-users.controller';
 import { UsersService } from './users.service';
 import { AuthModule } from '../auth/auth.module';
-import { User, Listing, Verification } from '../entities';
+import { User, Verification } from '../entities';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([User, Listing, Verification]), AuthModule],
+  imports: [TypeOrmModule.forFeature([User, Verification]), AuthModule],
   controllers: [UsersController, AdminUsersController],
   providers: [UsersService],
   exports: [UsersService],

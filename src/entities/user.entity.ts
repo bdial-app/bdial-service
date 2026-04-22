@@ -71,6 +71,9 @@ export class User {
   @Column({ name: 'preferred_mode', type: 'varchar', length: 20, default: 'customer' })
   preferredMode: string;
 
+  @Column({ name: 'last_seen_at', type: 'timestamptz', nullable: true })
+  lastSeenAt: Date | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

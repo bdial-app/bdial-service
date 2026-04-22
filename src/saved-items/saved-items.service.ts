@@ -40,13 +40,13 @@ export class SavedItemsService {
       providerIds.length > 0
         ? this.providerRepo.find({
             where: { id: In(providerIds) },
-            relations: ['listings', 'listings.listingCategories', 'listings.listingCategories.category', 'listings.reviews'],
+            relations: ['providerCategories', 'providerCategories.category', 'reviews'],
           })
         : ([] as Provider[]),
       productIds.length > 0
         ? this.productRepo.find({
             where: { id: In(productIds) },
-            relations: ['listing', 'listing.provider'],
+            relations: ['provider'],
           })
         : ([] as Product[]),
     ]);
@@ -57,9 +57,7 @@ export class SavedItemsService {
         const provider = providers.find((p) => p.id === si.itemId);
         if (!provider) return null;
 
-        const allReviews = (provider.listings ?? []).flatMap((l) =>
-          (l.reviews ?? []).filter((r) => r.status === 'active'),
-        );
+        const allReviews = (provider.reviews ?? []).filter((r) => r.status === 'active');
         const reviewCount = allReviews.length;
         const rating =
           reviewCount > 0
@@ -67,9 +65,9 @@ export class SavedItemsService {
             : 0;
         const categories = Array.from(
           new Set(
-            (provider.listings ?? []).flatMap(
-              (l) => l.listingCategories?.map((lc) => lc.category?.name).filter(Boolean) ?? [],
-            ),
+            (provider.providerCategories ?? [])
+              .map((pc) => pc.category?.name)
+              .filter(Boolean),
           ),
         );
 
@@ -99,12 +97,12 @@ export class SavedItemsService {
           savedAt: si.createdAt,
           name: product.name,
           image: product.photoUrl,
-          category: product.listing?.businessName || 'Product',
+          category: product.provider?.brandName || 'Product',
           price: product.price,
           currency: product.currency,
           isActive: product.isActive,
-          providerId: product.listing?.provider?.id,
-          providerName: product.listing?.provider?.brandName,
+          providerId: product.provider?.id,
+          providerName: product.provider?.brandName,
         };
       }
     }).filter(Boolean);

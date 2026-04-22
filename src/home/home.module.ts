@@ -4,7 +4,6 @@ import { HomeController } from './home.controller';
 import { HomeService } from './home.service';
 import {
   Provider,
-  Listing,
   Category,
   Review,
   PromoBanner,
@@ -16,7 +15,6 @@ import {
   imports: [
     TypeOrmModule.forFeature([
       Provider,
-      Listing,
       Category,
       Review,
       PromoBanner,

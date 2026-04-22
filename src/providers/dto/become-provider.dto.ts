@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { CreateProviderDto } from './create-provider.dto';
-import { IsString, IsOptional, MinLength } from 'class-validator';
+import { IsString, IsOptional, IsArray, IsUUID } from 'class-validator';
 
 export class BecomeProviderDto extends CreateProviderDto {
   @ApiPropertyOptional({ type: 'string', format: 'binary', description: 'Aadhaar card image file' })
@@ -20,4 +20,10 @@ export class BecomeProviderDto extends CreateProviderDto {
   @IsOptional()
   @IsString()
   ijamatDocUrl?: string;
+
+  @ApiPropertyOptional({ description: 'Category IDs to associate with this provider', type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('4', { each: true })
+  categoryIds?: string[];
 }

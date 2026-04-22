@@ -8,7 +8,6 @@ import { AuthModule } from './auth/auth.module';
 import { AdminAuthModule } from './admin-auth/admin-auth.module';
 import { UsersModule } from './users/users.module';
 import { CategoriesModule } from './categories/categories.module';
-import { ListingsModule } from './listings/listings.module';
 import { VerificationsModule } from './verifications/verifications.module';
 import { ReviewsModule } from './reviews/reviews.module';
 import { AdminModule } from './admin/admin.module';
@@ -21,6 +20,7 @@ import { SavedLocationsModule } from './saved-locations/saved-locations.module';
 import { HomeModule } from './home/home.module';
 import { ProductsModule } from './products/products.module';
 import { SavedItemsModule } from './saved-items/saved-items.module';
+import { ChatModule } from './chat/chat.module';
 
 @Module({
   imports: [
@@ -39,7 +39,6 @@ import { SavedItemsModule } from './saved-items/saved-items.module';
     AdminAuthModule,
     UsersModule,
     CategoriesModule,
-    ListingsModule,
     VerificationsModule,
     ReviewsModule,
     AdminModule,
@@ -49,6 +48,7 @@ import { SavedItemsModule } from './saved-items/saved-items.module';
     HomeModule,
     ProductsModule,
     SavedItemsModule,
+    ChatModule,
   ],
   controllers: [AppController],
   providers: [AppService],

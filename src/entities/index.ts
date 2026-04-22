@@ -1,7 +1,6 @@
 export { User } from './user.entity';
 export { Category } from './category.entity';
-export { Listing } from './listing.entity';
-export { ListingCategory } from './listing-category.entity';
+export { ProviderCategory } from './provider-category.entity';
 export { Verification } from './verification.entity';
 export { Photo } from './photo.entity';
 export { Product } from './product.entity';
@@ -13,3 +12,6 @@ export { SavedLocation } from './saved-location.entity';
 export { PromoBanner } from './promo-banner.entity';
 export { Booking } from './booking.entity';
 export { SavedItem } from './saved-item.entity';
+export { Conversation } from './conversation.entity';
+export { ConversationParticipant } from './conversation-participant.entity';
+export { Message } from './message.entity';

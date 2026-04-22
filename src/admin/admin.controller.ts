@@ -16,23 +16,22 @@ export class AdminController {
     return this.adminService.getDashboard(req.user);
   }
 
-  @Get('listings/pending')
-  @ApiOperation({ summary: 'Get all pending listings' })
-  getPendingListings(@Request() req) {
-    return this.adminService.getPendingListings(req.user);
+  @Get('providers/pending')
+  @ApiOperation({ summary: 'Get all pending providers' })
+  getPendingProviders(@Request() req) {
+    return this.adminService.getPendingProviders(req.user);
   }
 
-  @Patch('listings/:id/approve')
-  @ApiOperation({ summary: 'Approve a listing' })
-  approveListing(@Param('id') id: string, @Request() req) {
-    return this.adminService.approveListing(req.user, id);
+  @Patch('providers/:id/approve')
+  @ApiOperation({ summary: 'Approve a provider' })
+  approveProvider(@Param('id') id: string, @Request() req) {
+    return this.adminService.approveProvider(req.user, id);
   }
 
-  @Patch('listings/:id/reject')
-  @ApiOperation({ summary: 'Reject a listing with a note' })
-  @ApiBody({ schema: { properties: { note: { type: 'string' } } } })
-  rejectListing(@Param('id') id: string, @Request() req, @Body('note') note: string) {
-    return this.adminService.rejectListing(req.user, id, note);
+  @Patch('providers/:id/suspend')
+  @ApiOperation({ summary: 'Suspend a provider' })
+  suspendProvider(@Param('id') id: string, @Request() req) {
+    return this.adminService.suspendProvider(req.user, id);
   }
 
   //get all verifications by pagination

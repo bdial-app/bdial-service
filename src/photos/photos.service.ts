@@ -6,52 +6,52 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Photo, Listing, Review, ReviewPhoto } from '../entities';
+import { Photo, Provider, Review, ReviewPhoto } from '../entities';
 import { StorageService } from '../storage/storage.service';
 
 @Injectable()
 export class PhotosService {
   constructor(
     @InjectRepository(Photo) private photoRepo: Repository<Photo>,
-    @InjectRepository(Listing) private listingRepo: Repository<Listing>,
+    @InjectRepository(Provider) private providerRepo: Repository<Provider>,
     @InjectRepository(Review) private reviewRepo: Repository<Review>,
     @InjectRepository(ReviewPhoto) private reviewPhotoRepo: Repository<ReviewPhoto>,
     private storage: StorageService,
   ) {}
 
-  async uploadListingPhotos(listingId: string, userId: string, files: Express.Multer.File[]) {
-    const listing = await this.listingRepo.findOneBy({ id: listingId });
-    if (!listing) throw new NotFoundException('Listing not found');
-    if (listing.providerId !== userId) throw new ForbiddenException();
+  async uploadProviderPhotos(providerId: string, userId: string, files: Express.Multer.File[]) {
+    const provider = await this.providerRepo.findOneBy({ id: providerId });
+    if (!provider) throw new NotFoundException('Provider not found');
+    if (provider.userId !== userId) throw new ForbiddenException();
 
-    const existing = await this.photoRepo.count({ where: { listingId } });
+    const existing = await this.photoRepo.count({ where: { providerId } });
     if (existing + files.length > 10) {
-      throw new BadRequestException(`Max 10 photos per listing. You have ${existing}, uploading ${files.length} would exceed the limit.`);
+      throw new BadRequestException(`Max 10 photos per provider. You have ${existing}, uploading ${files.length} would exceed the limit.`);
     }
 
     const uploaded = await Promise.all(
       files.map(async (file, i) => {
-        const { url, storageKey } = await this.storage.upload('listings', file);
-        const photo = this.photoRepo.create({ listingId, imageUrl: url, storageKey, displayOrder: existing + i });
+        const { url, storageKey } = await this.storage.upload('providers', file);
+        const photo = this.photoRepo.create({ providerId, imageUrl: url, storageKey, displayOrder: existing + i });
         return this.photoRepo.save(photo);
       }),
     );
     return uploaded;
   }
 
-  async deleteListingPhoto(photoId: string, userId: string) {
-    const photo = await this.photoRepo.findOne({ where: { id: photoId }, relations: ['listing'] });
+  async deleteProviderPhoto(photoId: string, userId: string) {
+    const photo = await this.photoRepo.findOne({ where: { id: photoId }, relations: ['provider'] });
     if (!photo) throw new NotFoundException('Photo not found');
-    if (photo.listing.providerId !== userId) throw new ForbiddenException();
+    if (photo.provider.userId !== userId) throw new ForbiddenException();
     await this.storage.delete(photo.storageKey);
     await this.photoRepo.remove(photo);
     return { message: 'Photo deleted' };
   }
 
-  async reorderPhotos(listingId: string, userId: string, orderedIds: string[]) {
-    const listing = await this.listingRepo.findOneBy({ id: listingId });
-    if (!listing) throw new NotFoundException('Listing not found');
-    if (listing.providerId !== userId) throw new ForbiddenException();
+  async reorderPhotos(providerId: string, userId: string, orderedIds: string[]) {
+    const provider = await this.providerRepo.findOneBy({ id: providerId });
+    if (!provider) throw new NotFoundException('Provider not found');
+    if (provider.userId !== userId) throw new ForbiddenException();
     await Promise.all(orderedIds.map((id, index) => this.photoRepo.update(id, { displayOrder: index })));
     return { message: 'Order updated' };
   }

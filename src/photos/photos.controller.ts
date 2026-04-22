@@ -32,10 +32,10 @@ import { memoryStorage } from 'multer';
 export class PhotosController {
   constructor(private readonly photosService: PhotosService) {}
 
-  // ─── Listing Photos ───────────────────────────────
+  // ─── Provider Photos ───────────────────────────────
 
-  @Post('listing/:listingId')
-  @ApiOperation({ summary: 'Upload photos for a listing (max 10 total, max 5 per request)' })
+  @Post('provider/:providerId')
+  @ApiOperation({ summary: 'Upload photos for a provider (max 10 total, max 5 per request)' })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {
@@ -46,8 +46,8 @@ export class PhotosController {
     },
   })
   @UseInterceptors(FilesInterceptor('files', 5, { storage: memoryStorage() }))
-  uploadListingPhotos(
-    @Param('listingId') listingId: string,
+  uploadProviderPhotos(
+    @Param('providerId') providerId: string,
     @Request() req,
     @UploadedFiles(
       new ParseFilePipe({
@@ -59,17 +59,17 @@ export class PhotosController {
     )
     files: Express.Multer.File[],
   ) {
-    return this.photosService.uploadListingPhotos(listingId, req.user.id, files);
+    return this.photosService.uploadProviderPhotos(providerId, req.user.id, files);
   }
 
-  @Delete('listing/:photoId')
-  @ApiOperation({ summary: 'Delete a listing photo' })
-  deleteListingPhoto(@Param('photoId') photoId: string, @Request() req) {
-    return this.photosService.deleteListingPhoto(photoId, req.user.id);
+  @Delete('provider/:photoId')
+  @ApiOperation({ summary: 'Delete a provider photo' })
+  deleteProviderPhoto(@Param('photoId') photoId: string, @Request() req) {
+    return this.photosService.deleteProviderPhoto(photoId, req.user.id);
   }
 
-  @Patch('listing/:listingId/reorder')
-  @ApiOperation({ summary: 'Reorder listing photos by passing an ordered array of photo IDs' })
+  @Patch('provider/:providerId/reorder')
+  @ApiOperation({ summary: 'Reorder provider photos by passing an ordered array of photo IDs' })
   @ApiBody({
     schema: {
       type: 'object',
@@ -77,11 +77,11 @@ export class PhotosController {
     },
   })
   reorderPhotos(
-    @Param('listingId') listingId: string,
+    @Param('providerId') providerId: string,
     @Request() req,
     @Body('orderedIds') orderedIds: string[],
   ) {
-    return this.photosService.reorderPhotos(listingId, req.user.id, orderedIds);
+    return this.photosService.reorderPhotos(providerId, req.user.id, orderedIds);
   }
 
   // ─── Review Photos ────────────────────────────────

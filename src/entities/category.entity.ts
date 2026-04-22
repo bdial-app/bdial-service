@@ -52,9 +52,9 @@ export class Category {
   @OneToMany(() => Category, (c) => c.parent)
   children: Category[];
 
-  @OneToMany(() => ListingCategory, (lc) => lc.category)
-  listingCategories: ListingCategory[];
+  @OneToMany(() => ProviderCategory, (pc) => pc.category)
+  providerCategories: ProviderCategory[];
 }
 
 // Import here to avoid circular deps at top level
-import { ListingCategory } from './listing-category.entity';
+import { ProviderCategory } from './provider-category.entity';

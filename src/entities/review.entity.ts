@@ -9,19 +9,19 @@ import {
   Index,
 } from 'typeorm';
 import { User } from './user.entity';
-import { Listing } from './listing.entity';
+import { Provider } from './provider.entity';
 import { ReviewPhoto } from './review-photo.entity';
 import { ReviewReport } from './review-report.entity';
 
 @Entity('reviews')
-@Unique(['listingId', 'reviewerId'])
-@Index(['listingId', 'status'])
+@Unique(['providerId', 'reviewerId'])
+@Index(['providerId', 'status'])
 export class Review {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ name: 'listing_id', type: 'uuid' })
-  listingId: string;
+  @Column({ name: 'provider_id', type: 'uuid' })
+  providerId: string;
 
   @Column({ name: 'reviewer_id', type: 'uuid' })
   reviewerId: string;
@@ -44,9 +44,9 @@ export class Review {
   @Column({ name: 'moderated_by', type: 'uuid', nullable: true })
   moderatedBy: string | null;
 
-  @ManyToOne(() => Listing, (l) => l.reviews)
-  @JoinColumn({ name: 'listing_id' })
-  listing: Listing;
+  @ManyToOne(() => Provider, (p) => p.reviews)
+  @JoinColumn({ name: 'provider_id' })
+  provider: Provider;
 
   @ManyToOne(() => User, (u) => u.reviews)
   @JoinColumn({ name: 'reviewer_id' })
@@ -61,4 +61,10 @@ export class Review {
 
   @OneToMany(() => ReviewReport, (r: ReviewReport) => r.review)
   reports: ReviewReport[];
+
+  @Column({ name: 'reply_text', type: 'text', nullable: true })
+  replyText: string | null;
+
+  @Column({ name: 'replied_at', type: 'timestamptz', nullable: true })
+  repliedAt: Date | null;
 }

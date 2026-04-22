@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, ILike } from 'typeorm';
-import { Provider, User, Verification, Listing } from '../entities';
+import { Provider, User, Verification, ProviderCategory, Review, Product, Photo, Message, ConversationParticipant } from '../entities';
 import { StorageService } from '../storage/storage.service';
 import { GeocodeService } from '../geocode/geocode.service';
 import { CreateProviderDto } from './dto/create-provider.dto';
@@ -23,7 +23,12 @@ export class ProvidersService {
     @InjectRepository(Provider) private providerRepo: Repository<Provider>,
     @InjectRepository(User) private userRepo: Repository<User>,
     @InjectRepository(Verification) private verRepo: Repository<Verification>,
-    @InjectRepository(Listing) private listingRepo: Repository<Listing>,
+    @InjectRepository(ProviderCategory) private providerCatRepo: Repository<ProviderCategory>,
+    @InjectRepository(Review) private reviewRepo: Repository<Review>,
+    @InjectRepository(Product) private productRepo: Repository<Product>,
+    @InjectRepository(Photo) private photoRepo: Repository<Photo>,
+    @InjectRepository(Message) private messageRepo: Repository<Message>,
+    @InjectRepository(ConversationParticipant) private participantRepo: Repository<ConversationParticipant>,
     private storage: StorageService,
     private dataSource: DataSource,
     private geocodeService: GeocodeService,
@@ -93,7 +98,7 @@ export class ProvidersService {
   }
 
   async becomeProvider(becomeProviderDto: BecomeProviderDto, file?: Express.Multer.File) {
-    const { userId, ijamatNumber, ijamatExpiry, ijamatDocUrl, ...providerData } = becomeProviderDto;
+    const { userId, ijamatNumber, ijamatExpiry, ijamatDocUrl, categoryIds, ...providerData } = becomeProviderDto;
 
     let aadhaarDocUrl: string | null = null;
     if (file) {
@@ -112,11 +117,20 @@ export class ProvidersService {
       const provider = manager.create(Provider, {
         ...cleanData,
         userId,
-        status: aadhaarDocUrl ? 'pending' : 'unverified',
+        status: 'unverified',
+        isWomenLed: user.gender === 'female',
         latitude: latitude ? parseFloat(latitude) : null,
         longitude: longitude ? parseFloat(longitude) : null,
       });
       const savedProvider = await manager.save(provider);
+
+      // Save category associations
+      if (categoryIds?.length) {
+        const cats = categoryIds.map((catId: string) =>
+          manager.create(ProviderCategory, { providerId: savedProvider.id, categoryId: catId }),
+        );
+        await manager.save(cats);
+      }
 
       let savedVerification: Verification | null = null;
       if (aadhaarDocUrl) {
@@ -210,71 +224,30 @@ export class ProvidersService {
 
   /**
    * Provider details aggregate for the provider-details page.
-   * Returns provider info, all live listings with their categories,
-   * plus flat lists of photos / products / reviews across those listings,
-   * and rating aggregates.
+   * Returns provider info with categories, photos, products, reviews, and rating aggregates.
    */
   async findDetails(id: string) {
     const provider = await this.providerRepo.findOne({
       where: { id },
-      relations: ['user'],
+      relations: ['user', 'providerCategories', 'providerCategories.category'],
     });
     if (!provider) throw new NotFoundException(`Provider with ID '${id}' not found`);
 
-    const listings = await this.listingRepo.find({
-      where: { providerId: id },
-      relations: [
-        'listingCategories',
-        'listingCategories.category',
-        'photos',
-        'products',
-        'reviews',
-        'reviews.reviewer',
-        'reviews.photos',
-      ],
-      order: { approvedAt: 'DESC', submittedAt: 'DESC' },
-    });
-
-    const liveListings = listings.filter(
-      (l) => l.status === 'live' && !l.deletedAt,
-    );
-
-    const photos = liveListings
-      .flatMap((l) =>
-        (l.photos ?? []).map((p) => ({
-          ...p,
-          listingId: l.id,
-          businessName: l.businessName,
-        })),
-      )
-      .sort((a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0));
-
-    const products = liveListings
-      .flatMap((l) =>
-        (l.products ?? [])
-          .filter((p) => p.isActive)
-          .map((p) => ({
-            ...p,
-            listingId: l.id,
-            businessName: l.businessName,
-          })),
-      )
-      .sort((a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0));
-
-    const reviews = liveListings
-      .flatMap((l) =>
-        (l.reviews ?? [])
-          .filter((r) => r.status === 'active')
-          .map((r) => ({
-            ...r,
-            listingId: l.id,
-            businessName: l.businessName,
-          })),
-      )
-      .sort(
-        (a, b) =>
-          new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime(),
-      );
+    const [photos, products, reviews] = await Promise.all([
+      this.photoRepo.find({
+        where: { providerId: id },
+        order: { displayOrder: 'ASC' },
+      }),
+      this.productRepo.find({
+        where: { providerId: id, isActive: true },
+        order: { displayOrder: 'ASC', name: 'ASC' },
+      }),
+      this.reviewRepo.find({
+        where: { providerId: id, status: 'active' },
+        relations: ['reviewer', 'photos'],
+        order: { postedAt: 'DESC' },
+      }),
+    ]);
 
     const ratingDist = [0, 0, 0, 0, 0];
     reviews.forEach((r) => {
@@ -295,31 +268,15 @@ export class ProvidersService {
         ? { min: Math.min(...prices), max: Math.max(...prices), currency: products[0]?.currency ?? 'INR' }
         : null;
 
-    // Strip heavy nested fields off the listing summaries
-    const listingSummaries = liveListings.map((l) => ({
-      id: l.id,
-      businessName: l.businessName,
-      description: l.description,
-      city: l.city,
-      area: l.area,
-      status: l.status,
-      isWomenLed: l.isWomenLed,
-      communityVerified: l.communityVerified,
-      approvedAt: l.approvedAt,
-      photoCount: l.photos?.length ?? 0,
-      productCount: (l.products ?? []).filter((p) => p.isActive).length,
-      reviewCount: (l.reviews ?? []).filter((r) => r.status === 'active').length,
-      categories:
-        l.listingCategories?.map((lc) => ({
-          id: lc.category?.id,
-          name: lc.category?.name,
-          slug: lc.category?.slug,
-        })) ?? [],
+    const categories = (provider.providerCategories ?? []).map((pc) => ({
+      id: pc.category?.id,
+      name: pc.category?.name,
+      slug: pc.category?.slug,
     }));
 
     return {
       provider,
-      listings: listingSummaries,
+      categories,
       photos,
       products,
       reviews,
@@ -327,7 +284,6 @@ export class ProvidersService {
         rating: Number(rating.toFixed(2)),
         reviewCount,
         ratingDist,
-        listingCount: liveListings.length,
         photoCount: photos.length,
         productCount: products.length,
         priceRange,
@@ -524,5 +480,54 @@ export class ProvidersService {
       ...provider,
       distance: parseFloat(parseFloat(raw[i]?.distance ?? '0').toFixed(2)),
     }));
+  }
+
+  async getAnalytics(userId: string) {
+    const provider = await this.providerRepo.findOneBy({ userId });
+    if (!provider) throw new NotFoundException('Provider not found');
+
+    // Product count
+    const totalProducts = await this.productRepo.count({ where: { providerId: provider.id } });
+
+    // Reviews
+    const reviews = await this.reviewRepo.find({
+      where: { providerId: provider.id },
+      relations: ['reviewer'],
+      order: { postedAt: 'DESC' },
+    });
+
+    const totalReviews = reviews.length;
+    const averageRating =
+      totalReviews > 0
+        ? parseFloat((reviews.reduce((sum, r) => sum + r.starRating, 0) / totalReviews).toFixed(1))
+        : 0;
+
+    const ratingBreakdown = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+    reviews.forEach((r) => {
+      if (r.starRating >= 1 && r.starRating <= 5) {
+        ratingBreakdown[r.starRating as 1 | 2 | 3 | 4 | 5]++;
+      }
+    });
+
+    // Enquiries = conversations where provider participated
+    const totalEnquiries = await this.participantRepo
+      .createQueryBuilder('cp')
+      .where('cp.userId = :userId AND cp.role = :role', { userId, role: 'provider' })
+      .getCount();
+
+    return {
+      totalProducts,
+      totalReviews,
+      averageRating,
+      totalEnquiries,
+      ratingBreakdown,
+      recentReviews: reviews.slice(0, 5).map((r) => ({
+        id: r.id,
+        starRating: r.starRating,
+        reviewText: r.reviewText,
+        postedAt: r.postedAt,
+        reviewer: r.reviewer ? { id: r.reviewer.id, name: r.reviewer.name } : null,
+      })),
+    };
   }
 }

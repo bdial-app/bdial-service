@@ -6,16 +6,16 @@ import {
   JoinColumn,
   Index,
 } from 'typeorm';
-import { Listing } from './listing.entity';
+import { Provider } from './provider.entity';
 
 @Entity('products')
-@Index(['listingId', 'isActive'])
+@Index(['providerId', 'isActive'])
 export class Product {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ name: 'listing_id', type: 'uuid' })
-  listingId: string;
+  @Column({ name: 'provider_id', type: 'uuid' })
+  providerId: string;
 
   @Column({ type: 'varchar', length: 150 })
   name: string;
@@ -38,7 +38,7 @@ export class Product {
   @Column({ name: 'display_order', type: 'int', default: 0 })
   displayOrder: number;
 
-  @ManyToOne(() => Listing, (l) => l.products)
-  @JoinColumn({ name: 'listing_id' })
-  listing: Listing;
+  @ManyToOne(() => Provider, (p) => p.products)
+  @JoinColumn({ name: 'provider_id' })
+  provider: Provider;
 }

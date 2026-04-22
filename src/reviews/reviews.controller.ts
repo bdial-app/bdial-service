@@ -32,17 +32,17 @@ import { FileInterceptor } from '@nestjs/platform-express';
 export class ReviewsController {
   constructor(private readonly reviewsService: ReviewsService) {}
 
-  @Get('listing/:listingId')
-  @ApiOperation({ summary: 'Get all active reviews for a listing (public)' })
-  @ApiParam({ name: 'listingId', type: String })
-  getForListing(@Param('listingId') listingId: string) {
-    return this.reviewsService.getForListing(listingId);
+  @Get('provider/:providerId')
+  @ApiOperation({ summary: 'Get all active reviews for a provider (public)' })
+  @ApiParam({ name: 'providerId', type: String })
+  getForProvider(@Param('providerId') providerId: string) {
+    return this.reviewsService.getForProvider(providerId);
   }
 
   @Post()
   @ApiBearerAuth()
   @UseGuards(AuthGuard('jwt'))
-  @ApiOperation({ summary: 'Submit a review for a listing' })
+  @ApiOperation({ summary: 'Submit a review for a provider' })
   create(@Request() req: any, @Body() dto: CreateReviewDto) {
     return this.reviewsService.create(req.user.id, dto);
   }
@@ -58,6 +58,19 @@ export class ReviewsController {
     @Body() dto: ReportReviewDto,
   ) {
     return this.reviewsService.report(id, req.user.id, dto);
+  }
+
+  @Post(':id/reply')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @ApiOperation({ summary: 'Reply to a review (provider only)' })
+  @ApiParam({ name: 'id', type: String })
+  replyToReview(
+    @Param('id') id: string,
+    @Request() req: any,
+    @Body() body: { replyText: string },
+  ) {
+    return this.reviewsService.replyToReview(req.user.id, id, body.replyText);
   }
 
   @Get(':id')

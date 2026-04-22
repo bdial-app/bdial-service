@@ -4,10 +4,10 @@ import { ReviewsController } from './reviews.controller';
 import { ReviewsService } from './reviews.service';
 import { StorageService } from '../storage/storage.service';
 import { AuthModule } from '../auth/auth.module';
-import { Review, ReviewPhoto, ReviewReport } from '../entities';
+import { Review, ReviewPhoto, ReviewReport, Provider } from '../entities';
 
 @Module({
-  imports: [AuthModule, TypeOrmModule.forFeature([Review, ReviewPhoto, ReviewReport])],
+  imports: [AuthModule, TypeOrmModule.forFeature([Review, ReviewPhoto, ReviewReport, Provider])],
   controllers: [ReviewsController],
   providers: [ReviewsService, StorageService],
 })

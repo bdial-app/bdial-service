@@ -54,14 +54,6 @@ export class UsersController {
     return this.usersService.updateProfile(req.user.id, dto);
   }
 
-  @Get('me/listings')
-  @ApiBearerAuth()
-  @UseGuards(AuthGuard('jwt'))
-  @ApiOperation({ summary: 'Get my listings' })
-  getMyListings(@Request() req) {
-    return this.usersService.getMyListings(req.user.id);
-  }
-
   @Get(':id')
   @ApiOperation({ summary: 'Get user details by ID' })
   getById(@Param('id') id: string) {

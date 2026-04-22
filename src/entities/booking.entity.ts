@@ -9,13 +9,11 @@ import {
   Index,
 } from 'typeorm';
 import { User } from './user.entity';
-import { Listing } from './listing.entity';
 import { Provider } from './provider.entity';
 
 @Entity('bookings')
 @Index(['userId', 'status'])
 @Index(['providerId', 'status'])
-@Index(['listingId'])
 export class Booking {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -25,9 +23,6 @@ export class Booking {
 
   @Column({ name: 'provider_id', type: 'uuid' })
   providerId: string;
-
-  @Column({ name: 'listing_id', type: 'uuid' })
-  listingId: string;
 
   @Column({
     type: 'enum',
@@ -67,8 +62,4 @@ export class Booking {
   @ManyToOne(() => Provider, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'provider_id' })
   provider: Provider;
-
-  @ManyToOne(() => Listing, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'listing_id' })
-  listing: Listing;
 }

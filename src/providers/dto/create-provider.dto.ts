@@ -75,6 +75,12 @@ export class CreateProviderDto {
   @MaxLength(500)
   profilePhotoUrl?: string;
 
+  @ApiPropertyOptional({ example: 'https://example.com/banner.jpg' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  bannerImageUrl?: string;
+
   @ApiPropertyOptional({ example: false, description: 'Mark as featured provider' })
   @IsOptional()
   @IsBoolean()

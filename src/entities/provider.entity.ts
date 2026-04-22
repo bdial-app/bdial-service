@@ -7,11 +7,18 @@ import {
   OneToOne,
   OneToMany,
   JoinColumn,
+  Index,
 } from 'typeorm';
 import { User } from './user.entity';
-import { Listing } from './listing.entity';
+import { ProviderCategory } from './provider-category.entity';
+import { Photo } from './photo.entity';
+import { Product } from './product.entity';
+import { Review } from './review.entity';
 
 @Entity('providers')
+@Index(['status', 'city'])
+@Index(['isWomenLed', 'status'])
+@Index(['communityVerified', 'status'])
 export class Provider {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -58,6 +65,15 @@ export class Provider {
   @Column({ name: 'profile_photo_url', type: 'varchar', length: 500, nullable: true })
   profilePhotoUrl: string | null;
 
+  @Column({ name: 'banner_image_url', type: 'varchar', length: 500, nullable: true })
+  bannerImageUrl: string | null;
+
+  @Column({ name: 'is_women_led', type: 'boolean', default: false })
+  isWomenLed: boolean;
+
+  @Column({ name: 'community_verified', type: 'boolean', default: false })
+  communityVerified: boolean;
+
   @Column({ type: 'enum', enum: ['pending', 'in_review', 'active', 'suspended', 'unverified'], default: 'pending' })
   status: 'pending' | 'in_review' | 'active' | 'suspended' | 'unverified';
 
@@ -74,6 +90,15 @@ export class Provider {
   @JoinColumn({ name: 'user_id' })
   user: User;
 
-  @OneToMany(() => Listing, (l) => l.provider)
-  listings: Listing[];
+  @OneToMany(() => ProviderCategory, (pc) => pc.provider)
+  providerCategories: ProviderCategory[];
+
+  @OneToMany(() => Photo, (p) => p.provider)
+  photos: Photo[];
+
+  @OneToMany(() => Product, (p) => p.provider)
+  products: Product[];
+
+  @OneToMany(() => Review, (r) => r.provider)
+  reviews: Review[];
 }

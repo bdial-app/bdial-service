@@ -1,8 +1,7 @@
 import { DataSource, DataSourceOptions } from 'typeorm';
 import { User } from '../entities/user.entity';
 import { Category } from '../entities/category.entity';
-import { Listing } from '../entities/listing.entity';
-import { ListingCategory } from '../entities/listing-category.entity';
+import { ProviderCategory } from '../entities/provider-category.entity';
 import { Verification } from '../entities/verification.entity';
 import { Photo } from '../entities/photo.entity';
 import { Product } from '../entities/product.entity';
@@ -14,12 +13,14 @@ import { SavedLocation } from '../entities/saved-location.entity';
 import { PromoBanner } from '../entities/promo-banner.entity';
 import { Booking } from '../entities/booking.entity';
 import { SavedItem } from '../entities/saved-item.entity';
+import { Conversation } from '../entities/conversation.entity';
+import { ConversationParticipant } from '../entities/conversation-participant.entity';
+import { Message } from '../entities/message.entity';
 
 export const ALL_ENTITIES = [
   User,
   Category,
-  Listing,
-  ListingCategory,
+  ProviderCategory,
   Verification,
   Photo,
   Product,
@@ -31,6 +32,9 @@ export const ALL_ENTITIES = [
   PromoBanner,
   Booking,
   SavedItem,
+  Conversation,
+  ConversationParticipant,
+  Message,
 ];
 
 export function buildTypeOrmOptions(url: string): DataSourceOptions {

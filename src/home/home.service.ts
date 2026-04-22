@@ -3,7 +3,6 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, IsNull, Not, MoreThan, LessThan } from 'typeorm';
 import {
   Provider,
-  Listing,
   Category,
   Review,
   PromoBanner,
@@ -16,7 +15,6 @@ import { HomeFeedDto } from './dto/home-feed.dto';
 export class HomeService {
   constructor(
     @InjectRepository(Provider) private providerRepo: Repository<Provider>,
-    @InjectRepository(Listing) private listingRepo: Repository<Listing>,
     @InjectRepository(Category) private categoryRepo: Repository<Category>,
     @InjectRepository(Review) private reviewRepo: Repository<Review>,
     @InjectRepository(PromoBanner) private bannerRepo: Repository<PromoBanner>,
@@ -63,7 +61,7 @@ export class HomeService {
   }
 
   /**
-   * Nearby providers with listing count, avg rating, review count, and primary photo.
+   * Nearby providers with avg rating, review count, and primary photo.
    * Uses Haversine if lat/lng present, otherwise falls back to city filter or all active.
    */
   private async getNearbyProviders(
@@ -84,6 +82,7 @@ export class HomeService {
         'p.id AS id',
         'p.brand_name AS name',
         'p.profile_photo_url AS image',
+        'p.banner_image_url AS "bannerImage"',
         'p.description AS description',
         'p.city AS city',
         'p.area AS area',
@@ -94,23 +93,19 @@ export class HomeService {
         'p.longitude AS longitude',
       ])
       .addSelect(
-        `COALESCE((SELECT AVG(r.star_rating)::numeric(2,1) FROM reviews r JOIN listings l ON l.id = r.listing_id WHERE l.provider_id = p.id AND r.status = 'active'), 0)`,
+        `COALESCE((SELECT AVG(r.star_rating)::numeric(2,1) FROM reviews r WHERE r.provider_id = p.id AND r.status = 'active'), 0)`,
         'rating',
       )
       .addSelect(
-        `COALESCE((SELECT COUNT(r.id)::int FROM reviews r JOIN listings l ON l.id = r.listing_id WHERE l.provider_id = p.id AND r.status = 'active'), 0)`,
+        `COALESCE((SELECT COUNT(r.id)::int FROM reviews r WHERE r.provider_id = p.id AND r.status = 'active'), 0)`,
         'reviewCount',
       )
       .addSelect(
-        `COALESCE((SELECT COUNT(l.id)::int FROM listings l WHERE l.provider_id = p.id AND l.status = 'live' AND l.deleted_at IS NULL), 0)`,
-        'listingCount',
-      )
-      .addSelect(
-        `(SELECT ph.image_url FROM photos ph JOIN listings l2 ON l2.id = ph.listing_id WHERE l2.provider_id = p.id AND l2.status = 'live' ORDER BY ph.display_order ASC LIMIT 1)`,
+        `(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`,
         'listingPhoto',
       )
       .addSelect(
-        `(SELECT string_agg(DISTINCT c.name, ', ' ORDER BY c.name) FROM categories c JOIN listing_categories lc ON lc.category_id = c.id JOIN listings l3 ON l3.id = lc.listing_id WHERE l3.provider_id = p.id AND l3.status = 'live' LIMIT 1)`,
+        `(SELECT string_agg(DISTINCT c.name, ', ' ORDER BY c.name) FROM categories c JOIN provider_categories pc ON pc.category_id = c.id WHERE pc.provider_id = p.id LIMIT 1)`,
         'services',
       )
       .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] });
@@ -138,14 +133,13 @@ export class HomeService {
     return raw.map((r) => ({
       id: r.id,
       name: r.name,
-      image: r.image || r.listingPhoto,
+      image: r.bannerImage || r.image || r.listingPhoto,
       description: r.description,
       city: r.city,
       area: r.area,
       location: [r.area, r.city].filter(Boolean).join(', '),
       rating: parseFloat(r.rating) || 0,
       reviewCount: parseInt(r.reviewCount, 10) || 0,
-      listingCount: parseInt(r.listingCount, 10) || 0,
       services: r.services || null,
       verified: r.status === 'active',
       isFeatured: r.isFeatured,
@@ -188,29 +182,29 @@ export class HomeService {
         'p.id AS id',
         'p.brand_name AS name',
         'p.profile_photo_url AS image',
+        'p.banner_image_url AS "bannerImage"',
         'p.description AS description',
         'p.city AS city',
         'p.area AS area',
         'p.status AS status',
       ])
       .addSelect(
-        `COALESCE((SELECT AVG(r.star_rating)::numeric(2,1) FROM reviews r JOIN listings l ON l.id = r.listing_id WHERE l.provider_id = p.id AND r.status = 'active'), 0)`,
+        `COALESCE((SELECT AVG(r.star_rating)::numeric(2,1) FROM reviews r WHERE r.provider_id = p.id AND r.status = 'active'), 0)`,
         'rating',
       )
       .addSelect(
-        `COALESCE((SELECT COUNT(r.id)::int FROM reviews r JOIN listings l ON l.id = r.listing_id WHERE l.provider_id = p.id AND r.status = 'active'), 0)`,
+        `COALESCE((SELECT COUNT(r.id)::int FROM reviews r WHERE r.provider_id = p.id AND r.status = 'active'), 0)`,
         'reviewCount',
       )
       .addSelect(
-        `(SELECT ph.image_url FROM photos ph JOIN listings l2 ON l2.id = ph.listing_id WHERE l2.provider_id = p.id AND l2.status = 'live' ORDER BY ph.display_order ASC LIMIT 1)`,
+        `(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`,
         'listingPhoto',
       )
       .addSelect(
-        `(SELECT string_agg(DISTINCT c.name, ', ' ORDER BY c.name) FROM categories c JOIN listing_categories lc ON lc.category_id = c.id JOIN listings l3 ON l3.id = lc.listing_id WHERE l3.provider_id = p.id AND l3.status = 'live' LIMIT 1)`,
+        `(SELECT string_agg(DISTINCT c.name, ', ' ORDER BY c.name) FROM categories c JOIN provider_categories pc ON pc.category_id = c.id WHERE pc.provider_id = p.id LIMIT 1)`,
         'services',
       )
-      .innerJoin('listings', 'l', 'l.provider_id = p.id AND l.status = :liveStatus AND l.deleted_at IS NULL', { liveStatus: 'live' })
-      .innerJoin('listing_categories', 'lc', 'lc.listing_id = l.id AND lc.category_id IN (:...categoryIds)', { categoryIds })
+      .innerJoin('provider_categories', 'pc', 'pc.provider_id = p.id AND pc.category_id IN (:...categoryIds)', { categoryIds })
       .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
       .groupBy('p.id');
 
@@ -233,7 +227,7 @@ export class HomeService {
     return raw.map((r) => ({
       id: r.id,
       name: r.name,
-      image: r.image || r.listingPhoto,
+      image: r.bannerImage || r.image || r.listingPhoto,
       description: r.description,
       location: [r.area, r.city].filter(Boolean).join(', '),
       rating: parseFloat(r.rating) || 0,
@@ -261,7 +255,7 @@ export class HomeService {
   }
 
   /**
-   * Trending categories: top-level categories ordered by the number of live listings.
+   * Trending categories: top-level categories ordered by the number of providers.
    */
   private async getTrendingCategories(limit = 6) {
     const raw = await this.categoryRepo
@@ -274,21 +268,20 @@ export class HomeService {
       ])
       .addSelect(
         `COALESCE((
-          SELECT COUNT(DISTINCT l.id)::int
-          FROM listing_categories lc
-          JOIN listings l ON l.id = lc.listing_id AND l.status = 'live' AND l.deleted_at IS NULL
-          WHERE lc.category_id = c.id
-             OR lc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id = c.id)
+          SELECT COUNT(DISTINCT pc.provider_id)::int
+          FROM provider_categories pc
+          JOIN providers p ON p.id = pc.provider_id AND p.status IN ('active', 'unverified')
+          WHERE pc.category_id = c.id
+             OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id = c.id)
         ), 0)`,
-        'listingCount',
+        'providerCount',
       )
       .addSelect(
         `COALESCE((
           SELECT COUNT(b.id)::int
           FROM bookings b
-          JOIN listings l2 ON l2.id = b.listing_id
-          JOIN listing_categories lc2 ON lc2.listing_id = l2.id
-          WHERE (lc2.category_id = c.id OR lc2.category_id IN (SELECT cc2.id FROM categories cc2 WHERE cc2.parent_id = c.id))
+          JOIN provider_categories pc2 ON pc2.provider_id = b.provider_id
+          WHERE (pc2.category_id = c.id OR pc2.category_id IN (SELECT cc2.id FROM categories cc2 WHERE cc2.parent_id = c.id))
             AND b.status IN ('completed', 'confirmed', 'in_progress')
             AND b.created_at >= NOW() - INTERVAL '30 days'
         ), 0)`,
@@ -297,7 +290,7 @@ export class HomeService {
       .where('c.parentId IS NULL')
       .andWhere('c.isActive = :active', { active: true })
       .orderBy('"recentBookings"', 'DESC')
-      .addOrderBy('"listingCount"', 'DESC')
+      .addOrderBy('"providerCount"', 'DESC')
       .addOrderBy('c.displayOrder', 'ASC')
       .limit(limit)
       .getRawMany();
@@ -307,13 +300,13 @@ export class HomeService {
       name: r.name,
       slug: r.slug,
       icon: r.icon,
-      listingCount: parseInt(r.listingCount, 10) || 0,
+      providerCount: parseInt(r.providerCount, 10) || 0,
       recentBookings: parseInt(r.recentBookings, 10) || 0,
     }));
   }
 
   /**
-   * Recent community reviews with reviewer info and listing/provider context.
+   * Recent community reviews with reviewer info and provider context.
    */
   private async getCommunityReviews(limit = 10) {
     const reviews = await this.reviewRepo
@@ -325,11 +318,9 @@ export class HomeService {
         'r.posted_at AS "timeAgo"',
       ])
       .addSelect('u.name', 'name')
-      .addSelect('l.business_name', 'service')
       .addSelect('p.brand_name', 'providerName')
       .innerJoin('users', 'u', 'u.id = r.reviewer_id')
-      .innerJoin('listings', 'l', 'l.id = r.listing_id')
-      .innerJoin('providers', 'p', 'p.id = l.provider_id')
+      .innerJoin('providers', 'p', 'p.id = r.provider_id')
       .where('r.status = :status', { status: 'active' })
       .andWhere('r.review_text IS NOT NULL')
       .andWhere("r.review_text != ''")
@@ -340,7 +331,6 @@ export class HomeService {
     return reviews.map((r) => ({
       id: r.id,
       name: r.name,
-      service: r.service,
       providerName: r.providerName,
       text: r.text,
       rating: r.rating,
@@ -393,14 +383,11 @@ export class HomeService {
       .addSelect('p.profile_photo_url', 'providerImage')
       .addSelect('p.area', 'providerArea')
       .addSelect('p.city', 'providerCity')
-      .addSelect('l.business_name', 'listingName')
-      .addSelect('l.id', 'listingId')
       .addSelect(
-        `(SELECT string_agg(DISTINCT cat.name, ', ' ORDER BY cat.name) FROM categories cat JOIN listing_categories lcat ON lcat.category_id = cat.id WHERE lcat.listing_id = b.listing_id)`,
+        `(SELECT string_agg(DISTINCT cat.name, ', ' ORDER BY cat.name) FROM categories cat JOIN provider_categories pcat ON pcat.category_id = cat.id WHERE pcat.provider_id = b.provider_id)`,
         'categories',
       )
       .innerJoin('providers', 'p', 'p.id = b.provider_id')
-      .innerJoin('listings', 'l', 'l.id = b.listing_id')
       .where('b.user_id = :userId', { userId })
       .andWhere('b.status IN (:...statuses)', { statuses: ['completed', 'confirmed'] })
       .orderBy('b.completed_at', 'DESC', 'NULLS LAST')
@@ -415,8 +402,6 @@ export class HomeService {
       providerId: booking.providerId,
       providerName: booking.providerName,
       providerImage: booking.providerImage,
-      listingId: booking.listingId,
-      listingName: booking.listingName,
       categories: booking.categories,
       location: [booking.providerArea, booking.providerCity].filter(Boolean).join(', '),
       completedAt: booking.completedAt,

@@ -1,12 +1,12 @@
 import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull } from 'typeorm';
-import { Listing, User, Verification, Review, ReviewReport } from '../entities';
+import { Repository, IsNull, In } from 'typeorm';
+import { Provider, User, Verification, Review, ReviewReport } from '../entities';
 
 @Injectable()
 export class AdminService {
   constructor(
-    @InjectRepository(Listing) private listingRepo: Repository<Listing>,
+    @InjectRepository(Provider) private providerRepo: Repository<Provider>,
     @InjectRepository(User) private userRepo: Repository<User>,
     @InjectRepository(Verification) private verificationRepo: Repository<Verification>,
     @InjectRepository(Review) private reviewRepo: Repository<Review>,
@@ -19,36 +19,36 @@ export class AdminService {
 
   async getDashboard(admin: any) {
     this.assertAdmin(admin);
-    const [pendingListings, totalListings, totalUsers, pendingVerifications, flaggedReviews] =
+    const [pendingProviders, totalProviders, totalUsers, pendingVerifications, flaggedReviews] =
       await Promise.all([
-        this.listingRepo.count({ where: { status: 'pending', deletedAt: IsNull() } }),
-        this.listingRepo.count({ where: { deletedAt: IsNull() } }),
+        this.providerRepo.count({ where: { status: 'pending' } }),
+        this.providerRepo.count(),
         this.userRepo.count({ where: { status: 'active' } }),
         this.verificationRepo.count({ where: { aadhaarStatus: 'pending' } }),
         this.reportRepo.count({ where: { status: 'pending' } }),
       ]);
-    return { pendingListings, totalListings, totalUsers, pendingVerifications, flaggedReviews };
+    return { pendingProviders, totalProviders, totalUsers, pendingVerifications, flaggedReviews };
   }
 
-  async getPendingListings(admin: any) {
+  async getPendingProviders(admin: any) {
     this.assertAdmin(admin);
-    return this.listingRepo.find({
-      where: { status: 'pending', deletedAt: IsNull() },
-      relations: ['provider', 'listingCategories', 'listingCategories.category'],
-      order: { submittedAt: 'ASC' },
+    return this.providerRepo.find({
+      where: { status: In(['pending', 'in_review']) },
+      relations: ['user', 'providerCategories', 'providerCategories.category'],
+      order: { createdAt: 'ASC' },
     });
   }
 
-  async approveListing(admin: any, listingId: string) {
+  async approveProvider(admin: any, providerId: string) {
     this.assertAdmin(admin);
-    await this.listingRepo.update(listingId, { status: 'live', approvedAt: new Date() });
-    return this.listingRepo.findOneBy({ id: listingId });
+    await this.providerRepo.update(providerId, { status: 'active' });
+    return this.providerRepo.findOneBy({ id: providerId });
   }
 
-  async rejectListing(admin: any, listingId: string, note: string) {
+  async suspendProvider(admin: any, providerId: string) {
     this.assertAdmin(admin);
-    await this.listingRepo.update(listingId, { status: 'rejected', rejectionNote: note });
-    return this.listingRepo.findOneBy({ id: listingId });
+    await this.providerRepo.update(providerId, { status: 'suspended' });
+    return this.providerRepo.findOneBy({ id: providerId });
   }
 
   async getVerifications(admin: any, page?: number, rows?: number) {

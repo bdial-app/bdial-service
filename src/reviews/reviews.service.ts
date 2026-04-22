@@ -2,10 +2,11 @@ import {
   Injectable,
   ConflictException,
   NotFoundException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, ILike } from 'typeorm';
-import { Review, ReviewPhoto, ReviewReport } from '../entities';
+import { Review, ReviewPhoto, ReviewReport, Provider } from '../entities';
 import { CreateReviewDto, ReportReviewDto } from './dto/review.dto';
 import { StorageService } from '../storage/storage.service';
 
@@ -15,18 +16,19 @@ export class ReviewsService {
     @InjectRepository(Review) private reviewRepo: Repository<Review>,
     @InjectRepository(ReviewPhoto) private reviewPhotoRepo: Repository<ReviewPhoto>,
     @InjectRepository(ReviewReport) private reportRepo: Repository<ReviewReport>,
+    @InjectRepository(Provider) private providerRepo: Repository<Provider>,
     private storageService: StorageService,
   ) {}
 
   async create(userId: string, dto: CreateReviewDto) {
     const existing = await this.reviewRepo.findOneBy({
-      listingId: dto.listingId!,
+      providerId: dto.providerId!,
       reviewerId: userId,
     });
-    if (existing) throw new ConflictException('You have already reviewed this listing');
+    if (existing) throw new ConflictException('You have already reviewed this provider');
 
     const review = this.reviewRepo.create({
-      listingId: dto.listingId,
+      providerId: dto.providerId,
       reviewerId: userId,
       starRating: dto.starRating!,
       reviewText: dto.reviewText,
@@ -34,9 +36,9 @@ export class ReviewsService {
     return this.reviewRepo.save(review);
   }
 
-  async getForListing(listingId: string) {
+  async getForProvider(providerId: string) {
     return this.reviewRepo.find({
-      where: { listingId, status: 'active' },
+      where: { providerId, status: 'active' },
       order: { postedAt: 'DESC' },
       relations: ['reviewer', 'photos'],
     });
@@ -106,5 +108,19 @@ export class ReviewsService {
 
     const [data, total] = await qb.getManyAndCount();
     return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+  }
+
+  async replyToReview(userId: string, reviewId: string, replyText: string) {
+    const review = await this.reviewRepo.findOneBy({ id: reviewId });
+    if (!review) throw new NotFoundException('Review not found');
+
+    // Verify user owns the provider
+    const provider = await this.providerRepo.findOneBy({ userId });
+    if (!provider) throw new ForbiddenException('Not a provider');
+    if (review.providerId !== provider.id) throw new ForbiddenException();
+
+    review.replyText = replyText;
+    review.repliedAt = new Date();
+    return this.reviewRepo.save(review);
   }
 }

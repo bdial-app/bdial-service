@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull, Not, ILike } from 'typeorm';
-import { User, Listing, Verification } from '../entities';
+import { User, Verification } from '../entities';
 import { UpdateUserDto, UserListQueryDto } from './dto/user.dto';
 import { CreateUserDto } from './dto/create-user.dto';
 import { AdminUpdateUserDto } from './dto/admin-update-user.dto';
@@ -11,7 +11,6 @@ import { UserPaginationDto } from './dto/user-pagination.dto';
 export class UsersService {
   constructor(
     @InjectRepository(User) private userRepo: Repository<User>,
-    @InjectRepository(Listing) private listingRepo: Repository<Listing>,
     @InjectRepository(Verification) private verificationRepo: Repository<Verification>,
   ) {}
 
@@ -102,13 +101,5 @@ export class UsersService {
 
     const [users, total] = await qb.getManyAndCount();
     return { data: users, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
-  }
-
-  async getMyListings(userId: string) {
-    return this.listingRepo.find({
-      where: { providerId: userId, deletedAt: IsNull() },
-      relations: ['listingCategories', 'listingCategories.category'],
-      order: { submittedAt: 'DESC' },
-    });
   }
 }

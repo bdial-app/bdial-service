@@ -34,11 +34,11 @@ describe('AdminController', () => {
     });
   });
 
-  describe('getPendingListings', () => {
-    it('should retrieve pending listings from DB', async () => {
+  describe('getPendingProviders', () => {
+    it('should retrieve pending providers from DB', async () => {
       const req = { user: { id: 'admin123', role: 'admin' } };
       try {
-        const result = await controller.getPendingListings(req);
+        const result = await controller.getPendingProviders(req);
         expect(Array.isArray(result)).toBe(true);
       } catch (error) {
         expect(error).toBeDefined();

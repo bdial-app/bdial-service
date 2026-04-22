@@ -125,6 +125,15 @@ export class ProvidersController {
     return this.providersService.getMyProviderStatus(req.user.id);
   }
 
+  @Get('my-analytics')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @ApiOperation({ summary: 'Get provider analytics (reviews, ratings, enquiries, products)' })
+  @ApiResponse({ status: 200, description: 'Analytics data retrieved' })
+  getMyAnalytics(@Request() req) {
+    return this.providersService.getAnalytics(req.user.id);
+  }
+
   @Post('submit-verification')
   @ApiBearerAuth()
   @UseGuards(AuthGuard('jwt'))
