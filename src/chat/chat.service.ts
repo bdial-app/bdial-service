@@ -556,14 +556,28 @@ export class ChatService {
   // ─────────────────────────────────────────────
 
   async getUnreadCount(userId: string) {
-    const result = await this.participantRepo
+    const rows = await this.participantRepo
       .createQueryBuilder('cp')
-      .select('SUM(cp.unread_count)', 'total')
+      .select('cp.role', 'role')
+      .addSelect('SUM(cp.unread_count)', 'total')
       .where('cp.user_id = :userId', { userId })
       .andWhere('cp.is_active = true')
-      .getRawOne();
+      .groupBy('cp.role')
+      .getRawMany();
 
-    return { unreadCount: parseInt(result?.total || '0', 10) };
+    let customerUnreadCount = 0;
+    let providerUnreadCount = 0;
+    for (const row of rows) {
+      const n = parseInt(row.total || '0', 10);
+      if (row.role === 'provider') providerUnreadCount = n;
+      else customerUnreadCount += n; // 'customer' or null
+    }
+
+    return {
+      unreadCount: customerUnreadCount + providerUnreadCount,
+      customerUnreadCount,
+      providerUnreadCount,
+    };
   }
 
   /**
