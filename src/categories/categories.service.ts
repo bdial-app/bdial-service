@@ -13,6 +13,9 @@ const ALLOWED_ICON_EXTENSIONS = ['png', 'svg'];
 const ALLOWED_ICON_MIME_TYPES = ['image/png', 'image/svg+xml', 'image/svg'];
 const MAX_ICON_SIZE = 5 * 1024 * 1024;
 
+const ALLOWED_IMAGE_MIME_TYPES = ['image/png'];
+const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
+
 @Injectable()
 export class CategoriesService {
   constructor(
@@ -114,6 +117,30 @@ export class CategoriesService {
 
     category.icon = null;
     category.iconStorageKey = null;
+    return this.categoryRepo.save(category);
+  }
+
+  async uploadImage(categoryId: string, file: Express.Multer.File): Promise<any> {
+    const category = await this.categoryRepo.findOneBy({ id: categoryId });
+    if (!category) throw new NotFoundException('Category not found');
+
+    if (!ALLOWED_IMAGE_MIME_TYPES.includes(file.mimetype)) {
+      throw new BadRequestException(`Invalid file type. Only PNG images are allowed. Received: ${file.mimetype}`);
+    }
+    if (file.size > MAX_IMAGE_SIZE) {
+      throw new BadRequestException(`File size exceeds 10MB limit.`);
+    }
+
+    const { url } = await this.storageService.upload('categories/images', file);
+    category.imageUrl = url;
+    return this.categoryRepo.save(category);
+  }
+
+  async deleteImage(categoryId: string): Promise<any> {
+    const category = await this.categoryRepo.findOneBy({ id: categoryId });
+    if (!category) throw new NotFoundException('Category not found');
+
+    category.imageUrl = null;
     return this.categoryRepo.save(category);
   }
 }

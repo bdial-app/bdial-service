@@ -32,6 +32,9 @@ export class Category {
   @Column({ name: 'icon_storage_key', type: 'varchar', length: 300, nullable: true })
   iconStorageKey: string | null;
 
+  @Column({ name: 'image_url', type: 'varchar', length: 500, nullable: true })
+  imageUrl: string | null;
+
   @Column({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean;
 

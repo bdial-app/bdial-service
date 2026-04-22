@@ -55,4 +55,12 @@ export class CreateCategoryDto {
   @Min(0)
   @IsOptional()
   displayOrder?: number;
+
+  @ApiPropertyOptional({
+    description: 'Image URL for the category',
+    example: 'https://cdn.example.com/categories/tailoring.png',
+  })
+  @IsString()
+  @IsOptional()
+  imageUrl?: string;
 }

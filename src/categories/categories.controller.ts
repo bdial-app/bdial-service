@@ -158,10 +158,7 @@ export class CategoriesController {
   @Delete(':id/icon')
   @ApiOperation({ summary: 'Delete category icon' })
   @ApiParam({ name: 'id', description: 'Category ID' })
-  @ApiResponse({
-    status: 200,
-    description: 'Icon deleted successfully',
-  })
+  @ApiResponse({ status: 200, description: 'Icon deleted successfully' })
   @ApiResponse({ status: 404, description: 'Category not found' })
   deleteIcon(@Param('id') id: string) {
     if (!id || id === 'undefined' || id === 'null') {
@@ -169,5 +166,52 @@ export class CategoriesController {
     }
 
     return this.categoriesService.deleteIcon(id);
+  }
+
+  @Post(':id/image')
+  @UseInterceptors(FileInterceptor('image'))
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Upload or update category image (PNG only)' })
+  @ApiParam({ name: 'id', description: 'Category ID' })
+  @ApiResponse({ status: 200, description: 'Image uploaded successfully' })
+  @ApiResponse({ status: 400, description: 'Invalid file or file type' })
+  @ApiResponse({ status: 404, description: 'Category not found' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        image: {
+          type: 'string',
+          format: 'binary',
+          description: 'PNG image file (max 10MB)',
+        },
+      },
+    },
+  })
+  uploadImage(
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!id || id === 'undefined' || id === 'null') {
+      throw new BadRequestException('Valid category ID is required');
+    }
+    if (!file) {
+      throw new BadRequestException('No file uploaded');
+    }
+
+    return this.categoriesService.uploadImage(id, file);
+  }
+
+  @Delete(':id/image')
+  @ApiOperation({ summary: 'Delete category image' })
+  @ApiParam({ name: 'id', description: 'Category ID' })
+  @ApiResponse({ status: 200, description: 'Image deleted successfully' })
+  @ApiResponse({ status: 404, description: 'Category not found' })
+  deleteImage(@Param('id') id: string) {
+    if (!id || id === 'undefined' || id === 'null') {
+      throw new BadRequestException('Valid category ID is required');
+    }
+
+    return this.categoriesService.deleteImage(id);
   }
 }

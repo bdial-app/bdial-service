@@ -25,6 +25,11 @@ export class CreateCategoryDto {
   @IsOptional()
   @IsString()
   icon?: string;
+
+  @ApiPropertyOptional({ description: 'Image URL' })
+  @IsOptional()
+  @IsString()
+  imageUrl?: string;
 }
 
 export class UpdateCategoryDto {
@@ -52,4 +57,9 @@ export class UpdateCategoryDto {
   @IsOptional()
   @IsString()
   icon?: string;
+
+  @ApiPropertyOptional({ description: 'Image URL' })
+  @IsOptional()
+  @IsString()
+  imageUrl?: string;
 }
