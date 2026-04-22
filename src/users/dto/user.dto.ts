@@ -85,6 +85,11 @@ export class UpdateUserDto {
   @IsOptional()
   @IsEnum(['customer', 'provider'])
   preferredMode?: 'customer' | 'provider';
+
+  @ApiPropertyOptional({ example: 'en', description: 'Preferred language code (en, hi, ar, fr, ur, etc.)' })
+  @IsOptional()
+  @IsString()
+  preferredLanguage?: string;
 }
 
 export class UserListQueryDto {

@@ -1,5 +1,16 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsString, IsOptional, IsBoolean, IsUUID, MaxLength, Matches, IsEnum } from 'class-validator';
+import { Transform } from 'class-transformer';
+
+/** Trim, strip seconds (HH:MM:SS → HH:MM), and convert blank to undefined */
+const NormalizeTime = () =>
+  Transform(({ value }) => {
+    if (value == null || typeof value !== 'string') return undefined;
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    const m = trimmed.match(/^(\d{1,2}:\d{2})/);
+    return m ? m[1] : trimmed;
+  });
 
 export class CreateProviderDto {
   @ApiProperty({ example: 'uuid-of-user' })
@@ -58,12 +69,14 @@ export class CreateProviderDto {
 
   @ApiPropertyOptional({ example: '09:00' })
   @IsOptional()
+  @NormalizeTime()
   @IsString()
   @Matches(/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/, { message: 'Open time must be in HH:MM format' })
   openTime?: string;
 
   @ApiPropertyOptional({ example: '18:00' })
   @IsOptional()
+  @NormalizeTime()
   @IsString()
   @Matches(/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/, { message: 'Close time must be in HH:MM format' })
   closeTime?: string;
