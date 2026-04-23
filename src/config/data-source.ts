@@ -16,6 +16,12 @@ import { SavedItem } from '../entities/saved-item.entity';
 import { Conversation } from '../entities/conversation.entity';
 import { ConversationParticipant } from '../entities/conversation-participant.entity';
 import { Message } from '../entities/message.entity';
+import { SearchLog } from '../entities/search-log.entity';
+import { SponsoredListing } from '../entities/sponsored-listing.entity';
+import { ProviderBadge } from '../entities/provider-badge.entity';
+import { ProviderOffer } from '../entities/provider-offer.entity';
+import { AdEvent } from '../entities/ad-event.entity';
+import { AppInvite } from '../entities/app-invite.entity';
 
 export const ALL_ENTITIES = [
   User,
@@ -35,6 +41,12 @@ export const ALL_ENTITIES = [
   Conversation,
   ConversationParticipant,
   Message,
+  SearchLog,
+  SponsoredListing,
+  ProviderBadge,
+  ProviderOffer,
+  AdEvent,
+  AppInvite,
 ];
 
 export function buildTypeOrmOptions(url: string): DataSourceOptions {

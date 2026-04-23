@@ -66,6 +66,8 @@ export class ProvidersController {
   }
 
   @Post('become-provider')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FileFieldsInterceptor([
     { name: 'file', maxCount: 1 },
@@ -76,9 +78,10 @@ export class ProvidersController {
   @ApiOperation({ summary: 'Become a provider (creates provider, uploads photos, creates products, and verification records)' })
   @ApiResponse({ status: 201, description: 'Provider and verification created successfully' })
   @ApiResponse({ status: 400, description: 'Bad Request' })
-  @ApiResponse({ status: 404, description: 'User not found' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 409, description: 'Provider already exists for user' })
   becomeProvider(
+    @Request() req,
     @Body() becomeProviderDto: BecomeProviderDto,
     @UploadedFiles() files: {
       file?: Express.Multer.File[];
@@ -87,6 +90,8 @@ export class ProvidersController {
       productImages?: Express.Multer.File[];
     },
   ) {
+    // Always use the authenticated user's ID — never trust the client-provided userId
+    becomeProviderDto.userId = req.user.id;
     return this.providersService.becomeProvider(
       becomeProviderDto,
       files?.file?.[0],

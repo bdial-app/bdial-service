@@ -21,6 +21,9 @@ import { HomeModule } from './home/home.module';
 import { ProductsModule } from './products/products.module';
 import { SavedItemsModule } from './saved-items/saved-items.module';
 import { ChatModule } from './chat/chat.module';
+import { SearchModule } from './search/search.module';
+import { ExploreModule } from './explore/explore.module';
+import { InviteModule } from './invite/invite.module';
 
 @Module({
   imports: [
@@ -49,6 +52,9 @@ import { ChatModule } from './chat/chat.module';
     ProductsModule,
     SavedItemsModule,
     ChatModule,
+    SearchModule,
+    ExploreModule,
+    InviteModule,
   ],
   controllers: [AppController],
   providers: [AppService],

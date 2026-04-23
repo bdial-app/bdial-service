@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, ILike } from 'typeorm';
-import { Provider, User, Verification, ProviderCategory, Review, Product, Photo, Message, ConversationParticipant } from '../entities';
+import { Provider, User, Verification, ProviderCategory, Review, Product, Photo, Message, ConversationParticipant, ProviderBadge, ProviderOffer } from '../entities';
 import { StorageService } from '../storage/storage.service';
 import { GeocodeService } from '../geocode/geocode.service';
 import { CreateProviderDto } from './dto/create-provider.dto';
@@ -29,6 +29,8 @@ export class ProvidersService {
     @InjectRepository(Photo) private photoRepo: Repository<Photo>,
     @InjectRepository(Message) private messageRepo: Repository<Message>,
     @InjectRepository(ConversationParticipant) private participantRepo: Repository<ConversationParticipant>,
+    @InjectRepository(ProviderBadge) private badgeRepo: Repository<ProviderBadge>,
+    @InjectRepository(ProviderOffer) private offerRepo: Repository<ProviderOffer>,
     private storage: StorageService,
     private dataSource: DataSource,
     private geocodeService: GeocodeService,
@@ -294,7 +296,7 @@ export class ProvidersService {
     });
     if (!provider) throw new NotFoundException(`Provider with ID '${id}' not found`);
 
-    const [photos, products, reviews] = await Promise.all([
+    const [photos, products, reviews, badges, activeOffers] = await Promise.all([
       this.photoRepo.find({
         where: { providerId: id },
         order: { displayOrder: 'ASC' },
@@ -308,6 +310,18 @@ export class ProvidersService {
         relations: ['reviewer', 'photos'],
         order: { postedAt: 'DESC' },
       }),
+      this.badgeRepo.find({
+        where: { providerId: id, isActive: true },
+        order: { createdAt: 'DESC' },
+      }),
+      this.offerRepo
+        .createQueryBuilder('o')
+        .where('o.provider_id = :id', { id })
+        .andWhere('o.is_active = true')
+        .andWhere('o.starts_at <= NOW()')
+        .andWhere('o.ends_at > NOW()')
+        .orderBy('o.ends_at', 'ASC')
+        .getMany(),
     ]);
 
     const ratingDist = [0, 0, 0, 0, 0];
@@ -341,6 +355,8 @@ export class ProvidersService {
       photos,
       products,
       reviews,
+      badges,
+      activeOffers,
       stats: {
         rating: Number(rating.toFixed(2)),
         reviewCount,
@@ -439,6 +455,14 @@ export class ProvidersService {
     } else if (sortBy === 'newest') {
       qb.orderBy("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'ASC')
         .addOrderBy('provider.createdAt', 'DESC');
+    } else if (sortBy === 'rating') {
+      qb.addSelect(
+        `(SELECT AVG(r.star_rating) FROM reviews r WHERE r.provider_id = provider.id AND r.status = 'approved')`,
+        'avg_rating',
+      );
+      qb.orderBy("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'ASC')
+        .addOrderBy('avg_rating', 'DESC', 'NULLS LAST')
+        .addOrderBy('distance', 'ASC');
     } else {
       qb.orderBy("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'ASC')
         .addOrderBy('distance', 'ASC');
