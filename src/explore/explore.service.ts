@@ -44,7 +44,7 @@ export class ExploreService {
       activeOffers,
       quickCategories,
       popularNearby,
-      bannerAd,
+      bannerAds,
       topRated,
       categorySpotlight,
       newArrivals,
@@ -81,7 +81,7 @@ export class ExploreService {
       activeOffers: attachBadges(activeOffers),
       quickCategories,
       popularNearby: attachBadges(popularNearby),
-      bannerAd,
+      bannerAds,
       topRated: attachBadges(topRated),
       categorySpotlight: categorySpotlight
         ? { ...categorySpotlight, providers: attachBadges(categorySpotlight.providers) }
@@ -548,16 +548,15 @@ export class ExploreService {
 
   private async getInterstitialBanner() {
     const now = new Date();
-    const banner = await this.bannerRepo
+    const banners = await this.bannerRepo
       .createQueryBuilder('b')
       .where('b.isActive = :active', { active: true })
       .andWhere('(b.startsAt IS NULL OR b.startsAt <= :now)', { now })
       .andWhere('(b.endsAt IS NULL OR b.endsAt >= :now)', { now })
       .orderBy('b.displayOrder', 'ASC')
-      .limit(1)
-      .getOne();
+      .getMany();
 
-    return banner || null;
+    return banners;
   }
 
   // ─── Platform Stats ──────────────────────────────────────────

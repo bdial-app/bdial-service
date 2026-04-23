@@ -4,6 +4,7 @@ import {
   Column,
   CreateDateColumn,
   UpdateDateColumn,
+  Index,
 } from 'typeorm';
 
 @Entity('promo_banners')
@@ -38,6 +39,7 @@ export class PromoBanner {
   @Column({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean;
 
+  @Index({ unique: true })
   @Column({ name: 'display_order', type: 'int', default: 0 })
   displayOrder: number;
 
