@@ -59,14 +59,14 @@ export function buildTypeOrmOptions(url: string): DataSourceOptions {
     url,
     entities: ALL_ENTITIES,
     synchronize: true,
+    // Small pool for Supabase free tier — max 3 concurrent DB connections.
+    // PgBouncer transaction mode manages server-side connections itself,
+    // so keepAlive is not useful here. Short idle timeout releases connections
+    // quickly so PgBouncer can reuse its server-side slots.
     extra: {
-      max: 20,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 5000,
+      max: 3,
+      idleTimeoutMillis: 5000,
     },
-    ssl: process.env.NODE_ENV === 'production'
-      ? { rejectUnauthorized: false }
-      : undefined,
   };
 }
 

@@ -410,14 +410,11 @@ export class ExploreService {
         'p.status AS status',
         'p.is_women_led AS "isWomenLed"',
       ])
-      .innerJoin(
-        'provider_categories',
-        'pc',
-        'pc.provider_id = p.id AND pc.category_id IN (:...categoryIds)',
+      .where(
+        "EXISTS (SELECT 1 FROM provider_categories pc_f WHERE pc_f.provider_id = p.id AND pc_f.category_id IN (:...categoryIds))",
         { categoryIds },
       )
-      .where("p.status IN ('active', 'unverified')")
-      .groupBy('p.id');
+      .andWhere("p.status IN ('active', 'unverified')");
 
     this.withReviewStats(qb);
     this.withCategoryServices(qb);

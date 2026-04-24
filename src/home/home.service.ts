@@ -223,9 +223,11 @@ export class HomeService {
         `(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`,
         'listingPhoto',
       )
-      .innerJoin('provider_categories', 'pc', 'pc.provider_id = p.id AND pc.category_id IN (:...categoryIds)', { categoryIds })
-      .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
-      .groupBy('p.id');
+      .where(
+        'EXISTS (SELECT 1 FROM provider_categories pc_f WHERE pc_f.provider_id = p.id AND pc_f.category_id IN (:...categoryIds))',
+        { categoryIds },
+      )
+      .andWhere('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] });
 
     this.withReviewStats(qb);
     this.withCategoryServices(qb);
