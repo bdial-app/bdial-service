@@ -21,3 +21,5 @@ export { ProviderBadge } from './provider-badge.entity';
 export { ProviderOffer } from './provider-offer.entity';
 export { AdEvent } from './ad-event.entity';
 export { AppInvite } from './app-invite.entity';
+export { ProviderAnalyticsEvent } from './provider-analytics-event.entity';
+export { ProviderLead } from './provider-lead.entity';

@@ -24,6 +24,7 @@ import { ChatModule } from './chat/chat.module';
 import { SearchModule } from './search/search.module';
 import { ExploreModule } from './explore/explore.module';
 import { InviteModule } from './invite/invite.module';
+import { AnalyticsModule } from './analytics/analytics.module';
 
 @Module({
   imports: [
@@ -55,6 +56,7 @@ import { InviteModule } from './invite/invite.module';
     SearchModule,
     ExploreModule,
     InviteModule,
+    AnalyticsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -1,10 +1,11 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Inject, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { Provider } from '../entities/provider.entity';
 import { Product } from '../entities/product.entity';
 import { Category } from '../entities/category.entity';
 import { SearchLog } from '../entities/search-log.entity';
+import { ProviderAnalyticsEvent } from '../entities/provider-analytics-event.entity';
 import { SearchQueryDto } from './dto/search-query.dto';
 import { SuggestionsQueryDto } from './dto/suggestions-query.dto';
 
@@ -81,6 +82,7 @@ export class SearchService {
     @InjectRepository(Product) private productRepo: Repository<Product>,
     @InjectRepository(Category) private categoryRepo: Repository<Category>,
     @InjectRepository(SearchLog) private searchLogRepo: Repository<SearchLog>,
+    @InjectRepository(ProviderAnalyticsEvent) private analyticsEventRepo: Repository<ProviderAnalyticsEvent>,
     private dataSource: DataSource,
   ) {}
 
@@ -125,6 +127,11 @@ export class SearchService {
 
     // Log search (fire and forget)
     this.logSearch(q, userId, totalResults, lat, lng, city).catch(() => {});
+
+    // Track search appearances for analytics (fire and forget)
+    if (providers.data.length > 0) {
+      this.logSearchAppearances(providers.data.map((p) => p.id), userId, q).catch(() => {});
+    }
 
     return {
       providers,
@@ -739,6 +746,36 @@ export class SearchService {
       await this.searchLogRepo.save(log);
     } catch (err) {
       this.logger.warn('Failed to log search', err);
+    }
+  }
+
+  private async logSearchAppearances(
+    providerIds: string[],
+    userId?: string,
+    query?: string,
+  ): Promise<void> {
+    try {
+      if (providerIds.length === 0) return;
+      const now = new Date();
+      const rows = providerIds.map((pid) => ({
+        providerId: pid,
+        userId: userId || null,
+        sessionId: 'search-server',
+        eventType: 'search_appearance' as const,
+        entityId: null,
+        metadata: query ? ({ query } as any) : null,
+        duration: null,
+        source: 'search' as const,
+        createdAt: now,
+      }));
+      await this.analyticsEventRepo
+        .createQueryBuilder()
+        .insert()
+        .into(ProviderAnalyticsEvent)
+        .values(rows)
+        .execute();
+    } catch (err) {
+      this.logger.warn('Failed to log search appearances', err);
     }
   }
 }

@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Patch,
+  Delete,
   Param,
   Body,
   Query,
@@ -33,6 +34,9 @@ import { UpdateProviderDto } from './dto/update-provider.dto';
 import { ProviderPaginationDto } from './dto/provider-pagination.dto';
 import { BecomeProviderDto } from './dto/become-provider.dto';
 import { NearbyProvidersDto } from './dto/nearby-providers.dto';
+import { CreateOfferDto } from './dto/create-offer.dto';
+import { UpdateOfferDto } from './dto/update-offer.dto';
+import { CreateSponsorshipDto, UpdateSponsorshipDto } from './dto/sponsorship.dto';
 
 @ApiTags('Providers')
 @Controller('providers')
@@ -154,6 +158,97 @@ export class ProvidersController {
   @ApiResponse({ status: 200, description: 'Analytics data retrieved' })
   getMyAnalytics(@Request() req) {
     return this.providersService.getAnalytics(req.user.id);
+  }
+
+  // ─── Offers / Deals CRUD ────────────────────────────────────────
+
+  @Post('my-offers')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @ApiOperation({ summary: 'Create a new offer/deal for the authenticated provider' })
+  @ApiResponse({ status: 201, description: 'Offer created successfully' })
+  @ApiResponse({ status: 400, description: 'Bad Request' })
+  @ApiResponse({ status: 404, description: 'Provider not found' })
+  createOffer(@Request() req, @Body() dto: CreateOfferDto) {
+    return this.providersService.createOffer(req.user.id, dto);
+  }
+
+  @Get('my-offers')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @ApiOperation({ summary: 'Get all offers/deals for the authenticated provider' })
+  @ApiResponse({ status: 200, description: 'Offers retrieved successfully' })
+  getMyOffers(@Request() req) {
+    return this.providersService.getMyOffers(req.user.id);
+  }
+
+  @Patch('my-offers/:offerId')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @ApiOperation({ summary: 'Update an offer/deal' })
+  @ApiResponse({ status: 200, description: 'Offer updated successfully' })
+  @ApiResponse({ status: 404, description: 'Offer not found' })
+  @ApiParam({ name: 'offerId', description: 'Offer ID (UUID)' })
+  updateOffer(
+    @Request() req,
+    @Param('offerId', ParseUUIDPipe) offerId: string,
+    @Body() dto: UpdateOfferDto,
+  ) {
+    return this.providersService.updateOffer(req.user.id, offerId, dto);
+  }
+
+  @Delete('my-offers/:offerId')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @ApiOperation({ summary: 'Delete an offer/deal' })
+  @ApiResponse({ status: 200, description: 'Offer deleted successfully' })
+  @ApiResponse({ status: 404, description: 'Offer not found' })
+  @ApiParam({ name: 'offerId', description: 'Offer ID (UUID)' })
+  deleteOffer(
+    @Request() req,
+    @Param('offerId', ParseUUIDPipe) offerId: string,
+  ) {
+    return this.providersService.deleteOffer(req.user.id, offerId);
+  }
+
+  // ─── Sponsorship Endpoints ─────────────────────────────────────
+
+  @Get('sponsorship-plans')
+  @ApiOperation({ summary: 'Get available sponsorship plans' })
+  @ApiResponse({ status: 200, description: 'Plans retrieved' })
+  getSponsorshipPlans() {
+    return this.providersService.getSponsorshipPlans();
+  }
+
+  @Post('my-sponsorships')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @ApiOperation({ summary: 'Create a new sponsorship for the authenticated provider' })
+  @ApiResponse({ status: 201, description: 'Sponsorship created' })
+  createSponsorship(@Request() req, @Body() dto: CreateSponsorshipDto) {
+    return this.providersService.createSponsorship(req.user.id, dto);
+  }
+
+  @Get('my-sponsorships')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @ApiOperation({ summary: 'Get all sponsorships for the authenticated provider' })
+  @ApiResponse({ status: 200, description: 'Sponsorships retrieved' })
+  getMySponsorships(@Request() req) {
+    return this.providersService.getMySponsorships(req.user.id);
+  }
+
+  @Patch('my-sponsorships/:id')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @ApiOperation({ summary: 'Update a sponsorship' })
+  @ApiParam({ name: 'id', description: 'Sponsorship ID (UUID)' })
+  updateSponsorship(
+    @Request() req,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateSponsorshipDto,
+  ) {
+    return this.providersService.updateSponsorship(req.user.id, id, dto);
   }
 
   @Post('submit-verification')

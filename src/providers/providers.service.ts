@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, ILike } from 'typeorm';
-import { Provider, User, Verification, ProviderCategory, Review, Product, Photo, Message, ConversationParticipant, ProviderBadge, ProviderOffer } from '../entities';
+import { Provider, User, Verification, ProviderCategory, Review, Product, Photo, Message, ConversationParticipant, ProviderBadge, ProviderOffer, SponsoredListing } from '../entities';
 import { StorageService } from '../storage/storage.service';
 import { GeocodeService } from '../geocode/geocode.service';
 import { CreateProviderDto } from './dto/create-provider.dto';
@@ -14,6 +14,9 @@ import { UpdateProviderDto } from './dto/update-provider.dto';
 import { ProviderPaginationDto } from './dto/provider-pagination.dto';
 import { BecomeProviderDto } from './dto/become-provider.dto';
 import { NearbyProvidersDto } from './dto/nearby-providers.dto';
+import { CreateOfferDto } from './dto/create-offer.dto';
+import { UpdateOfferDto } from './dto/update-offer.dto';
+import { CreateSponsorshipDto, UpdateSponsorshipDto } from './dto/sponsorship.dto';
 
 @Injectable()
 export class ProvidersService {
@@ -31,6 +34,7 @@ export class ProvidersService {
     @InjectRepository(ConversationParticipant) private participantRepo: Repository<ConversationParticipant>,
     @InjectRepository(ProviderBadge) private badgeRepo: Repository<ProviderBadge>,
     @InjectRepository(ProviderOffer) private offerRepo: Repository<ProviderOffer>,
+    @InjectRepository(SponsoredListing) private sponsorRepo: Repository<SponsoredListing>,
     private storage: StorageService,
     private dataSource: DataSource,
     private geocodeService: GeocodeService,
@@ -620,5 +624,173 @@ export class ProvidersService {
         reviewer: r.reviewer ? { id: r.reviewer.id, name: r.reviewer.name } : null,
       })),
     };
+  }
+
+  // ─── Offer / Deal CRUD ──────────────────────────────────────────────
+
+  async createOffer(userId: string, dto: CreateOfferDto) {
+    const provider = await this.providerRepo.findOneBy({ userId });
+    if (!provider) throw new NotFoundException('Provider not found. Please register as a provider first.');
+
+    if (new Date(dto.endsAt) <= new Date(dto.startsAt)) {
+      throw new BadRequestException('End date must be after start date');
+    }
+
+    const offer = this.offerRepo.create({
+      providerId: provider.id,
+      title: dto.title,
+      description: dto.description ?? null,
+      discountType: dto.discountType,
+      discountValue: dto.discountValue,
+      minOrderAmount: dto.minOrderAmount ?? null,
+      maxDiscount: dto.maxDiscount ?? null,
+      startsAt: new Date(dto.startsAt),
+      endsAt: new Date(dto.endsAt),
+      usageLimit: dto.usageLimit ?? null,
+      isActive: true,
+    });
+
+    return this.offerRepo.save(offer);
+  }
+
+  async getMyOffers(userId: string) {
+    const provider = await this.providerRepo.findOneBy({ userId });
+    if (!provider) throw new NotFoundException('Provider not found');
+
+    return this.offerRepo.find({
+      where: { providerId: provider.id },
+      order: { createdAt: 'DESC' },
+    });
+  }
+
+  async updateOffer(userId: string, offerId: string, dto: UpdateOfferDto) {
+    const provider = await this.providerRepo.findOneBy({ userId });
+    if (!provider) throw new NotFoundException('Provider not found');
+
+    const offer = await this.offerRepo.findOneBy({ id: offerId });
+    if (!offer) throw new NotFoundException('Offer not found');
+    if (offer.providerId !== provider.id) throw new BadRequestException('You do not own this offer');
+
+    if (dto.startsAt || dto.endsAt) {
+      const startsAt = dto.startsAt ? new Date(dto.startsAt) : offer.startsAt;
+      const endsAt = dto.endsAt ? new Date(dto.endsAt) : offer.endsAt;
+      if (endsAt <= startsAt) {
+        throw new BadRequestException('End date must be after start date');
+      }
+    }
+
+    Object.assign(offer, {
+      ...(dto.title !== undefined && { title: dto.title }),
+      ...(dto.description !== undefined && { description: dto.description }),
+      ...(dto.discountType !== undefined && { discountType: dto.discountType }),
+      ...(dto.discountValue !== undefined && { discountValue: dto.discountValue }),
+      ...(dto.minOrderAmount !== undefined && { minOrderAmount: dto.minOrderAmount }),
+      ...(dto.maxDiscount !== undefined && { maxDiscount: dto.maxDiscount }),
+      ...(dto.startsAt !== undefined && { startsAt: new Date(dto.startsAt) }),
+      ...(dto.endsAt !== undefined && { endsAt: new Date(dto.endsAt) }),
+      ...(dto.usageLimit !== undefined && { usageLimit: dto.usageLimit }),
+    });
+
+    return this.offerRepo.save(offer);
+  }
+
+  async deleteOffer(userId: string, offerId: string) {
+    const provider = await this.providerRepo.findOneBy({ userId });
+    if (!provider) throw new NotFoundException('Provider not found');
+
+    const offer = await this.offerRepo.findOneBy({ id: offerId });
+    if (!offer) throw new NotFoundException('Offer not found');
+    if (offer.providerId !== provider.id) throw new BadRequestException('You do not own this offer');
+
+    await this.offerRepo.remove(offer);
+    return { deleted: true };
+  }
+
+  // ─── Sponsorship CRUD ─────────────────────────────────────────────
+
+  async createSponsorship(userId: string, dto: CreateSponsorshipDto) {
+    const provider = await this.providerRepo.findOneBy({ userId });
+    if (!provider) throw new NotFoundException('Provider not found');
+
+    if (new Date(dto.endsAt) <= new Date(dto.startsAt)) {
+      throw new BadRequestException('End date must be after start date');
+    }
+
+    const listing = this.sponsorRepo.create({
+      providerId: provider.id,
+      type: dto.type,
+      budgetAmount: dto.budgetAmount,
+      costPerClick: dto.costPerClick ?? 5,
+      targetCategoryIds: dto.targetCategoryIds ?? null,
+      targetCities: dto.targetCities ?? null,
+      targetRadius: dto.targetRadius ?? null,
+      startsAt: new Date(dto.startsAt),
+      endsAt: new Date(dto.endsAt),
+      isActive: true,
+    });
+
+    return this.sponsorRepo.save(listing);
+  }
+
+  async getMySponsorships(userId: string) {
+    const provider = await this.providerRepo.findOneBy({ userId });
+    if (!provider) throw new NotFoundException('Provider not found');
+
+    return this.sponsorRepo.find({
+      where: { providerId: provider.id },
+      order: { createdAt: 'DESC' },
+    });
+  }
+
+  async updateSponsorship(userId: string, id: string, dto: UpdateSponsorshipDto) {
+    const provider = await this.providerRepo.findOneBy({ userId });
+    if (!provider) throw new NotFoundException('Provider not found');
+
+    const listing = await this.sponsorRepo.findOneBy({ id });
+    if (!listing) throw new NotFoundException('Sponsorship not found');
+    if (listing.providerId !== provider.id) throw new BadRequestException('You do not own this sponsorship');
+
+    if (dto.budgetAmount !== undefined) listing.budgetAmount = dto.budgetAmount;
+    if (dto.isActive !== undefined) listing.isActive = dto.isActive;
+    if (dto.endsAt !== undefined) {
+      if (new Date(dto.endsAt) <= listing.startsAt) {
+        throw new BadRequestException('End date must be after start date');
+      }
+      listing.endsAt = new Date(dto.endsAt);
+    }
+
+    return this.sponsorRepo.save(listing);
+  }
+
+  async getSponsorshipPlans() {
+    return [
+      {
+        id: 'basic',
+        name: 'Basic Boost',
+        type: 'inline' as const,
+        price: 499,
+        duration: 7,
+        features: ['Appear in search results', 'Basic analytics', '~500 impressions'],
+        recommended: false,
+      },
+      {
+        id: 'standard',
+        name: 'Standard Spotlight',
+        type: 'carousel' as const,
+        price: 1499,
+        duration: 14,
+        features: ['Featured in carousel', 'Priority in search', 'Detailed analytics', '~2000 impressions'],
+        recommended: true,
+      },
+      {
+        id: 'premium',
+        name: 'Premium Top Result',
+        type: 'top_result' as const,
+        price: 2999,
+        duration: 30,
+        features: ['Always top of search', 'Carousel + inline placement', 'Full analytics dashboard', '~5000 impressions', 'Priority support'],
+        recommended: false,
+      },
+    ];
   }
 }

@@ -22,6 +22,8 @@ import { ProviderBadge } from '../entities/provider-badge.entity';
 import { ProviderOffer } from '../entities/provider-offer.entity';
 import { AdEvent } from '../entities/ad-event.entity';
 import { AppInvite } from '../entities/app-invite.entity';
+import { ProviderAnalyticsEvent } from '../entities/provider-analytics-event.entity';
+import { ProviderLead } from '../entities/provider-lead.entity';
 
 export const ALL_ENTITIES = [
   User,
@@ -47,6 +49,8 @@ export const ALL_ENTITIES = [
   ProviderOffer,
   AdEvent,
   AppInvite,
+  ProviderAnalyticsEvent,
+  ProviderLead,
 ];
 
 export function buildTypeOrmOptions(url: string): DataSourceOptions {
