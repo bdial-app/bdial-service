@@ -21,9 +21,14 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
   async validate(payload: { sub: string; mobile: string }) {
     const user = await this.userRepo.findOneBy({ id: payload.sub });
-    if (!user || user.status !== 'active') {
-      throw new UnauthorizedException('User not found or inactive');
+    if (!user) {
+      throw new UnauthorizedException('User not found');
     }
+    if (user.status === 'deleted' || user.status === 'suspended') {
+      throw new UnauthorizedException('User account is inactive');
+    }
+    // Paused users are returned here — the JwtAuthGuard will decide
+    // whether to block or allow based on @AllowPaused() decorator
     return user;
   }
 }

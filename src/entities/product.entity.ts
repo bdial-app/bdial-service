@@ -32,6 +32,9 @@ export class Product {
   @Column({ name: 'photo_url', type: 'varchar', length: 500, nullable: true })
   photoUrl: string | null;
 
+  @Column({ name: 'photo_urls', type: 'text', array: true, default: '{}' })
+  photoUrls: string[];
+
   @Column({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean;
 

@@ -3,6 +3,7 @@ import {
   NotFoundException,
   ConflictException,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, ILike } from 'typeorm';
@@ -636,6 +637,28 @@ export class ProvidersService {
       throw new BadRequestException('End date must be after start date');
     }
 
+    // ─── Deal limits ────────────────────────────────────────────
+    const totalOffers = await this.offerRepo.count({ where: { providerId: provider.id } });
+    if (totalOffers >= 5) {
+      throw new ForbiddenException(
+        'You have reached the maximum of 5 deals. Please upgrade your plan to create more.',
+      );
+    }
+
+    const now = new Date();
+    const activeCount = await this.offerRepo
+      .createQueryBuilder('o')
+      .where('o.providerId = :pid', { pid: provider.id })
+      .andWhere('o.isActive = true')
+      .andWhere('o.endsAt > :now', { now })
+      .andWhere('o.startsAt <= :now', { now })
+      .getCount();
+    if (activeCount >= 3) {
+      throw new BadRequestException(
+        'You can have at most 3 active deals at a time. Deactivate or wait for one to expire.',
+      );
+    }
+
     const offer = this.offerRepo.create({
       providerId: provider.id,
       title: dto.title,
@@ -651,6 +674,30 @@ export class ProvidersService {
     });
 
     return this.offerRepo.save(offer);
+  }
+
+  async getOfferLimits(userId: string) {
+    const provider = await this.providerRepo.findOneBy({ userId });
+    if (!provider) throw new NotFoundException('Provider not found');
+
+    const totalOffers = await this.offerRepo.count({ where: { providerId: provider.id } });
+
+    const now = new Date();
+    const activeCount = await this.offerRepo
+      .createQueryBuilder('o')
+      .where('o.providerId = :pid', { pid: provider.id })
+      .andWhere('o.isActive = true')
+      .andWhere('o.endsAt > :now', { now })
+      .andWhere('o.startsAt <= :now', { now })
+      .getCount();
+
+    return {
+      totalDeals: totalOffers,
+      maxTotalDeals: 5,
+      activeDeals: activeCount,
+      maxActiveDeals: 3,
+      requiresPayment: totalOffers >= 5,
+    };
   }
 
   async getMyOffers(userId: string) {

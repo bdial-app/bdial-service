@@ -1,7 +1,8 @@
-import { Injectable, ExecutionContext } from '@nestjs/common';
+import { Injectable, ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { AuthGuard } from '@nestjs/passport';
 import { IS_PUBLIC_KEY } from '../common/decorators/public.decorator';
+import { ALLOW_PAUSED_KEY } from '../common/decorators/allow-paused.decorator';
 
 @Injectable()
 export class JwtAuthGuard extends AuthGuard('jwt') {
@@ -9,12 +10,31 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
     super();
   }
 
-  canActivate(context: ExecutionContext) {
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
       context.getHandler(),
       context.getClass(),
     ]);
     if (isPublic) return true;
-    return super.canActivate(context);
+
+    // Run the JWT strategy (validates token, loads user)
+    const result = await (super.canActivate(context) as Promise<boolean>);
+    if (!result) return false;
+
+    // After JWT validation, check if user is paused
+    const request = context.switchToHttp().getRequest();
+    const user = request.user;
+
+    if (user?.status === 'paused') {
+      const allowPaused = this.reflector.getAllAndOverride<boolean>(ALLOW_PAUSED_KEY, [
+        context.getHandler(),
+        context.getClass(),
+      ]);
+      if (!allowPaused) {
+        throw new ForbiddenException({ message: 'Account is paused', code: 'ACCOUNT_PAUSED' });
+      }
+    }
+
+    return true;
   }
 }

@@ -48,8 +48,16 @@ export class User {
   @Column({ type: 'decimal', precision: 9, scale: 6, nullable: true })
   longitude: number | null;
 
-  @Column({ type: 'enum', enum: ['active', 'suspended', 'deleted'], default: 'active' })
+  @Column({ type: 'enum', enum: ['active', 'suspended', 'deleted', 'paused'], default: 'active' })
   status: string;
+
+  @Column({ name: 'paused_at', type: 'timestamptz', nullable: true })
+  @Exclude()
+  pausedAt: Date | null;
+
+  @Column({ name: 'archive_reason', type: 'varchar', length: 50, nullable: true })
+  @Exclude()
+  archiveReason: string | null;
 
   @Column({ name: 'supabase_id', type: 'varchar', length: 100, nullable: true, unique: true })
   @Exclude()

@@ -7,6 +7,8 @@ import {
   MaxLength,
   Min,
   IsInt,
+  IsArray,
+  ArrayMaxSize,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
@@ -45,6 +47,13 @@ export class CreateProductDto {
   @IsString()
   @MaxLength(500)
   photoUrl?: string;
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @ArrayMaxSize(5)
+  photoUrls?: string[];
 }
 
 export class UpdateProductDto {
@@ -78,6 +87,13 @@ export class UpdateProductDto {
   @IsString()
   @MaxLength(500)
   photoUrl?: string;
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @ArrayMaxSize(5)
+  photoUrls?: string[];
 
   @ApiPropertyOptional()
   @IsOptional()

@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Patch,
+  Delete,
   Body,
   UseGuards,
   Request,
@@ -18,6 +19,7 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import { UsersService } from './users.service';
 import { CreateUserDto, UpdateUserDto, UserListQueryDto } from './dto/user.dto';
+import { AllowPaused } from '../common/decorators/allow-paused.decorator';
 
 @ApiTags('Users')
 @Controller('users')
@@ -52,6 +54,42 @@ export class UsersController {
   @ApiOperation({ summary: 'Update my profile' })
   updateMe(@Request() req, @Body() dto: UpdateUserDto) {
     return this.usersService.updateProfile(req.user.id, dto);
+  }
+
+  @Delete('me')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @ApiOperation({ summary: 'Delete (archive) my account' })
+  @ApiResponse({ status: 200, description: 'Account archived' })
+  deleteMe(@Request() req) {
+    return this.usersService.deleteAccount(req.user.id);
+  }
+
+  @Patch('me/pause')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @ApiOperation({ summary: 'Pause my account' })
+  @ApiResponse({ status: 200, description: 'Account paused' })
+  pauseMe(@Request() req) {
+    return this.usersService.pauseAccount(req.user.id);
+  }
+
+  @Patch('me/resume')
+  @ApiBearerAuth()
+  @AllowPaused()
+  @ApiOperation({ summary: 'Resume my paused account' })
+  @ApiResponse({ status: 200, description: 'Account resumed' })
+  resumeMe(@Request() req) {
+    return this.usersService.resumeAccount(req.user.id);
+  }
+
+  @Get('me/data-export')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @ApiOperation({ summary: 'Export all my data' })
+  @ApiResponse({ status: 200, description: 'User data export' })
+  exportMyData(@Request() req) {
+    return this.usersService.exportMyData(req.user.id);
   }
 
   @Get(':id')

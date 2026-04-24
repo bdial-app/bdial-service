@@ -369,6 +369,79 @@ export class SupabaseAuthService {
   }
 
   /**
+   * Ban a Supabase user (prevents all SSO/OTP login)
+   * Used when pausing an account
+   */
+  async banUser(supabaseUserId: string): Promise<boolean> {
+    try {
+      if (!this.supabaseAdmin) {
+        this.logger.warn('banUser: Supabase admin client not configured');
+        return false;
+      }
+      const { error } = await this.supabaseAdmin.auth.admin.updateUserById(supabaseUserId, {
+        ban_duration: '876600h', // ~100 years — effectively permanent
+      });
+      if (error) {
+        this.logger.error(`Error banning Supabase user ${supabaseUserId}:`, error);
+        return false;
+      }
+      this.logger.debug(`Supabase user banned: ${supabaseUserId}`);
+      return true;
+    } catch (error) {
+      this.logger.error('Error in banUser:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Unban a Supabase user (restores SSO/OTP login)
+   * Used when resuming a paused account
+   */
+  async unbanUser(supabaseUserId: string): Promise<boolean> {
+    try {
+      if (!this.supabaseAdmin) {
+        this.logger.warn('unbanUser: Supabase admin client not configured');
+        return false;
+      }
+      const { error } = await this.supabaseAdmin.auth.admin.updateUserById(supabaseUserId, {
+        ban_duration: 'none',
+      });
+      if (error) {
+        this.logger.error(`Error unbanning Supabase user ${supabaseUserId}:`, error);
+        return false;
+      }
+      this.logger.debug(`Supabase user unbanned: ${supabaseUserId}`);
+      return true;
+    } catch (error) {
+      this.logger.error('Error in unbanUser:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Permanently delete a Supabase Auth user
+   * Used when a user deletes their account — prevents SSO ghost re-login
+   */
+  async deleteSupabaseUser(supabaseUserId: string): Promise<boolean> {
+    try {
+      if (!this.supabaseAdmin) {
+        this.logger.warn('deleteSupabaseUser: Supabase admin client not configured');
+        return false;
+      }
+      const { error } = await this.supabaseAdmin.auth.admin.deleteUser(supabaseUserId);
+      if (error) {
+        this.logger.error(`Error deleting Supabase user ${supabaseUserId}:`, error);
+        return false;
+      }
+      this.logger.debug(`Supabase user deleted: ${supabaseUserId}`);
+      return true;
+    } catch (error) {
+      this.logger.error('Error in deleteSupabaseUser:', error);
+      return false;
+    }
+  }
+
+  /**
    * Get OAuth configuration for frontend
    * Returns redirect URL and other OAuth metadata
    */

@@ -1,8 +1,10 @@
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Not, Repository } from 'typeorm';
+import sharp = require('sharp');
 import { Product, Provider, Review, Photo, ProviderCategory } from '../entities';
 import { CreateProductDto, UpdateProductDto } from './dto/product.dto';
+import { StorageService } from '../storage/storage.service';
 
 @Injectable()
 export class ProductsService {
@@ -12,6 +14,7 @@ export class ProductsService {
     @InjectRepository(Review) private reviewRepo: Repository<Review>,
     @InjectRepository(Photo) private photoRepo: Repository<Photo>,
     @InjectRepository(ProviderCategory) private providerCatRepo: Repository<ProviderCategory>,
+    private readonly storageService: StorageService,
   ) {}
 
   /** Verify user owns the provider */
@@ -22,10 +25,38 @@ export class ProductsService {
     return provider;
   }
 
+  async uploadImage(userId: string, file: Express.Multer.File) {
+    // Compress to max 1200px wide, 80% quality WebP
+    const compressed = await sharp(file.buffer)
+      .resize({ width: 1200, withoutEnlargement: true })
+      .webp({ quality: 80 })
+      .toBuffer();
+
+    const compressedFile: Express.Multer.File = {
+      ...file,
+      buffer: compressed,
+      mimetype: 'image/webp',
+      originalname: file.originalname.replace(/\.[^.]+$/, '.webp'),
+      size: compressed.length,
+    };
+
+    return this.storageService.upload('products', compressedFile);
+  }
+
   async create(userId: string, dto: CreateProductDto) {
     await this.assertOwnership(userId, dto.providerId);
+
+    // Backward compat: if photoUrls not provided, derive from photoUrl
+    const photoUrls = dto.photoUrls?.length
+      ? dto.photoUrls
+      : dto.photoUrl
+        ? [dto.photoUrl]
+        : [];
+
     const product = this.productRepo.create({
       ...dto,
+      photoUrl: photoUrls[0] ?? null,
+      photoUrls,
       isActive: true,
     });
     return this.productRepo.save(product);
@@ -35,6 +66,14 @@ export class ProductsService {
     const product = await this.productRepo.findOneBy({ id: productId });
     if (!product) throw new NotFoundException('Product not found');
     await this.assertOwnership(userId, product.providerId);
+
+    // Keep photoUrl in sync with photoUrls[0]
+    if (dto.photoUrls !== undefined) {
+      dto.photoUrl = dto.photoUrls[0] ?? null;
+    } else if (dto.photoUrl !== undefined && !dto.photoUrls) {
+      dto.photoUrls = dto.photoUrl ? [dto.photoUrl] : [];
+    }
+
     Object.assign(product, dto);
     return this.productRepo.save(product);
   }

@@ -192,6 +192,15 @@ export class ProvidersController {
     return this.providersService.getMyOffers(req.user.id);
   }
 
+  @Get('my-offers/limits')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @ApiOperation({ summary: 'Get deal limits for the authenticated provider' })
+  @ApiResponse({ status: 200, description: 'Limits retrieved' })
+  getOfferLimits(@Request() req) {
+    return this.providersService.getOfferLimits(req.user.id);
+  }
+
   @Patch('my-offers/:offerId')
   @ApiBearerAuth()
   @UseGuards(AuthGuard('jwt'))
