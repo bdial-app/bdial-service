@@ -5,6 +5,7 @@ import {
   ManyToOne,
   JoinColumn,
   Index,
+  CreateDateColumn,
 } from 'typeorm';
 import { Exclude } from 'class-transformer';
 import { User } from './user.entity';
@@ -58,4 +59,7 @@ export class Verification {
   @ManyToOne(() => User, (u) => u.reviewedVerifications, { nullable: true })
   @JoinColumn({ name: 'reviewed_by' })
   reviewer: User | null;
+
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
+  createdAt: Date;
 }

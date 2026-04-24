@@ -12,6 +12,7 @@ import { Verification } from './verification.entity';
 import { Review } from './review.entity';
 import { ReviewReport } from './review-report.entity';
 import { Provider } from './provider.entity';
+import { Report } from './report.entity';
 
 @Entity('users')
 export class User {
@@ -115,4 +116,7 @@ export class User {
 
   @OneToOne(() => Provider, (p) => p.user)
   provider: Provider;
+
+  @OneToMany(() => Report, (r) => r.reporter)
+  reports: Report[];
 }

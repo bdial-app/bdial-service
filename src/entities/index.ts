@@ -23,3 +23,7 @@ export { AdEvent } from './ad-event.entity';
 export { AppInvite } from './app-invite.entity';
 export { ProviderAnalyticsEvent } from './provider-analytics-event.entity';
 export { ProviderLead } from './provider-lead.entity';
+export { Report } from './report.entity';
+export { ProviderWarning } from './provider-warning.entity';
+export { AuditLog } from './audit-log.entity';
+export { SystemSetting } from './system-setting.entity';

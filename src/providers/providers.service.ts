@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, ILike } from 'typeorm';
-import { Provider, User, Verification, ProviderCategory, Review, Product, Photo, Message, ConversationParticipant, ProviderBadge, ProviderOffer, SponsoredListing } from '../entities';
+import { Provider, User, Verification, ProviderCategory, Review, Product, Photo, Message, ConversationParticipant, ProviderBadge, ProviderOffer, SponsoredListing, ProviderWarning } from '../entities';
 import { StorageService } from '../storage/storage.service';
 import { GeocodeService } from '../geocode/geocode.service';
 import { CreateProviderDto } from './dto/create-provider.dto';
@@ -36,6 +36,7 @@ export class ProvidersService {
     @InjectRepository(ProviderBadge) private badgeRepo: Repository<ProviderBadge>,
     @InjectRepository(ProviderOffer) private offerRepo: Repository<ProviderOffer>,
     @InjectRepository(SponsoredListing) private sponsorRepo: Repository<SponsoredListing>,
+    @InjectRepository(ProviderWarning) private warningRepo: Repository<ProviderWarning>,
     private storage: StorageService,
     private dataSource: DataSource,
     private geocodeService: GeocodeService,
@@ -839,5 +840,40 @@ export class ProvidersService {
         recommended: false,
       },
     ];
+  }
+
+  // ─── Provider Warnings ────────────────────────────────────────────
+
+  async getMyWarnings(userId: string) {
+    const provider = await this.providerRepo.findOneBy({ userId });
+    if (!provider) throw new NotFoundException('Provider not found');
+    return this.warningRepo.find({
+      where: { providerId: provider.id },
+      order: { createdAt: 'DESC' },
+    });
+  }
+
+  async getMyWarningsUnreadCount(userId: string) {
+    const provider = await this.providerRepo.findOneBy({ userId });
+    if (!provider) return { unreadCount: 0 };
+    const unreadCount = await this.warningRepo.count({
+      where: { providerId: provider.id, isRead: false },
+    });
+    return { unreadCount };
+  }
+
+  async markWarningRead(userId: string, warningId: string) {
+    const provider = await this.providerRepo.findOneBy({ userId });
+    if (!provider) throw new NotFoundException('Provider not found');
+    const warning = await this.warningRepo.findOneBy({ id: warningId });
+    if (!warning || warning.providerId !== provider.id) {
+      throw new NotFoundException('Warning not found');
+    }
+    if (!warning.isRead) {
+      warning.isRead = true;
+      warning.readAt = new Date();
+      await this.warningRepo.save(warning);
+    }
+    return warning;
   }
 }

@@ -29,6 +29,7 @@ import { ExploreModule } from './explore/explore.module';
 import { InviteModule } from './invite/invite.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { HealthModule } from './health/health.module';
+import { ReportsModule } from './reports/reports.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 
 @Module({
@@ -70,6 +71,7 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard';
     InviteModule,
     AnalyticsModule,
     HealthModule,
+    ReportsModule,
   ],
   controllers: [AppController],
   providers: [

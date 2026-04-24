@@ -325,4 +325,26 @@ export class ProvidersController {
   ) {
     return this.providersService.update(id, updateProviderDto);
   }
+
+  @Get('my-warnings')
+  @ApiOperation({ summary: 'Get warnings for the authenticated provider' })
+  getMyWarnings(@Request() req) {
+    return this.providersService.getMyWarnings(req.user.id);
+  }
+
+  @Get('my-warnings/unread-count')
+  @ApiOperation({ summary: 'Get unread warning count for the authenticated provider' })
+  getMyWarningsUnreadCount(@Request() req) {
+    return this.providersService.getMyWarningsUnreadCount(req.user.id);
+  }
+
+  @Patch('my-warnings/:warningId/read')
+  @ApiOperation({ summary: 'Mark a warning as read' })
+  @ApiParam({ name: 'warningId', description: 'Warning ID (UUID)' })
+  markWarningRead(
+    @Param('warningId', ParseUUIDPipe) warningId: string,
+    @Request() req,
+  ) {
+    return this.providersService.markWarningRead(req.user.id, warningId);
+  }
 }

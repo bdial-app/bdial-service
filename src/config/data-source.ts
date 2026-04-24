@@ -24,6 +24,10 @@ import { AdEvent } from '../entities/ad-event.entity';
 import { AppInvite } from '../entities/app-invite.entity';
 import { ProviderAnalyticsEvent } from '../entities/provider-analytics-event.entity';
 import { ProviderLead } from '../entities/provider-lead.entity';
+import { Report } from '../entities/report.entity';
+import { ProviderWarning } from '../entities/provider-warning.entity';
+import { AuditLog } from '../entities/audit-log.entity';
+import { SystemSetting } from '../entities/system-setting.entity';
 
 export const ALL_ENTITIES = [
   User,
@@ -51,6 +55,10 @@ export const ALL_ENTITIES = [
   AppInvite,
   ProviderAnalyticsEvent,
   ProviderLead,
+  Report,
+  ProviderWarning,
+  AuditLog,
+  SystemSetting,
 ];
 
 export function buildTypeOrmOptions(url: string): DataSourceOptions {
