@@ -22,6 +22,7 @@ import { AuthGuard } from '@nestjs/passport';
 import { AnalyticsService } from './analytics.service';
 import { TrackEventsDto } from './dto/track-events.dto';
 import { AnalyticsSummaryDto, LeadsQueryDto } from './dto/analytics-query.dto';
+import { Public } from '../common/decorators/public.decorator';
 
 class OptionalJwtGuard extends AuthGuard('jwt') {
   handleRequest(err: any, user: any) {
@@ -37,6 +38,7 @@ export class AnalyticsController {
   // ─── Event Ingestion (fire-and-forget, 204) ───────────────────────
 
   @Post('events')
+  @Public()
   @UseGuards(OptionalJwtGuard)
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Batch-track analytics events' })
