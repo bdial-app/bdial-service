@@ -7,9 +7,11 @@ import {
   ManyToOne,
   OneToMany,
   JoinColumn,
+  Index,
 } from 'typeorm';
 
 @Entity('categories')
+@Index(['parentId'])
 export class Category {
   @PrimaryGeneratedColumn('uuid')
   id: string;

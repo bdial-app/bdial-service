@@ -15,6 +15,7 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import { HomeService } from './home.service';
 import { HomeFeedDto } from './dto/home-feed.dto';
+import { Public } from '../common/decorators/public.decorator';
 
 /**
  * Optional JWT guard — extracts user if token is present, but doesn't reject anonymous requests.
@@ -27,6 +28,7 @@ class OptionalJwtGuard extends AuthGuard('jwt') {
 
 @ApiTags('Home')
 @Controller('home')
+@Public()
 export class HomeController {
   constructor(private readonly homeService: HomeService) {}
 

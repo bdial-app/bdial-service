@@ -16,6 +16,7 @@ import { ReviewReport } from './review-report.entity';
 @Entity('reviews')
 @Unique(['providerId', 'reviewerId'])
 @Index(['providerId', 'status'])
+@Index(['reviewerId'])
 export class Review {
   @PrimaryGeneratedColumn('uuid')
   id: string;

@@ -14,6 +14,7 @@ import { User } from './user.entity';
 @Entity('conversation_participants')
 @Unique(['conversationId', 'userId'])
 @Index(['userId', 'isActive'])
+@Index(['conversationId'])
 export class ConversationParticipant {
   @PrimaryGeneratedColumn('uuid')
   id: string;

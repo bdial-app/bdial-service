@@ -25,9 +25,11 @@ import {
 import { CategoriesService } from './categories.service';
 import { UpdateCategoryDto, CreateCategoryDto } from './dto/category.dto';
 import { PaginationDto } from './dto/pagination.dto';
+import { Public } from '../common/decorators/public.decorator';
 
 @ApiTags('Categories')
 @Controller('categories')
+@Public()
 export class CategoriesController {
   constructor(private readonly categoriesService: CategoriesService) {}
 

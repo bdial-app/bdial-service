@@ -1,26 +1,31 @@
-# Use an official Node.js runtime as a parent image
-FROM node:18-alpine
+# ── Build stage ──────────────────────────────────────────────
+FROM node:20-alpine AS builder
 
-# Set the working directory inside the container
 WORKDIR /usr/src/app
 
-# Copy package.json and package-lock.json first to leverage Docker cache
 COPY package*.json ./
+RUN npm ci
 
-# Install dependencies
-RUN npm install && npm cache clean --force
-
-# Copy the rest of the application files
 COPY . .
-
-# Build the NestJS app
 RUN npm run build
 
-# Expose the application port change if needed
-EXPOSE 3000
+# ── Production stage ─────────────────────────────────────────
+FROM node:20-alpine
 
-# Specify environment variables (or use a .env file)
+WORKDIR /usr/src/app
+
+# Run as non-root
+RUN addgroup -g 1001 -S appgroup && adduser -S appuser -G appgroup -u 1001
+
+COPY package*.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+
+COPY --from=builder /usr/src/app/dist ./dist
+
 ENV NODE_ENV=production
 
-# Run the application
+EXPOSE 3001
+
+USER appuser
+
 CMD ["node", "dist/main.js"]

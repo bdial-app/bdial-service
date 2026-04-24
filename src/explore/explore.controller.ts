@@ -19,6 +19,7 @@ import { AuthGuard } from '@nestjs/passport';
 import { ExploreService } from './explore.service';
 import { ExploreFeedDto } from './dto/explore-feed.dto';
 import { TrackAdEventDto } from './dto/track-ad-event.dto';
+import { Public } from '../common/decorators/public.decorator';
 
 class OptionalJwtGuard extends AuthGuard('jwt') {
   handleRequest(err: any, user: any) {
@@ -32,6 +33,7 @@ export class ExploreController {
   constructor(private readonly exploreService: ExploreService) {}
 
   @Get('feed')
+  @Public()
   @UseGuards(OptionalJwtGuard)
   @ApiBearerAuth()
   @ApiOperation({
@@ -46,6 +48,7 @@ export class ExploreController {
   }
 
   @Post('track')
+  @Public()
   @UseGuards(OptionalJwtGuard)
   @ApiBearerAuth()
   @HttpCode(HttpStatus.NO_CONTENT)

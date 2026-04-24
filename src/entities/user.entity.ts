@@ -7,6 +7,7 @@ import {
   OneToMany,
   OneToOne,
 } from 'typeorm';
+import { Exclude } from 'class-transformer';
 import { Verification } from './verification.entity';
 import { Review } from './review.entity';
 import { ReviewReport } from './review-report.entity';
@@ -51,12 +52,15 @@ export class User {
   status: string;
 
   @Column({ name: 'supabase_id', type: 'varchar', length: 100, nullable: true, unique: true })
+  @Exclude()
   supabaseId: string | null;
 
   @Column({ name: 'google_id', type: 'varchar', length: 150, nullable: true, unique: true })
+  @Exclude()
   googleId: string | null;
 
   @Column({ name: 'google_email', type: 'varchar', length: 150, nullable: true })
+  @Exclude()
   googleEmail: string | null;
 
   @Column({ name: 'google_name', type: 'varchar', length: 150, nullable: true })
@@ -66,6 +70,7 @@ export class User {
   ssoProvider: string | null;
 
   @Column({ name: 'deleted_at', type: 'timestamptz', nullable: true })
+  @Exclude()
   deletedAt: Date | null;
 
   @Column({ name: 'preferred_mode', type: 'varchar', length: 20, default: 'customer' })

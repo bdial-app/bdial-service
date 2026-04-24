@@ -33,6 +33,59 @@ export class ExploreService {
     @InjectRepository(AdEvent) private adEventRepo: Repository<AdEvent>,
   ) {}
 
+  // ─── Performance Helpers ─────────────────────────────────────
+
+  /** Parameterized haversine — use with qb.setParameter('lat', lat).setParameter('lng', lng) */
+  private static readonly HAVERSINE =
+    `6371 * acos(LEAST(1.0, cos(radians(:lat)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians(:lng)) + sin(radians(:lat)) * sin(radians(p.latitude))))`;
+
+  /** Pre-aggregated review stats JOIN — eliminates N correlated subqueries per request */
+  private withReviewStats(qb: any): void {
+    qb.leftJoin(
+      (sub) => sub
+        .select('rv.provider_id', 'provider_id')
+        .addSelect('COALESCE(AVG(rv.star_rating)::numeric(2,1), 0)', 'avg_rating')
+        .addSelect('COALESCE(COUNT(rv.id)::int, 0)', 'review_count')
+        .from('reviews', 'rv')
+        .where("rv.status = 'active'")
+        .groupBy('rv.provider_id'),
+      'rs',
+      'rs.provider_id = p.id',
+    );
+    qb.addSelect('COALESCE(rs.avg_rating, 0)', 'rating')
+      .addSelect('COALESCE(rs.review_count, 0)', 'reviewCount');
+  }
+
+  /** Pre-aggregated category names JOIN */
+  private withCategoryServices(qb: any): void {
+    qb.leftJoin(
+      (sub) => sub
+        .select('pcs.provider_id', 'provider_id')
+        .addSelect("string_agg(DISTINCT cats.name, ', ' ORDER BY cats.name)", 'services')
+        .from('provider_categories', 'pcs')
+        .innerJoin('categories', 'cats', 'cats.id = pcs.category_id')
+        .groupBy('pcs.provider_id'),
+      'cs',
+      'cs.provider_id = p.id',
+    );
+    qb.addSelect('cs.services', 'services');
+  }
+
+  /** Adds distance column + bounding-box pre-filter for geo queries */
+  private withGeo(qb: any, lat: number, lng: number, maxKm?: number): void {
+    qb.setParameter('lat', lat)
+      .setParameter('lng', lng)
+      .addSelect(ExploreService.HAVERSINE, 'distance')
+      .andWhere('p.latitude IS NOT NULL')
+      .andWhere('p.longitude IS NOT NULL');
+    if (maxKm != null) {
+      const dLat = maxKm / 111.32;
+      const dLng = maxKm / (111.32 * Math.cos((lat * Math.PI) / 180));
+      qb.andWhere('p.latitude BETWEEN :minLat AND :maxLat', { minLat: lat - dLat, maxLat: lat + dLat })
+        .andWhere('p.longitude BETWEEN :minLng AND :maxLng', { minLng: lng - dLng, maxLng: lng + dLng });
+    }
+  }
+
   /**
    * Single aggregated explore feed — returns all sections in one call.
    */
@@ -112,23 +165,14 @@ export class ExploreService {
         'sl.id AS "sponsoredListingId"',
         'sl.cost_per_click AS "costPerClick"',
       ])
-      .addSelect(
-        `COALESCE((SELECT AVG(r.star_rating)::numeric(2,1) FROM reviews r WHERE r.provider_id = p.id AND r.status = 'active'), 0)`,
-        'rating',
-      )
-      .addSelect(
-        `COALESCE((SELECT COUNT(r.id)::int FROM reviews r WHERE r.provider_id = p.id AND r.status = 'active'), 0)`,
-        'reviewCount',
-      )
-      .addSelect(
-        `(SELECT string_agg(DISTINCT c.name, ', ' ORDER BY c.name) FROM categories c JOIN provider_categories pc ON pc.category_id = c.id WHERE pc.provider_id = p.id)`,
-        'services',
-      )
       .where('sl.is_active = :active', { active: true })
       .andWhere('sl.starts_at <= :now', { now })
       .andWhere('sl.ends_at >= :now', { now })
       .andWhere('sl.spent_amount < sl.budget_amount')
       .andWhere("p.status IN ('active', 'unverified')");
+
+    this.withReviewStats(qb);
+    this.withCategoryServices(qb);
 
     // Location targeting
     if (city) {
@@ -139,7 +183,8 @@ export class ExploreService {
     }
 
     if (lat != null && lng != null) {
-      const haversine = `6371 * acos(LEAST(1.0, cos(radians(${lat})) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians(${lng})) + sin(radians(${lat})) * sin(radians(p.latitude))))`;
+      const haversine = ExploreService.HAVERSINE;
+      qb.setParameter('lat', lat).setParameter('lng', lng);
       qb.addSelect(haversine, 'distance');
       qb.andWhere(
         `(sl.target_radius IS NULL OR ${haversine} <= sl.target_radius)`,
@@ -179,7 +224,7 @@ export class ExploreService {
     const hasLocation = lat != null && lng != null;
 
     const haversine = hasLocation
-      ? `6371 * acos(LEAST(1.0, cos(radians(${lat})) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians(${lng})) + sin(radians(${lat})) * sin(radians(p.latitude))))`
+      ? ExploreService.HAVERSINE
       : 'NULL';
 
     const qb = this.offerRepo
@@ -199,21 +244,16 @@ export class ExploreService {
         'o.discount_value AS "discountValue"',
         'o.ends_at AS "offerEndsAt"',
       ])
-      .addSelect(
-        `COALESCE((SELECT AVG(r.star_rating)::numeric(2,1) FROM reviews r WHERE r.provider_id = p.id AND r.status = 'active'), 0)`,
-        'rating',
-      )
-      .addSelect(
-        `COALESCE((SELECT COUNT(r.id)::int FROM reviews r WHERE r.provider_id = p.id AND r.status = 'active'), 0)`,
-        'reviewCount',
-      )
       .where('o.is_active = :active', { active: true })
       .andWhere('o.starts_at <= :now', { now })
       .andWhere('o.ends_at >= :now', { now })
       .andWhere('(o.usage_limit IS NULL OR o.usage_count < o.usage_limit)')
       .andWhere("p.status IN ('active', 'unverified')");
 
+    this.withReviewStats(qb);;
+
     if (hasLocation) {
+      qb.setParameter('lat', lat).setParameter('lng', lng);
       qb.addSelect(haversine, 'distance');
       qb.andWhere('p.latitude IS NOT NULL')
         .andWhere('p.longitude IS NOT NULL')
@@ -251,9 +291,6 @@ export class ExploreService {
 
   private async getPopularNearby(lat?: number, lng?: number, city?: string, limit = 6) {
     const hasLocation = lat != null && lng != null;
-    const haversine = hasLocation
-      ? `6371 * acos(LEAST(1.0, cos(radians(${lat})) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians(${lng})) + sin(radians(${lat})) * sin(radians(p.latitude))))`
-      : 'NULL';
 
     const qb = this.providerRepo
       .createQueryBuilder('p')
@@ -269,26 +306,14 @@ export class ExploreService {
         'p.is_women_led AS "isWomenLed"',
         'p.is_featured AS "isFeatured"',
       ])
-      .addSelect(
-        `COALESCE((SELECT AVG(r.star_rating)::numeric(2,1) FROM reviews r WHERE r.provider_id = p.id AND r.status = 'active'), 0)`,
-        'rating',
-      )
-      .addSelect(
-        `COALESCE((SELECT COUNT(r.id)::int FROM reviews r WHERE r.provider_id = p.id AND r.status = 'active'), 0)`,
-        'reviewCount',
-      )
-      .addSelect(
-        `(SELECT string_agg(DISTINCT c.name, ', ' ORDER BY c.name) FROM categories c JOIN provider_categories pc ON pc.category_id = c.id WHERE pc.provider_id = p.id)`,
-        'services',
-      )
       .where("p.status IN ('active', 'unverified')");
 
+    this.withReviewStats(qb);
+    this.withCategoryServices(qb);
+
     if (hasLocation) {
-      qb.addSelect(haversine, 'distance')
-        .andWhere('p.latitude IS NOT NULL')
-        .andWhere('p.longitude IS NOT NULL')
-        .andWhere(`${haversine} <= 25`)
-        .orderBy("CASE WHEN p.status = 'active' THEN 0 ELSE 1 END", 'ASC')
+      this.withGeo(qb, lat!, lng!, 25);
+      qb.orderBy("CASE WHEN p.status = 'active' THEN 0 ELSE 1 END", 'ASC')
         .addOrderBy('distance', 'ASC');
     } else if (city) {
       qb.andWhere('p.city ILIKE :city', { city: `%${city}%` })
@@ -309,9 +334,6 @@ export class ExploreService {
 
   private async getTopRated(lat?: number, lng?: number, city?: string, limit = 8) {
     const hasLocation = lat != null && lng != null;
-    const haversine = hasLocation
-      ? `6371 * acos(LEAST(1.0, cos(radians(${lat})) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians(${lng})) + sin(radians(${lat})) * sin(radians(p.latitude))))`
-      : 'NULL';
 
     const qb = this.providerRepo
       .createQueryBuilder('p')
@@ -325,31 +347,18 @@ export class ExploreService {
         'p.status AS status',
         'p.is_women_led AS "isWomenLed"',
       ])
-      .addSelect(
-        `COALESCE((SELECT AVG(r.star_rating)::numeric(2,1) FROM reviews r WHERE r.provider_id = p.id AND r.status = 'active'), 0)`,
-        'rating',
-      )
-      .addSelect(
-        `COALESCE((SELECT COUNT(r.id)::int FROM reviews r WHERE r.provider_id = p.id AND r.status = 'active'), 0)`,
-        'reviewCount',
-      )
-      .addSelect(
-        `(SELECT string_agg(DISTINCT c.name, ', ' ORDER BY c.name) FROM categories c JOIN provider_categories pc ON pc.category_id = c.id WHERE pc.provider_id = p.id)`,
-        'services',
-      )
-      .where("p.status IN ('active', 'unverified')")
-      .andWhere(
-        `(SELECT AVG(r2.star_rating) FROM reviews r2 WHERE r2.provider_id = p.id AND r2.status = 'active') >= 4.0`,
-      )
-      .andWhere(
-        `(SELECT COUNT(r3.id) FROM reviews r3 WHERE r3.provider_id = p.id AND r3.status = 'active') >= 1`,
-      );
+      .where("p.status IN ('active', 'unverified')");
+
+    this.withReviewStats(qb);
+    this.withCategoryServices(qb);
+
+    // Filter using JOINed review stats instead of correlated subqueries
+    qb.andWhere('COALESCE(rs.avg_rating, 0) >= 4.0')
+      .andWhere('COALESCE(rs.review_count, 0) >= 1');
 
     if (hasLocation) {
-      qb.addSelect(haversine, 'distance')
-        .andWhere('p.latitude IS NOT NULL')
-        .andWhere('p.longitude IS NOT NULL')
-        .orderBy('rating', 'DESC')
+      this.withGeo(qb, lat!, lng!);
+      qb.orderBy('rating', 'DESC')
         .addOrderBy('distance', 'ASC');
     } else if (city) {
       qb.andWhere('p.city ILIKE :city', { city: `%${city}%` })
@@ -388,9 +397,6 @@ export class ExploreService {
     const categoryIds = [cat.id, ...subcategories.map((c) => c.id)];
 
     const hasLocation = lat != null && lng != null;
-    const haversine = hasLocation
-      ? `6371 * acos(LEAST(1.0, cos(radians(${lat})) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians(${lng})) + sin(radians(${lat})) * sin(radians(p.latitude))))`
-      : 'NULL';
 
     const qb = this.providerRepo
       .createQueryBuilder('p')
@@ -404,18 +410,6 @@ export class ExploreService {
         'p.status AS status',
         'p.is_women_led AS "isWomenLed"',
       ])
-      .addSelect(
-        `COALESCE((SELECT AVG(r.star_rating)::numeric(2,1) FROM reviews r WHERE r.provider_id = p.id AND r.status = 'active'), 0)`,
-        'rating',
-      )
-      .addSelect(
-        `COALESCE((SELECT COUNT(r.id)::int FROM reviews r WHERE r.provider_id = p.id AND r.status = 'active'), 0)`,
-        'reviewCount',
-      )
-      .addSelect(
-        `(SELECT string_agg(DISTINCT c.name, ', ' ORDER BY c.name) FROM categories c JOIN provider_categories pc ON pc.category_id = c.id WHERE pc.provider_id = p.id)`,
-        'services',
-      )
       .innerJoin(
         'provider_categories',
         'pc',
@@ -425,11 +419,12 @@ export class ExploreService {
       .where("p.status IN ('active', 'unverified')")
       .groupBy('p.id');
 
+    this.withReviewStats(qb);
+    this.withCategoryServices(qb);
+
     if (hasLocation) {
-      qb.addSelect(haversine, 'distance')
-        .andWhere('p.latitude IS NOT NULL')
-        .andWhere('p.longitude IS NOT NULL')
-        .orderBy('distance', 'ASC');
+      this.withGeo(qb, lat!, lng!);
+      qb.orderBy('distance', 'ASC');
     } else {
       qb.orderBy('p.created_at', 'DESC');
     }
@@ -456,9 +451,6 @@ export class ExploreService {
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
     const hasLocation = lat != null && lng != null;
-    const haversine = hasLocation
-      ? `6371 * acos(LEAST(1.0, cos(radians(${lat})) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians(${lng})) + sin(radians(${lat})) * sin(radians(p.latitude))))`
-      : 'NULL';
 
     const qb = this.providerRepo
       .createQueryBuilder('p')
@@ -473,26 +465,15 @@ export class ExploreService {
         'p.is_women_led AS "isWomenLed"',
         'p.created_at AS "createdAt"',
       ])
-      .addSelect(
-        `COALESCE((SELECT AVG(r.star_rating)::numeric(2,1) FROM reviews r WHERE r.provider_id = p.id AND r.status = 'active'), 0)`,
-        'rating',
-      )
-      .addSelect(
-        `COALESCE((SELECT COUNT(r.id)::int FROM reviews r WHERE r.provider_id = p.id AND r.status = 'active'), 0)`,
-        'reviewCount',
-      )
-      .addSelect(
-        `(SELECT string_agg(DISTINCT c.name, ', ' ORDER BY c.name) FROM categories c JOIN provider_categories pc ON pc.category_id = c.id WHERE pc.provider_id = p.id)`,
-        'services',
-      )
       .where("p.status IN ('active', 'unverified')")
       .andWhere('p.created_at >= :since', { since: thirtyDaysAgo });
 
+    this.withReviewStats(qb);
+    this.withCategoryServices(qb);
+
     if (hasLocation) {
-      qb.addSelect(haversine, 'distance')
-        .andWhere('p.latitude IS NOT NULL')
-        .andWhere('p.longitude IS NOT NULL')
-        .orderBy('p.created_at', 'DESC')
+      this.withGeo(qb, lat!, lng!);
+      qb.orderBy('p.created_at', 'DESC')
         .addOrderBy('distance', 'ASC');
     } else if (city) {
       qb.andWhere('p.city ILIKE :city', { city: `%${city}%` })

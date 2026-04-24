@@ -36,12 +36,15 @@ export class ReviewsService {
     return this.reviewRepo.save(review);
   }
 
-  async getForProvider(providerId: string) {
-    return this.reviewRepo.find({
+  async getForProvider(providerId: string, page = 1, limit = 20) {
+    const [data, total] = await this.reviewRepo.findAndCount({
       where: { providerId, status: 'active' },
       order: { postedAt: 'DESC' },
       relations: ['reviewer', 'photos'],
+      take: limit,
+      skip: (page - 1) * limit,
     });
+    return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
   async report(reviewId: string, userId: string, dto: ReportReviewDto) {

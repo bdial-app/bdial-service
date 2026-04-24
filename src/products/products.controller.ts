@@ -14,6 +14,7 @@ import { ApiOperation, ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import { ProductsService } from './products.service';
 import { CreateProductDto, UpdateProductDto } from './dto/product.dto';
+import { Public } from '../common/decorators/public.decorator';
 
 @ApiTags('Products')
 @Controller('products')
@@ -21,6 +22,7 @@ export class ProductsController {
   constructor(private readonly productsService: ProductsService) {}
 
   @Get(':id')
+  @Public()
   @ApiOperation({ summary: 'Get product detail' })
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.productsService.findOne(id);

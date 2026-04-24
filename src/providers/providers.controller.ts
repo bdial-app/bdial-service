@@ -37,6 +37,8 @@ import { NearbyProvidersDto } from './dto/nearby-providers.dto';
 import { CreateOfferDto } from './dto/create-offer.dto';
 import { UpdateOfferDto } from './dto/update-offer.dto';
 import { CreateSponsorshipDto, UpdateSponsorshipDto } from './dto/sponsorship.dto';
+import { Public } from '../common/decorators/public.decorator';
+import { Throttle } from '@nestjs/throttler';
 
 @ApiTags('Providers')
 @Controller('providers')
@@ -44,6 +46,7 @@ export class ProvidersController {
   constructor(private readonly providersService: ProvidersService) {}
 
   @Post()
+  @Public()
   @ApiOperation({ summary: 'Create a new provider' })
   @ApiResponse({ status: 201, description: 'Provider created successfully' })
   @ApiResponse({ status: 400, description: 'Bad Request' })
@@ -54,6 +57,8 @@ export class ProvidersController {
   }
 
   @Post('send-otp')
+  @Public()
+  @Throttle({ default: { ttl: 60000, limit: 5 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Send OTP to provider contact number for verification' })
   @ApiResponse({ status: 200, description: 'OTP sent successfully' })
@@ -62,6 +67,8 @@ export class ProvidersController {
   }
 
   @Post('verify-otp')
+  @Public()
+  @Throttle({ default: { ttl: 60000, limit: 10 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Verify provider contact number OTP' })
   @ApiResponse({ status: 200, description: 'OTP verified successfully' })
@@ -106,6 +113,7 @@ export class ProvidersController {
   }
 
   @Get('nearby')
+  @Public()
   @ApiOperation({ summary: 'Get providers near a location with Haversine distance (Flow 1-c)' })
   @ApiResponse({ status: 200, description: 'Nearby providers with distance in km' })
   getNearbyProviders(@Query() dto: NearbyProvidersDto) {
@@ -113,6 +121,7 @@ export class ProvidersController {
   }
 
   @Get('featured')
+  @Public()
   @ApiOperation({ summary: 'Get featured/top providers near a location (Flow 1-b)' })
   @ApiResponse({ status: 200, description: 'Top 10 nearest active providers' })
   @ApiQuery({ name: 'lat', required: true, type: Number })
@@ -131,6 +140,7 @@ export class ProvidersController {
   }
 
   @Get()
+  @Public()
   @ApiOperation({ summary: 'Get providers list with pagination and filters' })
   @ApiResponse({ status: 200, description: 'Providers retrieved successfully' })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
@@ -214,6 +224,7 @@ export class ProvidersController {
   // ─── Sponsorship Endpoints ─────────────────────────────────────
 
   @Get('sponsorship-plans')
+  @Public()
   @ApiOperation({ summary: 'Get available sponsorship plans' })
   @ApiResponse({ status: 200, description: 'Plans retrieved' })
   getSponsorshipPlans() {
@@ -271,6 +282,7 @@ export class ProvidersController {
   }
 
   @Get(':id')
+  @Public()
   @ApiOperation({ summary: 'Get provider by ID' })
   @ApiResponse({ status: 200, description: 'Provider retrieved successfully' })
   @ApiResponse({ status: 404, description: 'Provider not found' })
@@ -280,6 +292,7 @@ export class ProvidersController {
   }
 
   @Get(':id/details')
+  @Public()
   @ApiOperation({
     summary:
       'Get provider details aggregate (provider + listings + photos + products + reviews + stats)',

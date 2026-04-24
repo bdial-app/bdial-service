@@ -2,9 +2,11 @@ import { Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { AdminAuthService } from './admin-auth.service';
 import { SendAdminOtpDto, VerifyAdminOtpDto } from './dto/admin-auth.dto';
+import { Public } from '../common/decorators/public.decorator';
 
 @ApiTags('Admin Auth')
 @Controller('admin-auth')
+@Public()
 export class AdminAuthController {
   constructor(private readonly adminAuthService: AdminAuthService) {}
 

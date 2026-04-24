@@ -18,6 +18,7 @@ import { SearchService } from './search.service';
 import { SearchQueryDto } from './dto/search-query.dto';
 import { SuggestionsQueryDto } from './dto/suggestions-query.dto';
 import { TrendingQueryDto, RecentQueryDto } from './dto/trending-query.dto';
+import { Public } from '../common/decorators/public.decorator';
 
 /**
  * Optional JWT guard — extracts user if token present, doesn't reject anonymous.
@@ -38,6 +39,7 @@ export class SearchController {
   // ────────────────────────────────────────────────────────────
 
   @Get()
+  @Public()
   @UseGuards(OptionalJwtGuard)
   @ApiBearerAuth()
   @ApiOperation({
@@ -57,6 +59,7 @@ export class SearchController {
   // ────────────────────────────────────────────────────────────
 
   @Get('suggestions')
+  @Public()
   @ApiOperation({
     summary: 'Get autocomplete suggestions',
     description:
@@ -73,6 +76,7 @@ export class SearchController {
   // ────────────────────────────────────────────────────────────
 
   @Get('trending')
+  @Public()
   @ApiOperation({
     summary: 'Get trending search queries',
     description: 'Returns top search queries in the last 7 days, optionally filtered by city.',

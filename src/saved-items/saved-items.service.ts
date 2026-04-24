@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
-import { SavedItem, Provider, Product } from '../entities';
+import { SavedItem, Provider, Product, Review } from '../entities';
 
 @Injectable()
 export class SavedItemsService {
@@ -9,6 +9,7 @@ export class SavedItemsService {
     @InjectRepository(SavedItem) private savedItemRepo: Repository<SavedItem>,
     @InjectRepository(Provider) private providerRepo: Repository<Provider>,
     @InjectRepository(Product) private productRepo: Repository<Product>,
+    @InjectRepository(Review) private reviewRepo: Repository<Review>,
   ) {}
 
   async toggle(userId: string, itemId: string, itemType: 'provider' | 'product') {
@@ -36,11 +37,11 @@ export class SavedItemsService {
     const providerIds = savedItems.filter((s) => s.itemType === 'provider').map((s) => s.itemId);
     const productIds = savedItems.filter((s) => s.itemType === 'product').map((s) => s.itemId);
 
-    const [providers, products] = await Promise.all([
+    const [providers, products, reviewStatsRaw] = await Promise.all([
       providerIds.length > 0
         ? this.providerRepo.find({
             where: { id: In(providerIds) },
-            relations: ['providerCategories', 'providerCategories.category', 'reviews'],
+            relations: ['providerCategories', 'providerCategories.category'],
           })
         : ([] as Provider[]),
       productIds.length > 0
@@ -49,7 +50,26 @@ export class SavedItemsService {
             relations: ['provider'],
           })
         : ([] as Product[]),
+      providerIds.length > 0
+        ? this.reviewRepo
+            .createQueryBuilder('r')
+            .select('r.provider_id', 'providerId')
+            .addSelect('COALESCE(AVG(r.star_rating)::numeric(2,1), 0)', 'avgRating')
+            .addSelect('COALESCE(COUNT(r.id)::int, 0)', 'reviewCount')
+            .where('r.provider_id IN (:...providerIds)', { providerIds })
+            .andWhere("r.status = 'active'")
+            .groupBy('r.provider_id')
+            .getRawMany()
+        : [],
     ]);
+
+    const reviewStatsMap = new Map<string, { avgRating: number; reviewCount: number }>();
+    for (const rs of reviewStatsRaw) {
+      reviewStatsMap.set(rs.providerId, {
+        avgRating: parseFloat(rs.avgRating) || 0,
+        reviewCount: parseInt(rs.reviewCount, 10) || 0,
+      });
+    }
 
     // Build enriched response maintaining saved order
     return savedItems.map((si) => {
@@ -57,12 +77,7 @@ export class SavedItemsService {
         const provider = providers.find((p) => p.id === si.itemId);
         if (!provider) return null;
 
-        const allReviews = (provider.reviews ?? []).filter((r) => r.status === 'active');
-        const reviewCount = allReviews.length;
-        const rating =
-          reviewCount > 0
-            ? allReviews.reduce((sum, r) => sum + (r.starRating ?? 0), 0) / reviewCount
-            : 0;
+        const stats = reviewStatsMap.get(provider.id) || { avgRating: 0, reviewCount: 0 };
         const categories = Array.from(
           new Set(
             (provider.providerCategories ?? [])
@@ -79,8 +94,8 @@ export class SavedItemsService {
           name: provider.brandName,
           image: provider.profilePhotoUrl,
           category: categories.join(', ') || 'Services',
-          rating: Number(rating.toFixed(1)),
-          reviews: reviewCount,
+          rating: stats.avgRating,
+          reviews: stats.reviewCount,
           location: [provider.area, provider.city].filter(Boolean).join(', '),
           verified: provider.status === 'active',
           isOpen: provider.isAvailable,

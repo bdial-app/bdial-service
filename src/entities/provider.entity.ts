@@ -19,6 +19,9 @@ import { Review } from './review.entity';
 @Index(['status', 'city'])
 @Index(['isWomenLed', 'status'])
 @Index(['communityVerified', 'status'])
+@Index(['latitude', 'longitude'])
+@Index(['isFeatured', 'status'])
+@Index(['createdAt'])
 export class Provider {
   @PrimaryGeneratedColumn('uuid')
   id: string;

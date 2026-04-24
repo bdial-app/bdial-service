@@ -47,11 +47,14 @@ export class ProductsService {
     return { success: true };
   }
 
-  async findByProvider(providerId: string) {
-    return this.productRepo.find({
+  async findByProvider(providerId: string, page = 1, limit = 20) {
+    const [data, total] = await this.productRepo.findAndCount({
       where: { providerId },
       order: { displayOrder: 'ASC', name: 'ASC' },
+      take: limit,
+      skip: (page - 1) * limit,
     });
+    return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
   async findOne(id: string) {
@@ -63,8 +66,8 @@ export class ProductsService {
 
     const provider = product.provider;
 
-    // Get provider photos, categories, reviews for context
-    const [photos, providerCats, reviews] = await Promise.all([
+    // Get provider photos, categories, review STATS (aggregated in SQL), and recent reviews
+    const [photos, providerCats, reviewStats, reviews] = await Promise.all([
       this.photoRepo.find({
         where: { providerId: provider.id },
         order: { displayOrder: 'ASC' },
@@ -73,10 +76,19 @@ export class ProductsService {
         where: { providerId: provider.id },
         relations: ['category'],
       }),
+      this.reviewRepo
+        .createQueryBuilder('r')
+        .select('COALESCE(AVG(r.star_rating)::numeric(2,1), 0)', 'avgRating')
+        .addSelect('COALESCE(COUNT(r.id)::int, 0)', 'totalCount')
+        .addSelect(`json_agg(json_build_object('star', r.star_rating)) FILTER (WHERE r.star_rating IS NOT NULL)`, 'ratingList')
+        .where('r.provider_id = :pid', { pid: provider.id })
+        .andWhere("r.status = 'active'")
+        .getRawOne(),
       this.reviewRepo.find({
         where: { providerId: provider.id, status: 'active' },
         relations: ['reviewer', 'photos'],
         order: { postedAt: 'DESC' },
+        take: 10,
       }),
     ]);
 
@@ -88,15 +100,13 @@ export class ProductsService {
     });
 
     const ratingDist = [0, 0, 0, 0, 0];
-    reviews.forEach((r) => {
-      const idx = Math.max(0, Math.min(4, (r.starRating ?? 0) - 1));
+    const ratingList = reviewStats?.ratingList || [];
+    (Array.isArray(ratingList) ? ratingList : []).forEach((r: any) => {
+      const idx = Math.max(0, Math.min(4, (r.star ?? 0) - 1));
       ratingDist[idx]++;
     });
-    const reviewCount = reviews.length;
-    const rating =
-      reviewCount > 0
-        ? reviews.reduce((sum, r) => sum + (r.starRating ?? 0), 0) / reviewCount
-        : 0;
+    const reviewCount = parseInt(reviewStats?.totalCount || '0', 10);
+    const rating = parseFloat(reviewStats?.avgRating || '0');
 
     return {
       product,
@@ -128,7 +138,7 @@ export class ProductsService {
         reviewCount,
         ratingDist,
       },
-      reviews: reviews.slice(0, 10),
+      reviews,
     };
   }
 }

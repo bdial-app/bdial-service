@@ -22,6 +22,55 @@ export class HomeService {
     @InjectRepository(Photo) private photoRepo: Repository<Photo>,
   ) {}
 
+  // ─── Performance Helpers ─────────────────────────────────────
+
+  private static readonly HAVERSINE =
+    `6371 * acos(LEAST(1.0, cos(radians(:lat)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians(:lng)) + sin(radians(:lat)) * sin(radians(p.latitude))))`;
+
+  private withReviewStats(qb: any): void {
+    qb.leftJoin(
+      (sub) => sub
+        .select('rv.provider_id', 'provider_id')
+        .addSelect('COALESCE(AVG(rv.star_rating)::numeric(2,1), 0)', 'avg_rating')
+        .addSelect('COALESCE(COUNT(rv.id)::int, 0)', 'review_count')
+        .from('reviews', 'rv')
+        .where("rv.status = 'active'")
+        .groupBy('rv.provider_id'),
+      'rs',
+      'rs.provider_id = p.id',
+    );
+    qb.addSelect('COALESCE(rs.avg_rating, 0)', 'rating')
+      .addSelect('COALESCE(rs.review_count, 0)', 'reviewCount');
+  }
+
+  private withCategoryServices(qb: any): void {
+    qb.leftJoin(
+      (sub) => sub
+        .select('pcs.provider_id', 'provider_id')
+        .addSelect("string_agg(DISTINCT cats.name, ', ' ORDER BY cats.name)", 'services')
+        .from('provider_categories', 'pcs')
+        .innerJoin('categories', 'cats', 'cats.id = pcs.category_id')
+        .groupBy('pcs.provider_id'),
+      'cs',
+      'cs.provider_id = p.id',
+    );
+    qb.addSelect('cs.services', 'services');
+  }
+
+  private withGeo(qb: any, lat: number, lng: number, maxKm?: number): void {
+    qb.setParameter('lat', lat)
+      .setParameter('lng', lng)
+      .addSelect(HomeService.HAVERSINE, 'distance')
+      .andWhere('p.latitude IS NOT NULL')
+      .andWhere('p.longitude IS NOT NULL');
+    if (maxKm != null) {
+      const dLat = maxKm / 111.32;
+      const dLng = maxKm / (111.32 * Math.cos((lat * Math.PI) / 180));
+      qb.andWhere('p.latitude BETWEEN :minLat AND :maxLat', { minLat: lat - dLat, maxLat: lat + dLat })
+        .andWhere('p.longitude BETWEEN :minLng AND :maxLng', { minLng: lng - dLng, maxLng: lng + dLng });
+    }
+  }
+
   /**
    * Single aggregated home feed endpoint.
    * Combines: nearby providers, featured providers (by category),
@@ -72,10 +121,6 @@ export class HomeService {
   ) {
     const hasLocation = lat != null && lng != null;
 
-    const haversine = hasLocation
-      ? `6371 * acos(LEAST(1.0, cos(radians(${lat})) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians(${lng})) + sin(radians(${lat})) * sin(radians(p.latitude))))`
-      : 'NULL';
-
     const qb = this.providerRepo
       .createQueryBuilder('p')
       .select([
@@ -93,28 +138,17 @@ export class HomeService {
         'p.longitude AS longitude',
       ])
       .addSelect(
-        `COALESCE((SELECT AVG(r.star_rating)::numeric(2,1) FROM reviews r WHERE r.provider_id = p.id AND r.status = 'active'), 0)`,
-        'rating',
-      )
-      .addSelect(
-        `COALESCE((SELECT COUNT(r.id)::int FROM reviews r WHERE r.provider_id = p.id AND r.status = 'active'), 0)`,
-        'reviewCount',
-      )
-      .addSelect(
         `(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`,
         'listingPhoto',
       )
-      .addSelect(
-        `(SELECT string_agg(DISTINCT c.name, ', ' ORDER BY c.name) FROM categories c JOIN provider_categories pc ON pc.category_id = c.id WHERE pc.provider_id = p.id LIMIT 1)`,
-        'services',
-      )
       .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] });
 
+    this.withReviewStats(qb);
+    this.withCategoryServices(qb);
+
     if (hasLocation) {
-      qb.addSelect(haversine, 'distance')
-        .andWhere('p.latitude IS NOT NULL')
-        .andWhere('p.longitude IS NOT NULL')
-        .orderBy("CASE WHEN p.status = 'active' THEN 0 ELSE 1 END", 'ASC')
+      this.withGeo(qb, lat!, lng!);
+      qb.orderBy("CASE WHEN p.status = 'active' THEN 0 ELSE 1 END", 'ASC')
         .addOrderBy('distance', 'ASC');
     } else if (city) {
       qb.andWhere('p.city ILIKE :city', { city: `%${city}%` })
@@ -172,9 +206,6 @@ export class HomeService {
     const categoryIds = [category.id, ...subcategories.map((c) => c.id)];
 
     const hasLocation = lat != null && lng != null;
-    const haversine = hasLocation
-      ? `6371 * acos(LEAST(1.0, cos(radians(${lat})) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians(${lng})) + sin(radians(${lat})) * sin(radians(p.latitude))))`
-      : 'NULL';
 
     const qb = this.providerRepo
       .createQueryBuilder('p')
@@ -189,30 +220,19 @@ export class HomeService {
         'p.status AS status',
       ])
       .addSelect(
-        `COALESCE((SELECT AVG(r.star_rating)::numeric(2,1) FROM reviews r WHERE r.provider_id = p.id AND r.status = 'active'), 0)`,
-        'rating',
-      )
-      .addSelect(
-        `COALESCE((SELECT COUNT(r.id)::int FROM reviews r WHERE r.provider_id = p.id AND r.status = 'active'), 0)`,
-        'reviewCount',
-      )
-      .addSelect(
         `(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`,
         'listingPhoto',
-      )
-      .addSelect(
-        `(SELECT string_agg(DISTINCT c.name, ', ' ORDER BY c.name) FROM categories c JOIN provider_categories pc ON pc.category_id = c.id WHERE pc.provider_id = p.id LIMIT 1)`,
-        'services',
       )
       .innerJoin('provider_categories', 'pc', 'pc.provider_id = p.id AND pc.category_id IN (:...categoryIds)', { categoryIds })
       .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
       .groupBy('p.id');
 
+    this.withReviewStats(qb);
+    this.withCategoryServices(qb);
+
     if (hasLocation) {
-      qb.addSelect(haversine, 'distance')
-        .andWhere('p.latitude IS NOT NULL')
-        .andWhere('p.longitude IS NOT NULL')
-        .orderBy('distance', 'ASC');
+      this.withGeo(qb, lat!, lng!);
+      qb.orderBy('distance', 'ASC');
     } else if (city) {
       qb.andWhere('p.city ILIKE :city', { city: `%${city}%` })
         .orderBy('p.created_at', 'DESC');

@@ -1,6 +1,9 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { CacheModule } from '@nestjs/cache-manager';
+import { APP_GUARD } from '@nestjs/core';
 import { buildTypeOrmOptions } from './config/data-source';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -25,6 +28,8 @@ import { SearchModule } from './search/search.module';
 import { ExploreModule } from './explore/explore.module';
 import { InviteModule } from './invite/invite.module';
 import { AnalyticsModule } from './analytics/analytics.module';
+import { HealthModule } from './health/health.module';
+import { JwtAuthGuard } from './auth/jwt-auth.guard';
 
 @Module({
   imports: [
@@ -36,6 +41,13 @@ import { AnalyticsModule } from './analytics/analytics.module';
         logging: config.get('NODE_ENV') === 'development' ? ['error'] : false,
       }),
     }),
+
+    // Rate limiting — 100 requests per minute globally
+    ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]),
+
+    // In-memory cache with 5-minute default TTL
+    CacheModule.register({ isGlobal: true, ttl: 300000 }),
+
     StorageModule,
     PhotosModule,
     SupabaseModule,
@@ -57,8 +69,15 @@ import { AnalyticsModule } from './analytics/analytics.module';
     ExploreModule,
     InviteModule,
     AnalyticsModule,
+    HealthModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    // Global JWT auth guard — all endpoints require auth unless marked @Public()
+    { provide: APP_GUARD, useClass: JwtAuthGuard },
+    // Global rate limiter guard
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
+  ],
 })
 export class AppModule {}

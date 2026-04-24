@@ -3,6 +3,8 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagg
 import { AuthGuard } from '@nestjs/passport';
 import { ConfigService } from '@nestjs/config';
 import { AuthService } from './auth.service';
+import { Public } from '../common/decorators/public.decorator';
+import { Throttle } from '@nestjs/throttler';
 import {
   SendOtpDto,
   VerifyOtpDto,
@@ -16,6 +18,7 @@ import {
 
 @ApiTags('Auth')
 @Controller('auth')
+@Public()
 export class AuthController {
   constructor(
     private readonly authService: AuthService,
@@ -23,6 +26,7 @@ export class AuthController {
   ) {}
 
   @Post('send-otp')
+  @Throttle({ default: { ttl: 60000, limit: 5 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Send OTP to mobile number' })
   @ApiResponse({ status: 200, description: 'OTP sent successfully' })
@@ -31,6 +35,7 @@ export class AuthController {
   }
 
   @Post('admin/send-otp')
+  @Throttle({ default: { ttl: 60000, limit: 5 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Send OTP to admin mobile number' })
   @ApiResponse({ status: 200, description: 'OTP sent successfully' })
@@ -39,6 +44,7 @@ export class AuthController {
   }
 
   @Post('verify-otp')
+  @Throttle({ default: { ttl: 60000, limit: 10 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Verify OTP and get JWT token' })
   @ApiResponse({ status: 200, description: 'Returns JWT access token and user' })

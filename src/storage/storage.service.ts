@@ -1,4 +1,4 @@
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   S3Client,
@@ -6,6 +6,9 @@ import {
   PutObjectCommand,
 } from '@aws-sdk/client-s3';
 import { v4 as uuidv4 } from 'uuid';
+
+const ALLOWED_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp']);
+const ALLOWED_MIMES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp']);
 
 @Injectable()
 export class StorageService {
@@ -38,7 +41,13 @@ export class StorageService {
     folder: string,
     file: Express.Multer.File,
   ): Promise<{ url: string; storageKey: string }> {
-    const ext = file.originalname.split('.').pop();
+    const ext = (file.originalname.split('.').pop() || '').toLowerCase();
+    if (!ALLOWED_EXTENSIONS.has(ext)) {
+      throw new BadRequestException(`File extension '.${ext}' is not allowed`);
+    }
+    if (!ALLOWED_MIMES.has(file.mimetype)) {
+      throw new BadRequestException(`MIME type '${file.mimetype}' is not allowed`);
+    }
     const storageKey = `${folder}/${uuidv4()}.${ext}`;
 
     try {

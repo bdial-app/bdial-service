@@ -26,6 +26,7 @@ import { ReviewsService } from './reviews.service';
 import { CreateReviewDto, ReportReviewDto } from './dto/review.dto';
 import { UpdateReviewStatusDto } from './dto/review.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { Public } from '../common/decorators/public.decorator';
 
 @ApiTags('Reviews')
 @Controller('reviews')
@@ -33,6 +34,7 @@ export class ReviewsController {
   constructor(private readonly reviewsService: ReviewsService) {}
 
   @Get('provider/:providerId')
+  @Public()
   @ApiOperation({ summary: 'Get all active reviews for a provider (public)' })
   @ApiParam({ name: 'providerId', type: String })
   getForProvider(@Param('providerId') providerId: string) {
@@ -74,6 +76,7 @@ export class ReviewsController {
   }
 
   @Get(':id')
+  @Public()
   @ApiOperation({ summary: 'Get review by ID' })
   @ApiParam({ name: 'id', type: String })
   findOne(@Param('id') id: string) {

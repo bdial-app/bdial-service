@@ -6,6 +6,7 @@ import {
   JoinColumn,
   Index,
 } from 'typeorm';
+import { Exclude } from 'class-transformer';
 import { User } from './user.entity';
 
 @Entity('verifications')
@@ -18,18 +19,21 @@ export class Verification {
   userId: string;
 
   @Column({ name: 'aadhaar_doc_url', type: 'varchar', length: 500 })
+  @Exclude()
   aadhaarDocUrl: string;
 
   @Column({ name: 'aadhaar_status', type: 'enum', enum: ['pending', 'approved', 'rejected'], default: 'pending' })
   aadhaarStatus: string;
 
   @Column({ name: 'ijamat_number', type: 'varchar', length: 50, nullable: true })
+  @Exclude()
   ijamatNumber: string | null;
 
   @Column({ name: 'ijamat_expiry', type: 'date', nullable: true })
   ijamatExpiry: Date | null;
 
   @Column({ name: 'ijamat_doc_url', type: 'varchar', length: 500, nullable: true })
+  @Exclude()
   ijamatDocUrl: string | null;
 
   @Column({ name: 'ijamat_status', type: 'enum', enum: ['pending', 'approved', 'rejected', 'not_submitted'], default: 'not_submitted' })
