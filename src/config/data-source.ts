@@ -74,7 +74,7 @@ export function buildTypeOrmOptions(url: string): DataSourceOptions {
     type: 'postgres',
     url,
     entities: ALL_ENTITIES,
-    synchronize: true,
+    synchronize: process.env.NODE_ENV === 'development',
     // Small pool for Supabase free tier — max 3 concurrent DB connections.
     // PgBouncer transaction mode manages server-side connections itself,
     // so keepAlive is not useful here. Short idle timeout releases connections
