@@ -1,47 +1,6 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsString, IsEnum, IsOptional, IsNumber, Min, IsLatitude, IsLongitude } from 'class-validator';
 import { Type } from 'class-transformer';
-
-export class CreateUserDto {
-  @ApiProperty({ example: '+919876543210' })
-  @IsString()
-  mobileNumber: string;
-
-  @ApiProperty({ example: 'Fatema Hussain' })
-  @IsString()
-  name: string;
-
-  @ApiProperty({ enum: ['male', 'female', 'other'] })
-  @IsEnum(['male', 'female', 'other'])
-  gender: 'male' | 'female' | 'other';
-
-  @ApiPropertyOptional({ example: 'Mumbai' })
-  @IsOptional()
-  @IsString()
-  city?: string;
-
-  @ApiPropertyOptional({ example: 'Dadar' })
-  @IsOptional()
-  @IsString()
-  area?: string;
-
-  @ApiPropertyOptional({ example: '400014' })
-  @IsOptional()
-  @IsString()
-  pincode?: string;
-
-  @ApiPropertyOptional({ example: 18.5204, description: 'User latitude' })
-  @IsOptional()
-  @IsLatitude()
-  @Type(() => Number)
-  latitude?: number;
-
-  @ApiPropertyOptional({ example: 73.8567, description: 'User longitude' })
-  @IsOptional()
-  @IsLongitude()
-  @Type(() => Number)
-  longitude?: number;
-}
 
 export class UpdateUserDto {
   @ApiPropertyOptional({ example: 'Fatema Hussain' })

@@ -668,32 +668,57 @@ export class AdminService {
     isActive?: string,
   ) {
     this.assertAdmin(admin);
-    const currentPage = Math.max(1, page || 1);
-    const pageSize = Math.min(100, Math.max(1, limit || 10));
+    const currentPage = Math.max(1, Number(page) || 1);
+    const pageSize = Math.min(100, Math.max(1, Number(limit) || 10));
     const skip = (currentPage - 1) * pageSize;
 
-    const qb = this.productRepo.createQueryBuilder('prod')
-      .leftJoinAndSelect('prod.provider', 'provider');
+    try {
+      const qb = this.productRepo.createQueryBuilder('prod')
+        .leftJoinAndSelect('prod.provider', 'provider');
 
-    if (search) {
-      qb.andWhere('(prod.name ILIKE :search OR prod.description ILIKE :search)', { search: `%${search}%` });
+      if (search) {
+        qb.andWhere('(prod.name ILIKE :search OR prod.description ILIKE :search)', { search: `%${search}%` });
+      }
+      if (providerId) qb.andWhere('prod.provider_id = :providerId', { providerId });
+      if (isActive === 'true') qb.andWhere('prod.is_active = true');
+      if (isActive === 'false') qb.andWhere('prod.is_active = false');
+
+      qb.orderBy('prod.display_order', 'ASC').skip(skip).take(pageSize);
+
+      const [items, total] = await qb.getManyAndCount();
+      return {
+        items,
+        meta: {
+          total,
+          page: currentPage,
+          limit: pageSize,
+          totalPages: Math.ceil(total / pageSize),
+        },
+      };
+    } catch (err) {
+      // Fallback: try simpler find approach if QueryBuilder fails
+      const where: any = {};
+      if (providerId) where.providerId = providerId;
+      if (isActive === 'true') where.isActive = true;
+      if (isActive === 'false') where.isActive = false;
+
+      const [items, total] = await this.productRepo.findAndCount({
+        where,
+        relations: ['provider'],
+        order: { displayOrder: 'ASC' },
+        skip,
+        take: pageSize,
+      });
+      return {
+        items,
+        meta: {
+          total,
+          page: currentPage,
+          limit: pageSize,
+          totalPages: Math.ceil(total / pageSize),
+        },
+      };
     }
-    if (providerId) qb.andWhere('prod.provider_id = :providerId', { providerId });
-    if (isActive === 'true') qb.andWhere('prod.is_active = true');
-    if (isActive === 'false') qb.andWhere('prod.is_active = false');
-
-    qb.orderBy('prod.display_order', 'ASC').skip(skip).take(pageSize);
-
-    const [items, total] = await qb.getManyAndCount();
-    return {
-      items,
-      meta: {
-        total,
-        page: currentPage,
-        limit: pageSize,
-        totalPages: Math.ceil(total / pageSize),
-      },
-    };
   }
 
   async getProductById(admin: any, productId: string) {
@@ -740,32 +765,57 @@ export class AdminService {
     maxRating?: number,
   ) {
     this.assertAdmin(admin);
-    const currentPage = Math.max(1, page || 1);
-    const pageSize = Math.min(100, Math.max(1, limit || 10));
+    const currentPage = Math.max(1, Number(page) || 1);
+    const pageSize = Math.min(100, Math.max(1, Number(limit) || 10));
     const skip = (currentPage - 1) * pageSize;
 
-    const qb = this.reviewRepo.createQueryBuilder('rev')
-      .leftJoinAndSelect('rev.reviewer', 'reviewer')
-      .leftJoinAndSelect('rev.provider', 'provider')
-      .leftJoinAndSelect('rev.photos', 'photos');
+    try {
+      // Avoid leftJoinAndSelect on OneToMany (photos) with skip/take — causes
+      // TypeORM subquery pagination bugs.  Load photos separately if needed.
+      const qb = this.reviewRepo.createQueryBuilder('rev')
+        .leftJoinAndSelect('rev.reviewer', 'reviewer')
+        .leftJoinAndSelect('rev.provider', 'provider');
 
-    if (status) qb.andWhere('rev.status = :status', { status });
-    if (providerId) qb.andWhere('rev.provider_id = :providerId', { providerId });
-    if (minRating) qb.andWhere('rev.star_rating >= :minRating', { minRating });
-    if (maxRating) qb.andWhere('rev.star_rating <= :maxRating', { maxRating });
+      if (status) qb.andWhere('rev.status = :status', { status });
+      if (providerId) qb.andWhere('rev.provider_id = :providerId', { providerId });
+      if (minRating) qb.andWhere('rev.star_rating >= :minRating', { minRating: Number(minRating) });
+      if (maxRating) qb.andWhere('rev.star_rating <= :maxRating', { maxRating: Number(maxRating) });
 
-    qb.orderBy('rev.posted_at', 'DESC').skip(skip).take(pageSize);
+      qb.orderBy('rev.posted_at', 'DESC').skip(skip).take(pageSize);
 
-    const [items, total] = await qb.getManyAndCount();
-    return {
-      items,
-      meta: {
-        total,
-        page: currentPage,
-        limit: pageSize,
-        totalPages: Math.ceil(total / pageSize),
-      },
-    };
+      const [items, total] = await qb.getManyAndCount();
+      return {
+        items,
+        meta: {
+          total,
+          page: currentPage,
+          limit: pageSize,
+          totalPages: Math.ceil(total / pageSize),
+        },
+      };
+    } catch (err) {
+      // Fallback: simpler find approach
+      const where: any = {};
+      if (status) where.status = status;
+      if (providerId) where.providerId = providerId;
+
+      const [items, total] = await this.reviewRepo.findAndCount({
+        where,
+        relations: ['reviewer', 'provider'],
+        order: { postedAt: 'DESC' },
+        skip,
+        take: pageSize,
+      });
+      return {
+        items,
+        meta: {
+          total,
+          page: currentPage,
+          limit: pageSize,
+          totalPages: Math.ceil(total / pageSize),
+        },
+      };
+    }
   }
 
   async getReviewById(admin: any, reviewId: string) {

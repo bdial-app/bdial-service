@@ -18,7 +18,8 @@ import {
 } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import { UsersService } from './users.service';
-import { CreateUserDto, UpdateUserDto, UserListQueryDto } from './dto/user.dto';
+import { UpdateUserDto, UserListQueryDto } from './dto/user.dto';
+import { CreateUserDto } from './dto/create-user.dto';
 import { AllowPaused } from '../common/decorators/allow-paused.decorator';
 
 @ApiTags('Users')
