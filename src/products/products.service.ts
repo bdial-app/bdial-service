@@ -1,10 +1,11 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Not, Repository } from 'typeorm';
 import sharp = require('sharp');
 import { Product, Provider, Review, Photo, ProviderCategory } from '../entities';
 import { CreateProductDto, UpdateProductDto } from './dto/product.dto';
 import { StorageService } from '../storage/storage.service';
+import { ContentSanitizerService } from '../common/content-sanitizer';
 
 @Injectable()
 export class ProductsService {
@@ -15,6 +16,7 @@ export class ProductsService {
     @InjectRepository(Photo) private photoRepo: Repository<Photo>,
     @InjectRepository(ProviderCategory) private providerCatRepo: Repository<ProviderCategory>,
     private readonly storageService: StorageService,
+    private readonly contentSanitizer: ContentSanitizerService,
   ) {}
 
   /** Verify user owns the provider */
@@ -46,6 +48,9 @@ export class ProductsService {
   async create(userId: string, dto: CreateProductDto) {
     await this.assertOwnership(userId, dto.providerId);
 
+    // Content moderation: check product name and description
+    this.checkProductContent(dto.name, dto.description);
+
     // Backward compat: if photoUrls not provided, derive from photoUrl
     const photoUrls = dto.photoUrls?.length
       ? dto.photoUrls
@@ -66,6 +71,9 @@ export class ProductsService {
     const product = await this.productRepo.findOneBy({ id: productId });
     if (!product) throw new NotFoundException('Product not found');
     await this.assertOwnership(userId, product.providerId);
+
+    // Content moderation: check product name and description
+    this.checkProductContent(dto.name, dto.description);
 
     // Keep photoUrl in sync with photoUrls[0]
     if (dto.photoUrls !== undefined) {
@@ -179,5 +187,22 @@ export class ProductsService {
       },
       reviews,
     };
+  }
+
+  private checkProductContent(name?: string, description?: string | null) {
+    const fieldsToCheck = [
+      { label: 'product name', value: name },
+      { label: 'product description', value: description },
+    ];
+    for (const field of fieldsToCheck) {
+      if (field.value && typeof field.value === 'string') {
+        const check = this.contentSanitizer.check(field.value);
+        if (check.flagged) {
+          throw new BadRequestException(
+            `Your ${field.label} contains inappropriate language. Please revise and try again.`,
+          );
+        }
+      }
+    }
   }
 }

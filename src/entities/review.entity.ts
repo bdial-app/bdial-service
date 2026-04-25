@@ -33,8 +33,11 @@ export class Review {
   @Column({ name: 'review_text', type: 'text', nullable: true })
   reviewText: string | null;
 
-  @Column({ type: 'enum', enum: ['active', 'removed'], default: 'active' })
+  @Column({ type: 'enum', enum: ['active', 'removed', 'flagged'], default: 'active' })
   status: string;
+
+  @Column({ name: 'flag_reason', type: 'text', nullable: true })
+  flagReason: string | null;
 
   @Column({ name: 'posted_at', type: 'timestamptz', default: () => 'now()' })
   postedAt: Date;

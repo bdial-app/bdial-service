@@ -3,6 +3,7 @@ import {
   ConflictException,
   NotFoundException,
   ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, ILike } from 'typeorm';
@@ -10,6 +11,7 @@ import { Review, ReviewPhoto, ReviewReport, Provider } from '../entities';
 import { CreateReviewDto, ReportReviewDto } from './dto/review.dto';
 import { StorageService } from '../storage/storage.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { ContentSanitizerService } from '../common/content-sanitizer';
 
 @Injectable()
 export class ReviewsService {
@@ -20,6 +22,7 @@ export class ReviewsService {
     @InjectRepository(Provider) private providerRepo: Repository<Provider>,
     private storageService: StorageService,
     private notificationDispatch: NotificationDispatchService,
+    private contentSanitizer: ContentSanitizerService,
   ) {}
 
   async create(userId: string, dto: CreateReviewDto) {
@@ -28,6 +31,23 @@ export class ReviewsService {
       reviewerId: userId,
     });
     if (existing) throw new ConflictException('You have already reviewed this provider');
+
+    // Content moderation: check for profanity
+    let flagged = false;
+    let flagReason: string | null = null;
+    if (dto.reviewText) {
+      const check = this.contentSanitizer.check(dto.reviewText);
+      if (check.flagged) {
+        flagged = true;
+        flagReason = `Profanity detected: ${check.flaggedWords.join(', ')}`;
+      }
+    }
+
+    if (flagged) {
+      throw new BadRequestException(
+        'Your review contains inappropriate language. Please revise and try again.',
+      );
+    }
 
     const review = this.reviewRepo.create({
       providerId: dto.providerId,
@@ -137,6 +157,14 @@ export class ReviewsService {
     const provider = await this.providerRepo.findOneBy({ userId });
     if (!provider) throw new ForbiddenException('Not a provider');
     if (review.providerId !== provider.id) throw new ForbiddenException();
+
+    // Content moderation: check reply text for profanity
+    const check = this.contentSanitizer.check(replyText);
+    if (check.flagged) {
+      throw new BadRequestException(
+        'Your reply contains inappropriate language. Please revise and try again.',
+      );
+    }
 
     review.replyText = replyText;
     review.repliedAt = new Date();

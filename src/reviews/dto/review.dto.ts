@@ -7,6 +7,8 @@ export enum ReviewStatus {
   approved = 'approved',
   rejected = 'rejected',
   flagged = 'flagged',
+  active = 'active',
+  removed = 'removed',
 }
 
 export class UpdateReviewStatusDto {

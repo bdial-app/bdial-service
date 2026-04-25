@@ -18,6 +18,7 @@ import { NearbyProvidersDto } from './dto/nearby-providers.dto';
 import { CreateOfferDto } from './dto/create-offer.dto';
 import { UpdateOfferDto } from './dto/update-offer.dto';
 import { CreateSponsorshipDto, UpdateSponsorshipDto } from './dto/sponsorship.dto';
+import { ContentSanitizerService } from '../common/content-sanitizer';
 
 @Injectable()
 export class ProvidersService {
@@ -40,6 +41,7 @@ export class ProvidersService {
     private storage: StorageService,
     private dataSource: DataSource,
     private geocodeService: GeocodeService,
+    private contentSanitizer: ContentSanitizerService,
   ) {}
 
   async sendProviderOtp(mobileNumber: string) {
@@ -113,6 +115,9 @@ export class ProvidersService {
     productImages?: Express.Multer.File[],
   ) {
     const { userId, ijamatNumber, ijamatExpiry, ijamatDocUrl, categoryIds, products: productsJson, ...providerData } = becomeProviderDto;
+
+    // Content moderation: check brand name and description
+    this.checkProviderContent(providerData.brandName, providerData.description);
 
     // Upload files in parallel (outside transaction)
     const [aadhaarUpload, bannerUpload, profileUpload] = await Promise.all([
@@ -262,7 +267,11 @@ export class ProvidersService {
 
     // Map to a provider-application status
     let providerStatus: string;
-    if (provider.status === 'active' || verificationStatus === 'approved') {
+    if (provider.deletedAt) {
+      providerStatus = 'deleted';
+    } else if (provider.status === 'disabled') {
+      providerStatus = 'disabled';
+    } else if (provider.status === 'active' || verificationStatus === 'approved') {
       // Fully approved & verified
       providerStatus = 'approved';
     } else if (provider.status === 'unverified') {
@@ -396,6 +405,9 @@ export class ProvidersService {
   async update(id: string, updateProviderDto: UpdateProviderDto) {
     const existingProvider = await this.providerRepo.findOneBy({ id });
     if (!existingProvider) throw new NotFoundException(`Provider with ID '${id}' not found`);
+
+    // Content moderation: check brand name and description
+    this.checkProviderContent(updateProviderDto.brandName, updateProviderDto.description);
 
     if (updateProviderDto.userId && updateProviderDto.userId !== existingProvider.userId) {
       const user = await this.userRepo.findOneBy({ id: updateProviderDto.userId });
@@ -875,5 +887,70 @@ export class ProvidersService {
       await this.warningRepo.save(warning);
     }
     return warning;
+  }
+
+  // ─── Provider Disable / Enable / Delete ────────────────────────────
+
+  /** Disable the provider — hides from all listings but preserves data */
+  async disableMyProvider(userId: string) {
+    const provider = await this.providerRepo.findOneBy({ userId });
+    if (!provider) throw new NotFoundException('Provider not found');
+    if (provider.deletedAt) throw new BadRequestException('Provider has been deleted');
+
+    provider.status = 'disabled';
+    await this.providerRepo.save(provider);
+
+    // Switch user back to customer mode
+    await this.userRepo.update(userId, { preferredMode: 'customer' } as any);
+
+    return { message: 'Provider disabled successfully', status: 'disabled' };
+  }
+
+  /** Re-enable a disabled provider — restores to active/unverified */
+  async enableMyProvider(userId: string) {
+    const provider = await this.providerRepo.findOneBy({ userId });
+    if (!provider) throw new NotFoundException('Provider not found');
+    if (provider.deletedAt) throw new BadRequestException('Provider has been deleted');
+    if (provider.status !== 'disabled') throw new BadRequestException('Provider is not disabled');
+
+    // Check if they had a verified status before — restore accordingly
+    const verification = await this.verRepo.findOneBy({ userId });
+    provider.status = verification?.status === 'approved' ? 'active' : 'unverified';
+    await this.providerRepo.save(provider);
+
+    return { message: 'Provider enabled successfully', status: provider.status };
+  }
+
+  /** Soft-delete the provider — marks as deleted and hides from all listings */
+  async deleteMyProvider(userId: string) {
+    const provider = await this.providerRepo.findOneBy({ userId });
+    if (!provider) throw new NotFoundException('Provider not found');
+    if (provider.deletedAt) throw new BadRequestException('Provider has already been deleted');
+
+    provider.status = 'disabled';
+    provider.deletedAt = new Date();
+    await this.providerRepo.save(provider);
+
+    // Switch user back to customer mode
+    await this.userRepo.update(userId, { preferredMode: 'customer' } as any);
+
+    return { message: 'Provider deleted successfully' };
+  }
+
+  private checkProviderContent(brandName?: string, description?: string | null) {
+    const fieldsToCheck = [
+      { label: 'brand name', value: brandName },
+      { label: 'description', value: description },
+    ];
+    for (const field of fieldsToCheck) {
+      if (field.value && typeof field.value === 'string') {
+        const check = this.contentSanitizer.check(field.value);
+        if (check.flagged) {
+          throw new BadRequestException(
+            `Your ${field.label} contains inappropriate language. Please revise and try again.`,
+          );
+        }
+      }
+    }
   }
 }

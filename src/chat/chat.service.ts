@@ -18,6 +18,7 @@ import {
 import { SupabaseRealtimeService } from '../supabase/supabase-realtime.service';
 import { StorageService } from '../storage/storage.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { ContentSanitizerService } from '../common/content-sanitizer';
 import {
   CreateConversationDto,
   GetConversationsQueryDto,
@@ -45,6 +46,7 @@ export class ChatService {
     private realtime: SupabaseRealtimeService,
     private storage: StorageService,
     private notificationDispatch: NotificationDispatchService,
+    private contentSanitizer: ContentSanitizerService,
   ) {}
 
   // ─────────────────────────────────────────────
@@ -360,6 +362,16 @@ export class ChatService {
 
     if (!dto.content && !dto.metadata && dto.messageType === 'text') {
       throw new BadRequestException('Message content is required for text messages');
+    }
+
+    // Content moderation: check message text for profanity
+    if (dto.content) {
+      const check = this.contentSanitizer.check(dto.content);
+      if (check.flagged) {
+        throw new BadRequestException(
+          'Your message contains inappropriate language. Please revise and try again.',
+        );
+      }
     }
 
     const sender = await this.userRepo.findOneBy({ id: userId });

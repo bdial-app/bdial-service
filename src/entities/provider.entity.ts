@@ -77,8 +77,8 @@ export class Provider {
   @Column({ name: 'community_verified', type: 'boolean', default: false })
   communityVerified: boolean;
 
-  @Column({ type: 'enum', enum: ['pending', 'in_review', 'active', 'suspended', 'unverified'], default: 'pending' })
-  status: 'pending' | 'in_review' | 'active' | 'suspended' | 'unverified';
+  @Column({ type: 'enum', enum: ['pending', 'in_review', 'active', 'suspended', 'unverified', 'disabled'], default: 'pending' })
+  status: 'pending' | 'in_review' | 'active' | 'suspended' | 'unverified' | 'disabled';
 
   @Column({ name: 'is_featured', type: 'boolean', default: false })
   isFeatured: boolean;
@@ -88,6 +88,9 @@ export class Provider {
 
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
+
+  @Column({ name: 'deleted_at', type: 'timestamptz', nullable: true })
+  deletedAt: Date | null;
 
   @OneToOne(() => User, (u) => u.provider, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })

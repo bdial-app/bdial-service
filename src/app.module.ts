@@ -32,6 +32,7 @@ import { HealthModule } from './health/health.module';
 import { ReportsModule } from './reports/reports.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import { ContentSanitizerModule } from './common/content-sanitizer';
 
 @Module({
   imports: [
@@ -74,6 +75,7 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard';
     HealthModule,
     ReportsModule,
     NotificationsModule,
+    ContentSanitizerModule,
   ],
   controllers: [AppController],
   providers: [

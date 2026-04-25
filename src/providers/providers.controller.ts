@@ -347,4 +347,38 @@ export class ProvidersController {
   ) {
     return this.providersService.markWarningRead(req.user.id, warningId);
   }
+
+  // ─── Provider Disable / Enable / Delete ────────────────────────
+
+  @Post('my-provider/disable')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Disable (hide) the authenticated user\'s provider profile' })
+  @ApiResponse({ status: 200, description: 'Provider disabled successfully' })
+  @ApiResponse({ status: 404, description: 'Provider not found' })
+  disableMyProvider(@Request() req) {
+    return this.providersService.disableMyProvider(req.user.id);
+  }
+
+  @Post('my-provider/enable')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Re-enable a disabled provider profile' })
+  @ApiResponse({ status: 200, description: 'Provider enabled successfully' })
+  @ApiResponse({ status: 404, description: 'Provider not found' })
+  enableMyProvider(@Request() req) {
+    return this.providersService.enableMyProvider(req.user.id);
+  }
+
+  @Delete('my-provider')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @ApiOperation({ summary: 'Soft-delete the authenticated user\'s provider profile' })
+  @ApiResponse({ status: 200, description: 'Provider deleted successfully' })
+  @ApiResponse({ status: 404, description: 'Provider not found' })
+  deleteMyProvider(@Request() req) {
+    return this.providersService.deleteMyProvider(req.user.id);
+  }
 }

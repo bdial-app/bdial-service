@@ -639,7 +639,7 @@ export class AdminService {
     const pageSize = Math.min(100, Math.max(1, limit || 10));
     const skip = (currentPage - 1) * pageSize;
 
-    const VALID_STATUSES = ['pending', 'in_review', 'active', 'suspended', 'unverified'];
+    const VALID_STATUSES = ['pending', 'in_review', 'active', 'suspended', 'unverified', 'disabled'];
     const safeStatus = status && VALID_STATUSES.includes(status) ? status : undefined;
 
     const qb = this.providerRepo.createQueryBuilder('p')
