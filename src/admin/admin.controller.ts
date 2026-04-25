@@ -762,4 +762,51 @@ export class AdminController {
   deleteSetting(@Param('id') id: string, @Request() req) {
     return this.adminService.deleteSetting(req.user, id);
   }
+
+  // ============================================
+  // Bug Reports Management
+  // ============================================
+
+  @Get('bug-reports')
+  @ApiOperation({ summary: 'Paginated bug report list with optional filters' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'status', required: false, type: String, description: 'open | in_progress | resolved | closed' })
+  @ApiQuery({ name: 'category', required: false, type: String })
+  getBugReports(
+    @Request() req,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+    @Query('status') status?: string,
+    @Query('category') category?: string,
+  ) {
+    return this.adminService.getBugReports(req.user, page ? Number(page) : 1, limit ? Number(limit) : 20, status, category);
+  }
+
+  @Get('bug-reports/:id')
+  @ApiOperation({ summary: 'Get bug report detail' })
+  @ApiParam({ name: 'id', description: 'Bug Report ID' })
+  getBugReport(@Param('id') id: string, @Request() req) {
+    return this.adminService.getBugReportById(req.user, id);
+  }
+
+  @Patch('bug-reports/:id')
+  @ApiOperation({ summary: 'Update bug report status and/or admin notes' })
+  @ApiParam({ name: 'id', description: 'Bug Report ID' })
+  @ApiBody({
+    schema: {
+      properties: {
+        status: { type: 'string', enum: ['open', 'in_progress', 'resolved', 'closed'] },
+        adminNotes: { type: 'string' },
+      },
+    },
+  })
+  updateBugReport(
+    @Param('id') id: string,
+    @Request() req,
+    @Body('status') status: string,
+    @Body('adminNotes') adminNotes?: string,
+  ) {
+    return this.adminService.updateBugReport(req.user, id, status, adminNotes);
+  }
 }

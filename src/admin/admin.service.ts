@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull, In, MoreThan, ILike, Between } from 'typeorm';
 import { Provider, User, Verification, Review, ReviewReport, Report, ProviderWarning, Product, Category, Conversation, ConversationParticipant, Message, PromoBanner, SponsoredListing, ProviderOffer, ProviderBadge, ProviderAnalyticsEvent, ProviderLead, SearchLog, AdEvent, AppInvite, AuditLog, SystemSetting } from '../entities';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { BugReport } from '../bug-reports/bug-report.entity';
 
 @Injectable()
 export class AdminService {
@@ -29,6 +30,7 @@ export class AdminService {
     @InjectRepository(AppInvite) private inviteRepo: Repository<AppInvite>,
     @InjectRepository(AuditLog) private auditLogRepo: Repository<AuditLog>,
     @InjectRepository(SystemSetting) private settingRepo: Repository<SystemSetting>,
+    @InjectRepository(BugReport) private bugReportRepo: Repository<BugReport>,
     private notificationDispatch: NotificationDispatchService,
   ) {}
 
@@ -1535,6 +1537,40 @@ export class AdminService {
       searchVolumeByDay: searchVolumeByDay.map(r => ({ date: r.date, count: Number(r.count) })),
       topCities: topCities.map(r => ({ city: r.city, count: Number(r.count) })),
     };
+  }
+
+  // ============================================
+  // Bug Reports Management
+  // ============================================
+
+  async getBugReports(admin: any, page = 1, limit = 20, status?: string, category?: string) {
+    this.assertAdmin(admin);
+    const where: Record<string, any> = {};
+    if (status) where['status'] = status;
+    if (category) where['category'] = category;
+    const [items, total] = await this.bugReportRepo.findAndCount({
+      where,
+      order: { createdAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+    return { items, total, page, limit, pages: Math.ceil(total / limit) };
+  }
+
+  async getBugReportById(admin: any, id: string) {
+    this.assertAdmin(admin);
+    const report = await this.bugReportRepo.findOne({ where: { id } });
+    if (!report) throw new NotFoundException('Bug report not found');
+    return report;
+  }
+
+  async updateBugReport(admin: any, id: string, status: string, adminNotes?: string) {
+    this.assertAdmin(admin);
+    const report = await this.bugReportRepo.findOne({ where: { id } });
+    if (!report) throw new NotFoundException('Bug report not found');
+    if (status) (report as any).status = status;
+    if (adminNotes !== undefined) report.adminNotes = adminNotes;
+    return this.bugReportRepo.save(report);
   }
 
   // ============================================

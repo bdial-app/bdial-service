@@ -33,6 +33,7 @@ import { ReportsModule } from './reports/reports.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { ContentSanitizerModule } from './common/content-sanitizer';
+import { BugReportsModule } from './bug-reports/bug-reports.module';
 
 @Module({
   imports: [
@@ -76,6 +77,7 @@ import { ContentSanitizerModule } from './common/content-sanitizer';
     ReportsModule,
     NotificationsModule,
     ContentSanitizerModule,
+    BugReportsModule,
   ],
   controllers: [AppController],
   providers: [

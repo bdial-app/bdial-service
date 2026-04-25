@@ -32,6 +32,7 @@ import { DeviceToken } from '../entities/device-token.entity';
 import { Notification } from '../entities/notification.entity';
 import { NotificationPreference } from '../entities/notification-preference.entity';
 import { NotificationBatch } from '../entities/notification-batch.entity';
+import { BugReport } from '../bug-reports/bug-report.entity';
 
 export const ALL_ENTITIES = [
   User,
@@ -67,6 +68,7 @@ export const ALL_ENTITIES = [
   Notification,
   NotificationPreference,
   NotificationBatch,
+  BugReport,
 ];
 
 export function buildTypeOrmOptions(url: string): DataSourceOptions {
