@@ -28,6 +28,10 @@ import { Report } from '../entities/report.entity';
 import { ProviderWarning } from '../entities/provider-warning.entity';
 import { AuditLog } from '../entities/audit-log.entity';
 import { SystemSetting } from '../entities/system-setting.entity';
+import { DeviceToken } from '../entities/device-token.entity';
+import { Notification } from '../entities/notification.entity';
+import { NotificationPreference } from '../entities/notification-preference.entity';
+import { NotificationBatch } from '../entities/notification-batch.entity';
 
 export const ALL_ENTITIES = [
   User,
@@ -59,6 +63,10 @@ export const ALL_ENTITIES = [
   ProviderWarning,
   AuditLog,
   SystemSetting,
+  DeviceToken,
+  Notification,
+  NotificationPreference,
+  NotificationBatch,
 ];
 
 export function buildTypeOrmOptions(url: string): DataSourceOptions {

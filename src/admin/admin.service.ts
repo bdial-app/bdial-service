@@ -2,6 +2,7 @@ import { Injectable, ForbiddenException, NotFoundException, BadRequestException 
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull, In, MoreThan, ILike, Between } from 'typeorm';
 import { Provider, User, Verification, Review, ReviewReport, Report, ProviderWarning, Product, Category, Conversation, ConversationParticipant, Message, PromoBanner, SponsoredListing, ProviderOffer, ProviderBadge, ProviderAnalyticsEvent, ProviderLead, SearchLog, AdEvent, AppInvite, AuditLog, SystemSetting } from '../entities';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 
 @Injectable()
 export class AdminService {
@@ -28,6 +29,7 @@ export class AdminService {
     @InjectRepository(AppInvite) private inviteRepo: Repository<AppInvite>,
     @InjectRepository(AuditLog) private auditLogRepo: Repository<AuditLog>,
     @InjectRepository(SystemSetting) private settingRepo: Repository<SystemSetting>,
+    private notificationDispatch: NotificationDispatchService,
   ) {}
 
   private assertAdmin(user: any) {
@@ -88,13 +90,39 @@ export class AdminService {
   async approveProvider(admin: any, providerId: string) {
     this.assertAdmin(admin);
     await this.providerRepo.update(providerId, { status: 'active' });
-    return this.providerRepo.findOneBy({ id: providerId });
+    const provider = await this.providerRepo.findOneBy({ id: providerId });
+
+    // Notify provider of approval
+    if (provider) {
+      this.notificationDispatch.sendToUser(
+        provider.userId,
+        'provider_status',
+        'Provider Approved!',
+        'Congratulations! Your provider profile has been approved and is now live.',
+        { route: '/provider-details', params: { id: providerId } },
+      ).catch(() => {});
+    }
+
+    return provider;
   }
 
   async suspendProvider(admin: any, providerId: string) {
     this.assertAdmin(admin);
     await this.providerRepo.update(providerId, { status: 'suspended' });
-    return this.providerRepo.findOneBy({ id: providerId });
+    const provider = await this.providerRepo.findOneBy({ id: providerId });
+
+    // Notify provider of suspension
+    if (provider) {
+      this.notificationDispatch.sendToUser(
+        provider.userId,
+        'provider_status',
+        'Provider Profile Suspended',
+        'Your provider profile has been suspended. Please contact support for details.',
+        { route: '/provider-details', params: { id: providerId } },
+      ).catch(() => {});
+    }
+
+    return provider;
   }
 
   async getVerifications(admin: any, page?: number, rows?: number, status?: string, search?: string) {
@@ -166,7 +194,27 @@ export class AdminService {
     };
     if (ijamatStatus) data.ijamatStatus = ijamatStatus;
     await this.verificationRepo.update(verificationId, data);
-    return this.verificationRepo.findOneBy({ id: verificationId });
+
+    const verification = await this.verificationRepo.findOneBy({ id: verificationId });
+
+    // Notify user of verification result
+    if (verification) {
+      const title = aadhaarStatus === 'approved'
+        ? 'Verification Approved!'
+        : 'Verification Update';
+      const body = aadhaarStatus === 'approved'
+        ? 'Your documents have been verified successfully.'
+        : 'Your verification was not approved. Please review and resubmit your documents.';
+      this.notificationDispatch.sendToUser(
+        verification.userId,
+        'verification_update',
+        title,
+        body,
+        { route: '/provider-onboarding/verify' },
+      ).catch(() => {});
+    }
+
+    return verification;
   }
 
   async removeReview(admin: any, reviewId: string) {

@@ -9,6 +9,7 @@ import { Repository, ILike } from 'typeorm';
 import { Review, ReviewPhoto, ReviewReport, Provider } from '../entities';
 import { CreateReviewDto, ReportReviewDto } from './dto/review.dto';
 import { StorageService } from '../storage/storage.service';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 
 @Injectable()
 export class ReviewsService {
@@ -18,6 +19,7 @@ export class ReviewsService {
     @InjectRepository(ReviewReport) private reportRepo: Repository<ReviewReport>,
     @InjectRepository(Provider) private providerRepo: Repository<Provider>,
     private storageService: StorageService,
+    private notificationDispatch: NotificationDispatchService,
   ) {}
 
   async create(userId: string, dto: CreateReviewDto) {
@@ -33,7 +35,21 @@ export class ReviewsService {
       starRating: dto.starRating!,
       reviewText: dto.reviewText,
     });
-    return this.reviewRepo.save(review);
+    const saved = await this.reviewRepo.save(review);
+
+    // Notify the provider about the new review
+    const provider = await this.providerRepo.findOneBy({ id: dto.providerId });
+    if (provider) {
+      this.notificationDispatch.sendToUser(
+        provider.userId,
+        'review_received',
+        'New Review Received',
+        `You received a ${dto.starRating}-star review${dto.reviewText ? ': ' + dto.reviewText.substring(0, 80) : ''}`,
+        { route: '/provider-details', params: { id: dto.providerId, tab: 'reviews' } },
+      ).catch(() => {}); // Fire-and-forget
+    }
+
+    return saved;
   }
 
   async getForProvider(providerId: string, page = 1, limit = 20) {

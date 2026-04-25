@@ -17,6 +17,7 @@ import {
 } from '../entities';
 import { SupabaseRealtimeService } from '../supabase/supabase-realtime.service';
 import { StorageService } from '../storage/storage.service';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import {
   CreateConversationDto,
   GetConversationsQueryDto,
@@ -43,6 +44,7 @@ export class ChatService {
     private productRepo: Repository<Product>,
     private realtime: SupabaseRealtimeService,
     private storage: StorageService,
+    private notificationDispatch: NotificationDispatchService,
   ) {}
 
   // ─────────────────────────────────────────────
@@ -422,6 +424,16 @@ export class ChatService {
           lastMessageAt: message.createdAt.toISOString(),
           unreadCount: op.unreadCount + 1,
         });
+
+        // Send push notification to offline/background users
+        const notificationType = dto.messageType === 'enquiry' ? 'new_enquiry' : 'chat_message';
+        this.notificationDispatch.sendToUser(
+          op.userId,
+          notificationType as any,
+          sender.name,
+          preview,
+          { route: '/chat', params: { conversationId } },
+        ).catch((err) => this.logger.warn(`Push notification failed for user ${op.userId}: ${err.message}`));
       }
     }
 

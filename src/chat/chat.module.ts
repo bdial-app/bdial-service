@@ -12,6 +12,7 @@ import {
 } from '../entities';
 import { SupabaseModule } from '../supabase/supabase.module';
 import { AuthModule } from '../auth/auth.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { AuthModule } from '../auth/auth.module';
     ]),
     SupabaseModule,
     AuthModule,
+    NotificationsModule,
   ],
   controllers: [ChatController],
   providers: [ChatService],

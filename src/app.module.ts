@@ -30,6 +30,7 @@ import { InviteModule } from './invite/invite.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { HealthModule } from './health/health.module';
 import { ReportsModule } from './reports/reports.module';
+import { NotificationsModule } from './notifications/notifications.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 
 @Module({
@@ -72,6 +73,7 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard';
     AnalyticsModule,
     HealthModule,
     ReportsModule,
+    NotificationsModule,
   ],
   controllers: [AppController],
   providers: [
