@@ -127,6 +127,29 @@ export class AdminService {
     return provider;
   }
 
+  async unsuspendProvider(admin: any, providerId: string) {
+    this.assertAdmin(admin);
+    const provider = await this.providerRepo.findOneBy({ id: providerId });
+    if (!provider) throw new Error('Provider not found');
+    if (provider.status !== 'suspended') throw new Error('Provider is not suspended');
+
+    // Restore to active status
+    await this.providerRepo.update(providerId, { status: 'active' });
+
+    // Notify provider of suspension revocation
+    if (provider) {
+      this.notificationDispatch.sendToUser(
+        provider.userId,
+        'provider_status',
+        'Suspension Revoked',
+        'Your provider profile suspension has been revoked. Your profile is now active again.',
+        { route: '/provider-details', params: { id: providerId } },
+      ).catch(() => {});
+    }
+
+    return { ...provider, status: 'active' };
+  }
+
   async getVerifications(admin: any, page?: number, rows?: number, status?: string, search?: string) {
     this.assertAdmin(admin);
     const currentPage = Math.max(1, page || 1);

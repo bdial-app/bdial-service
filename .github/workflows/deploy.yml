@@ -11,6 +11,7 @@ jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    environment: ${{ github.ref_name == 'production' && 'production' || github.ref_name == 'uat' && 'uat' || 'development' }}
 
     steps:
       - name: Checkout
@@ -29,23 +30,12 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Set deploy target
-        id: vars
-        run: |
-          if [ "${{ github.ref_name }}" == "production" ]; then
-            echo "remote_dir=${{ secrets.SSH_REMOTE_DIR_PROD }}" >> $GITHUB_OUTPUT
-          elif [ "${{ github.ref_name }}" == "uat" ]; then
-            echo "remote_dir=${{ secrets.SSH_REMOTE_DIR_UAT }}" >> $GITHUB_OUTPUT
-          else
-            echo "remote_dir=${{ secrets.SSH_REMOTE_DIR_DEV }}" >> $GITHUB_OUTPUT
-          fi
-
       - name: Upload dist via rsync
         uses: burnett01/rsync-deployments@7.0.1
         with:
           switches: -avz --delete --exclude='.env'
           path: dist/
-          remote_path: ${{ steps.vars.outputs.remote_dir }}/dist/
+          remote_path: ${{ secrets.SSH_REMOTE_DIR }}/dist/
           remote_host: ${{ secrets.SSH_HOST }}
           remote_user: ${{ secrets.SSH_USER }}
           remote_key: ${{ secrets.SSH_PRIVATE_KEY }}
@@ -55,7 +45,7 @@ jobs:
         with:
           switches: -avz
           path: package*.json
-          remote_path: ${{ steps.vars.outputs.remote_dir }}/
+          remote_path: ${{ secrets.SSH_REMOTE_DIR }}/
           remote_host: ${{ secrets.SSH_HOST }}
           remote_user: ${{ secrets.SSH_USER }}
           remote_key: ${{ secrets.SSH_PRIVATE_KEY }}
@@ -67,7 +57,7 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            cd ${{ steps.vars.outputs.remote_dir }}
+            cd ${{ secrets.SSH_REMOTE_DIR }}
             npm install --production --ignore-scripts
             # Restart via Hostinger Node.js manager (touch restart file)
             touch tmp/restart.txt

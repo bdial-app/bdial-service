@@ -34,6 +34,12 @@ export class AdminController {
     return this.adminService.suspendProvider(req.user, id);
   }
 
+  @Patch('providers/:id/unsuspend')
+  @ApiOperation({ summary: 'Revoke suspension of a provider' })
+  unsuspendProvider(@Param('id') id: string, @Request() req) {
+    return this.adminService.unsuspendProvider(req.user, id);
+  }
+
   //get all verifications by pagination
   @Get('verifications')
   @ApiOperation({ summary: 'Get verification submissions with pagination and filters' })

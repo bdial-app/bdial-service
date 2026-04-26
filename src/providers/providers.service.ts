@@ -269,6 +269,8 @@ export class ProvidersService {
     let providerStatus: string;
     if (provider.deletedAt) {
       providerStatus = 'deleted';
+    } else if (provider.status === 'suspended') {
+      providerStatus = 'suspended';
     } else if (provider.status === 'disabled') {
       providerStatus = 'disabled';
     } else if (provider.status === 'active' || verificationStatus === 'approved') {
