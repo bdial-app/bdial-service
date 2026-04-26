@@ -41,7 +41,7 @@ import { BugReportsModule } from './bug-reports/bug-reports.module';
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
-        ...buildTypeOrmOptions(config.getOrThrow<string>('DATABASE_URL')),
+        ...buildTypeOrmOptions(config.get<string>('DATABASE_URL')),
         logging: config.get('NODE_ENV') === 'development' ? ['error'] : false,
       }),
     }),

@@ -71,24 +71,40 @@ export const ALL_ENTITIES = [
   BugReport,
 ];
 
-export function buildTypeOrmOptions(url: string): DataSourceOptions {
-  return {
-    type: 'postgres',
-    url,
+export function buildTypeOrmOptions(url?: string): DataSourceOptions {
+  const base: Partial<DataSourceOptions> = {
     entities: ALL_ENTITIES,
     synchronize: process.env.NODE_ENV === 'development',
-    // Small pool for Supabase free tier — max 3 concurrent DB connections.
-    // PgBouncer transaction mode manages server-side connections itself,
-    // so keepAlive is not useful here. Short idle timeout releases connections
-    // quickly so PgBouncer can reuse its server-side slots.
     extra: {
       max: 3,
       idleTimeoutMillis: 5000,
     },
   };
+
+  // Prefer individual env vars so special chars in passwords (e.g. @)
+  // don't need URL-encoding — avoids %40 decoding issues on some hosts.
+  if (process.env.DB_HOST) {
+    return {
+      ...base,
+      type: 'postgres',
+      host: process.env.DB_HOST,
+      port: parseInt(process.env.DB_PORT ?? '6543', 10),
+      username: process.env.DB_USERNAME,
+      password: process.env.DB_PASSWORD,
+      database: process.env.DB_NAME ?? 'postgres',
+      ssl: { rejectUnauthorized: false },
+    } as DataSourceOptions;
+  }
+
+  // Fallback: use connection URL (local dev)
+  return {
+    ...base,
+    type: 'postgres',
+    url,
+  } as DataSourceOptions;
 }
 
 /** Used by TypeORM CLI for migrations */
 export const AppDataSource = new DataSource(
-  buildTypeOrmOptions(process.env.DATABASE_URL ?? ''),
+  buildTypeOrmOptions(process.env.DATABASE_URL),
 );
