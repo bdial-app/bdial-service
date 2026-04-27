@@ -3,9 +3,11 @@ import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { GeocodeService } from './geocode.service';
 import { ReverseGeocodeDto } from './dto/reverse-geocode.dto';
 import { SearchLocationDto } from './dto/search-location.dto';
+import { Public } from '../common/decorators/public.decorator';
 
 @ApiTags('Geocode')
 @Controller('geocode')
+@Public()
 export class GeocodeController {
   constructor(private readonly geocodeService: GeocodeService) {}
 

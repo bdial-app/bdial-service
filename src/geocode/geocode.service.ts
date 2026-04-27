@@ -40,8 +40,15 @@ export class GeocodeService {
 
     const sublocality =
       components.find((c) => c.types.includes('sublocality_level_1'))?.long_name ??
+      components.find((c) => c.types.includes('sublocality_level_2'))?.long_name ??
       components.find((c) => c.types.includes('sublocality'))?.long_name ??
+      components.find((c) => c.types.includes('neighborhood'))?.long_name ??
+      components.find((c) => c.types.includes('premise'))?.long_name ??
+      components.find((c) => c.types.includes('route'))?.long_name ??
       null;
+
+    const pincode =
+      components.find((c) => c.types.includes('postal_code'))?.long_name ?? null;
 
     const label = sublocality ? `${sublocality}, ${city}` : city;
 
@@ -49,6 +56,7 @@ export class GeocodeService {
       label,
       city,
       area: sublocality,
+      pincode,
       fullAddress: result.formatted_address,
       placeId: result.place_id,
     };
@@ -57,7 +65,8 @@ export class GeocodeService {
   /** Forward search: text query → location suggestions (Google Places Autocomplete) */
   async searchLocations(query: string) {
     this.ensureApiKey();
-    const url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(query)}&types=(regions)&key=${this.apiKey}`;
+    // No type restriction — returns regions, addresses, landmarks and establishments (Uber-style)
+    const url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(query)}&components=country:in&key=${this.apiKey}`;
     const res = await fetch(url);
     const data = await res.json();
 
