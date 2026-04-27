@@ -432,7 +432,7 @@ export class ProvidersService {
    * Flow 1-c: Location-based provider discovery.
    */
   async findNearby(dto: NearbyProvidersDto) {
-    const { lat, lng, radius = 10, page = 1, limit = 10, search, city, sortBy = 'distance', categoryIds } = dto;
+    const { lat, lng, radius = 10, page = 1, limit = 10, search, city, sortBy = 'distance', categoryIds, minRating, verifiedOnly, womenLedOnly } = dto;
     const offset = (page - 1) * limit;
 
     // Haversine formula in SQL (returns distance in km)
@@ -444,13 +444,23 @@ export class ProvidersService {
       )
     `;
 
+    // Review stats subqueries used for filtering and sorting
+    const avgRatingSub = `(SELECT AVG(r.star_rating) FROM reviews r WHERE r.provider_id = provider.id AND r.status = 'active')`;
+    const reviewCountSub = `(SELECT COUNT(r.id)::int FROM reviews r WHERE r.provider_id = provider.id AND r.status = 'active')`;
+
     const qb = this.providerRepo
       .createQueryBuilder('provider')
       .leftJoinAndSelect('provider.user', 'user')
       .addSelect(haversine, 'distance')
+      .addSelect(avgRatingSub, 'avg_rating')
+      .addSelect(reviewCountSub, 'review_count')
+      .addSelect(
+        `(SELECT string_agg(DISTINCT cat.name, ', ' ORDER BY cat.name) FROM categories cat JOIN provider_categories pcat ON pcat.category_id = cat.id WHERE pcat.provider_id = provider.id)`,
+        'services',
+      )
       .where('provider.latitude IS NOT NULL')
       .andWhere('provider.longitude IS NOT NULL')
-      .andWhere('provider.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
+      .andWhere('provider.status IN (:...statuses)', { statuses: verifiedOnly ? ['active'] : ['active', 'unverified'] })
       .andWhere(`${haversine} <= :radius`, { lat, lng, radius })
       .setParameters({ lat, lng, radius });
 
@@ -467,6 +477,12 @@ export class ProvidersService {
         { categoryIds },
       );
     }
+    if (minRating != null && minRating > 0) {
+      qb.andWhere(`${avgRatingSub} >= :minRating`, { minRating });
+    }
+    if (womenLedOnly) {
+      qb.andWhere('provider.isWomenLed = true');
+    }
 
     // Sort - verified (active) providers always rank above unverified
     if (sortBy === 'distance') {
@@ -476,11 +492,12 @@ export class ProvidersService {
       qb.orderBy("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'ASC')
         .addOrderBy('provider.createdAt', 'DESC');
     } else if (sortBy === 'rating') {
-      qb.addSelect(
-        `(SELECT AVG(r.star_rating) FROM reviews r WHERE r.provider_id = provider.id AND r.status = 'approved')`,
-        'avg_rating',
-      );
       qb.orderBy("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'ASC')
+        .addOrderBy('avg_rating', 'DESC', 'NULLS LAST')
+        .addOrderBy('distance', 'ASC');
+    } else if (sortBy === 'reviews') {
+      qb.orderBy("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'ASC')
+        .addOrderBy('review_count', 'DESC', 'NULLS LAST')
         .addOrderBy('avg_rating', 'DESC', 'NULLS LAST')
         .addOrderBy('distance', 'ASC');
     } else {
@@ -494,10 +511,13 @@ export class ProvidersService {
     // Get paginated results with distance
     const { raw, entities } = await qb.offset(offset).limit(limit).getRawAndEntities();
 
-    // Merge Haversine distance into entities
+    // Merge Haversine distance + review stats into entities
     let data = entities.map((provider, i) => ({
       ...provider,
       distance: parseFloat(parseFloat(raw[i]?.distance ?? '0').toFixed(2)),
+      rating: raw[i]?.avg_rating ? parseFloat(parseFloat(raw[i].avg_rating).toFixed(1)) : null,
+      reviewCount: parseInt(raw[i]?.review_count ?? '0', 10),
+      services: raw[i]?.services || null,
       roadDistance: null as string | null,
       roadDistanceMeters: null as number | null,
       travelTime: null as string | null,

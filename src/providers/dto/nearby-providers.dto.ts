@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsLatitude, IsLongitude, IsOptional, IsInt, Min, Max, IsString, IsEnum, IsArray, IsUUID } from 'class-validator';
+import { IsLatitude, IsLongitude, IsOptional, IsInt, Min, Max, IsString, IsEnum, IsArray, IsUUID, IsNumber, IsBoolean } from 'class-validator';
 import { Type, Transform } from 'class-transformer';
 
 export class NearbyProvidersDto {
@@ -45,10 +45,10 @@ export class NearbyProvidersDto {
   @IsString()
   city?: string;
 
-  @ApiPropertyOptional({ enum: ['distance', 'rating', 'newest'], default: 'distance', description: 'Sort order' })
+  @ApiPropertyOptional({ enum: ['distance', 'rating', 'newest', 'reviews'], default: 'distance', description: 'Sort order' })
   @IsOptional()
-  @IsEnum(['distance', 'rating', 'newest'])
-  sortBy?: 'distance' | 'rating' | 'newest' = 'distance';
+  @IsEnum(['distance', 'rating', 'newest', 'reviews'])
+  sortBy?: 'distance' | 'rating' | 'newest' | 'reviews' = 'distance';
 
   @ApiPropertyOptional({ description: 'Filter by category IDs', type: [String] })
   @IsOptional()
@@ -56,4 +56,24 @@ export class NearbyProvidersDto {
   @IsArray()
   @IsUUID('4', { each: true })
   categoryIds?: string[];
+
+  @ApiPropertyOptional({ example: 4, description: 'Minimum average rating (0-5)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(5)
+  minRating?: number;
+
+  @ApiPropertyOptional({ description: 'Only show verified (active) providers' })
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  @IsBoolean()
+  verifiedOnly?: boolean;
+
+  @ApiPropertyOptional({ description: 'Only show women-led providers' })
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  @IsBoolean()
+  womenLedOnly?: boolean;
 }

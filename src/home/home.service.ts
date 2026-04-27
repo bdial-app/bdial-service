@@ -73,39 +73,52 @@ export class HomeService {
 
   /**
    * Single aggregated home feed endpoint.
-   * Combines: nearby providers, featured providers (by category),
-   * promo banners, trending categories, community reviews, and platform stats.
+   * Combines: nearby providers, featured category (random), top rated,
+   * promo banners, trending categories, community reviews, platform stats,
+   * and dynamic search prompts.
    */
   async getFeed(dto: HomeFeedDto, userId?: string) {
     const { lat, lng, city } = dto;
-    const hasLocation = lat != null && lng != null;
 
     const [
       nearbyProviders,
-      beautyProviders,
+      featuredCategory,
       promoBanners,
       trendingCategories,
       communityReviews,
       platformStats,
-      lastBooking,
+      topRatedProviders,
+      cityProviders,
+      newArrivals,
     ] = await Promise.all([
       this.getNearbyProviders(lat, lng, city, 10),
-      this.getProvidersByCategory('Beauty & Wellness', lat, lng, city, 4),
+      this.getRandomFeaturedCategory(lat, lng, city, 6),
       this.getActivePromoBanners(),
       this.getTrendingCategories(6),
       this.getCommunityReviews(10),
       this.getPlatformStats(),
-      userId ? this.getLastBooking(userId) : Promise.resolve(null),
+      this.getTopRatedProviders(lat, lng, city, 6),
+      this.getCityProviders(city, lat, lng, 6),
+      this.getNewArrivals(lat, lng, city, 6),
     ]);
+
+    // Build dynamic search prompts from trending categories
+    const searchPrompts = trendingCategories
+      .filter((c) => c.providerCount > 0)
+      .slice(0, 6)
+      .map((c) => c.name);
 
     return {
       nearbyProviders,
-      beautyProviders,
+      featuredCategory,
       promoBanners,
       trendingCategories,
       communityReviews,
       platformStats,
-      lastBooking,
+      topRatedProviders,
+      cityProviders,
+      newArrivals,
+      searchPrompts,
     };
   }
 
@@ -183,8 +196,270 @@ export class HomeService {
   }
 
   /**
+   * Pick a random top-level category that has at least 1 active provider.
+   * Returns the category info + its providers.
+   */
+  private async getRandomFeaturedCategory(
+    lat?: number,
+    lng?: number,
+    city?: string,
+    limit = 4,
+  ) {
+    // Get all top-level categories with at least 1 active provider
+    const categoriesWithProviders = await this.categoryRepo
+      .createQueryBuilder('c')
+      .select(['c.id AS id', 'c.name AS name', 'c.slug AS slug', 'c.icon AS icon'])
+      .addSelect(
+        `(SELECT COUNT(DISTINCT pc.provider_id)::int
+         FROM provider_categories pc
+         JOIN providers p ON p.id = pc.provider_id AND p.status IN ('active', 'unverified')
+         WHERE pc.category_id = c.id
+            OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id = c.id))`,
+        'providerCount',
+      )
+      .where('c.parent_id IS NULL')
+      .andWhere('c.is_active = :active', { active: true })
+      .having(
+        `(SELECT COUNT(DISTINCT pc.provider_id)::int
+         FROM provider_categories pc
+         JOIN providers p ON p.id = pc.provider_id AND p.status IN ('active', 'unverified')
+         WHERE pc.category_id = c.id
+            OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id = c.id)) > 0`,
+      )
+      .groupBy('c.id')
+      .getRawMany();
+
+    if (categoriesWithProviders.length === 0) return null;
+
+    // Pick a random category
+    const randomIndex = Math.floor(Math.random() * categoriesWithProviders.length);
+    const chosen = categoriesWithProviders[randomIndex];
+
+    const providers = await this.getProvidersByCategory(chosen.name, lat, lng, city, limit);
+
+    return {
+      name: chosen.name,
+      slug: chosen.slug,
+      icon: chosen.icon,
+      providerCount: parseInt(chosen.providerCount, 10) || 0,
+      providers,
+    };
+  }
+
+  /**
+   * Get top-rated providers across all categories.
+   */
+  private async getTopRatedProviders(
+    lat?: number,
+    lng?: number,
+    city?: string,
+    limit = 6,
+  ) {
+    const hasLocation = lat != null && lng != null;
+
+    const qb = this.providerRepo
+      .createQueryBuilder('p')
+      .select([
+        'p.id AS id',
+        'p.brand_name AS name',
+        'p.profile_photo_url AS image',
+        'p.banner_image_url AS "bannerImage"',
+        'p.description AS description',
+        'p.city AS city',
+        'p.area AS area',
+        'p.status AS status',
+        'p.is_featured AS "isFeatured"',
+        'p.is_available AS "isAvailable"',
+      ])
+      .addSelect(
+        `(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`,
+        'listingPhoto',
+      )
+      .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] });
+
+    this.withReviewStats(qb);
+    this.withCategoryServices(qb);
+
+    // Only providers that have at least 1 review
+    qb.andWhere(
+      `EXISTS (SELECT 1 FROM reviews rv WHERE rv.provider_id = p.id AND rv.status = 'active')`,
+    );
+
+    if (hasLocation) {
+      this.withGeo(qb, lat!, lng!);
+    } else if (city) {
+      qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
+    }
+
+    qb.orderBy('COALESCE(rs.avg_rating, 0)', 'DESC')
+      .addOrderBy('COALESCE(rs.review_count, 0)', 'DESC')
+      .limit(limit);
+
+    const raw = await qb.getRawMany();
+
+    return raw.map((r) => ({
+      id: r.id,
+      name: r.name,
+      image: r.bannerImage || r.image || r.listingPhoto,
+      description: r.description,
+      city: r.city,
+      area: r.area,
+      location: [r.area, r.city].filter(Boolean).join(', '),
+      rating: parseFloat(r.rating) || 0,
+      reviewCount: parseInt(r.reviewCount, 10) || 0,
+      services: r.services || null,
+      verified: r.status === 'active',
+      isFeatured: r.isFeatured,
+      isAvailable: r.isAvailable,
+      distance: r.distance ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
+    }));
+  }
+
+  /**
+   * City-specific providers — providers filtered to the user's city.
+   * Returns city name + providers for a "Popular in {City}" section.
+   */
+  private async getCityProviders(
+    city?: string,
+    lat?: number,
+    lng?: number,
+    limit = 6,
+  ) {
+    // Need city to make this section useful
+    if (!city) return null;
+
+    const qb = this.providerRepo
+      .createQueryBuilder('p')
+      .select([
+        'p.id AS id',
+        'p.brand_name AS name',
+        'p.profile_photo_url AS image',
+        'p.banner_image_url AS "bannerImage"',
+        'p.description AS description',
+        'p.city AS city',
+        'p.area AS area',
+        'p.status AS status',
+        'p.is_featured AS "isFeatured"',
+        'p.is_available AS "isAvailable"',
+      ])
+      .addSelect(
+        `(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`,
+        'listingPhoto',
+      )
+      .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
+      .andWhere('p.city ILIKE :city', { city: `%${city}%` });
+
+    this.withReviewStats(qb);
+    this.withCategoryServices(qb);
+
+    if (lat != null && lng != null) {
+      this.withGeo(qb, lat, lng);
+      qb.orderBy('COALESCE(rs.avg_rating, 0)', 'DESC')
+        .addOrderBy('distance', 'ASC');
+    } else {
+      qb.orderBy('COALESCE(rs.avg_rating, 0)', 'DESC')
+        .addOrderBy('p.is_featured', 'DESC');
+    }
+
+    qb.limit(limit);
+
+    const raw = await qb.getRawMany();
+    if (raw.length === 0) return null;
+
+    // Extract actual city name from the first result (properly capitalized)
+    const cityName = raw[0].city || city;
+
+    return {
+      city: cityName,
+      providers: raw.map((r) => ({
+        id: r.id,
+        name: r.name,
+        image: r.bannerImage || r.image || r.listingPhoto,
+        description: r.description,
+        city: r.city,
+        area: r.area,
+        location: [r.area, r.city].filter(Boolean).join(', '),
+        rating: parseFloat(r.rating) || 0,
+        reviewCount: parseInt(r.reviewCount, 10) || 0,
+        services: r.services || null,
+        verified: r.status === 'active',
+        isFeatured: r.isFeatured,
+        isAvailable: r.isAvailable,
+        distance: r.distance ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
+      })),
+    };
+  }
+
+  /**
+   * Newly registered providers — joined within the last 30 days.
+   */
+  private async getNewArrivals(
+    lat?: number,
+    lng?: number,
+    city?: string,
+    limit = 6,
+  ) {
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    const hasLocation = lat != null && lng != null;
+
+    const qb = this.providerRepo
+      .createQueryBuilder('p')
+      .select([
+        'p.id AS id',
+        'p.brand_name AS name',
+        'p.profile_photo_url AS image',
+        'p.banner_image_url AS "bannerImage"',
+        'p.description AS description',
+        'p.city AS city',
+        'p.area AS area',
+        'p.status AS status',
+        'p.created_at AS "createdAt"',
+      ])
+      .addSelect(
+        `(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`,
+        'listingPhoto',
+      )
+      .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
+      .andWhere('p.created_at >= :since', { since: thirtyDaysAgo });
+
+    this.withReviewStats(qb);
+    this.withCategoryServices(qb);
+
+    if (hasLocation) {
+      this.withGeo(qb, lat!, lng!);
+      qb.orderBy('p.created_at', 'DESC');
+    } else if (city) {
+      qb.andWhere('p.city ILIKE :city', { city: `%${city}%` })
+        .orderBy('p.created_at', 'DESC');
+    } else {
+      qb.orderBy('p.created_at', 'DESC');
+    }
+
+    qb.limit(limit);
+
+    const raw = await qb.getRawMany();
+
+    return raw.map((r) => ({
+      id: r.id,
+      name: r.name,
+      image: r.bannerImage || r.image || r.listingPhoto,
+      description: r.description,
+      city: r.city,
+      area: r.area,
+      location: [r.area, r.city].filter(Boolean).join(', '),
+      rating: parseFloat(r.rating) || 0,
+      reviewCount: parseInt(r.reviewCount, 10) || 0,
+      services: r.services || null,
+      verified: r.status === 'active',
+      distance: r.distance ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
+    }));
+  }
+
+  /**
    * Get providers filtered by a specific parent category name.
-   * Used for "Beauty & Wellness", "Popular in Tailoring", etc.
+   * Used for featured category section, category-providers endpoint, etc.
    */
   async getProvidersByCategory(
     categoryName: string,
@@ -364,7 +639,7 @@ export class HomeService {
    * Platform-wide stats for the trust banner.
    */
   private async getPlatformStats() {
-    const [providerCount, reviewStats, bookingCount] = await Promise.all([
+    const [providerCount, reviewStats, categoryCount] = await Promise.all([
       this.providerRepo.count({
         where: { status: In(['active', 'unverified']) },
       }),
@@ -374,8 +649,8 @@ export class HomeService {
         .addSelect('COALESCE(AVG(r.star_rating)::numeric(2,1), 0)', 'avgRating')
         .where('r.status = :status', { status: 'active' })
         .getRawOne(),
-      this.bookingRepo.count({
-        where: { status: In(['completed', 'confirmed', 'in_progress']) },
+      this.categoryRepo.count({
+        where: { isActive: true },
       }),
     ]);
 
@@ -383,7 +658,7 @@ export class HomeService {
       verifiedProviders: providerCount,
       totalReviews: parseInt(reviewStats?.totalReviews || '0', 10),
       avgRating: parseFloat(reviewStats?.avgRating || '0'),
-      totalBookings: bookingCount,
+      totalCategories: categoryCount,
     };
   }
 
@@ -487,9 +762,9 @@ export class HomeService {
     ]);
 
     return [
-      { count: completedToday || 0, text: 'bookings completed near you today' },
-      { count: onlineProviders || 0, text: 'providers online in your area' },
-      { count: recentBookings || 0, text: 'services booked in the last hour' },
+      { count: onlineProviders || 0, text: 'providers available in your area' },
+      { count: completedToday || 0, text: 'services completed near you today' },
+      { count: recentBookings || 0, text: 'new requests in the last hour' },
     ];
   }
 }
