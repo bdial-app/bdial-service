@@ -59,6 +59,7 @@ SQL_FILES=(
   "migration-provider-disable-delete.sql"
   "migration-search-keywords.sql"
   "migration-admin-controls.sql"
+  "migration-product-type.sql"
 
   # 3. Search vectors (triggers, weighted tsvector, synonyms table)
   "migration-search-vectors.sql"

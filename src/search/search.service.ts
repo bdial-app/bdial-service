@@ -50,6 +50,7 @@ export interface ProductSearchResult {
   price: number | null;
   currency: string;
   photoUrl: string | null;
+  productType: 'product' | 'service';
   providerId: string;
   providerName: string;
   providerCity: string;
@@ -70,11 +71,19 @@ export interface CategorySearchResult {
   relevanceScore: number;
 }
 
+export interface SearchFallback {
+  relaxedProviders?: ProviderSearchResult[];
+  relatedCategories?: CategorySearchResult[];
+  trending?: { query: string; count: number }[];
+  nearbyPopular?: ProviderSearchResult[];
+}
+
 export interface SearchResponse {
   providers: { data: ProviderSearchResult[]; total: number };
   products: { data: ProductSearchResult[]; total: number };
   categories: { data: CategorySearchResult[]; total: number };
   meta: { query: string; tookMs: number; totalResults: number; didYouMean?: string };
+  fallback?: SearchFallback;
 }
 
 @Injectable()
@@ -120,12 +129,15 @@ export class SearchService {
     const tsQuery = this.buildTsQuery(expandedQ);
 
     // Run searches in parallel based on type
+    const searchProducts = type === 'all' || type === 'products' || type === 'services';
+    const productTypeFilter = type === 'products' ? 'product' : type === 'services' ? 'service' : undefined;
+
     const [providers, products, categories] = await Promise.all([
       type === 'all' || type === 'providers'
         ? this.searchProviders(expandedQ, tsQuery, prefixTsQuery, { lat, lng, radius, offset, limit, categoryIds, sortBy, minRating, city, hasGeo })
         : Promise.resolve({ data: [], total: 0 }),
-      type === 'all' || type === 'products'
-        ? this.searchProducts(expandedQ, tsQuery, prefixTsQuery, { lat, lng, radius, offset, limit: type === 'all' ? 5 : limit, hasGeo })
+      searchProducts
+        ? this.searchProducts(expandedQ, tsQuery, prefixTsQuery, { lat, lng, radius, offset, limit: type === 'all' ? 5 : limit, hasGeo, productType: productTypeFilter })
         : Promise.resolve({ data: [], total: 0 }),
       type === 'all' || type === 'categories'
         ? this.searchCategories(expandedQ, tsQuery, prefixTsQuery, { offset, limit: type === 'all' ? 5 : limit })
@@ -145,13 +157,20 @@ export class SearchService {
     }
 
     const totalResults = providers.total + products.total + categories.total;
-    const tookMs = Date.now() - start;
 
-    // "Did you mean?" when results are very few
+    // "Did you mean?" when results are few
     let didYouMean: string | undefined;
-    if (totalResults < 3) {
+    if (totalResults < 5) {
       didYouMean = await this.getDidYouMean(q);
     }
+
+    // ── Fallback strategy when zero results ─────────────────
+    let fallback: SearchFallback | undefined;
+    if (totalResults === 0 && page === 1) {
+      fallback = await this.buildFallback(q, expandedQ, prefixTsQuery, { lat, lng, radius, city, hasGeo });
+    }
+
+    const tookMs = Date.now() - start;
 
     // Log search (fire and forget)
     this.logSearch(q, userId, totalResults, lat, lng, city).catch(() => {});
@@ -166,6 +185,7 @@ export class SearchService {
       products,
       categories,
       meta: { query: q, tookMs, totalResults, ...(didYouMean ? { didYouMean } : {}) },
+      ...(fallback ? { fallback } : {}),
     };
   }
 
@@ -494,7 +514,7 @@ export class SearchService {
     q: string,
     tsQuery: string,
     prefixTsQuery: string,
-    opts: { lat?: number; lng?: number; radius: number; offset: number; limit: number; hasGeo: boolean },
+    opts: { lat?: number; lng?: number; radius: number; offset: number; limit: number; hasGeo: boolean; productType?: string },
   ): Promise<{ data: ProductSearchResult[]; total: number }> {
     const allParams: any[] = [q, prefixTsQuery];
 
@@ -518,6 +538,12 @@ export class SearchService {
       pi++;
     }
 
+    if (opts.productType) {
+      conditions.push(`prod.product_type = $${pi}`);
+      allParams.push(opts.productType);
+      pi++;
+    }
+
     const whereClause = conditions.join(' AND ');
 
     const sql = `
@@ -528,6 +554,7 @@ export class SearchService {
         prod.price,
         prod.currency,
         prod.photo_url,
+        prod.product_type,
         prod.provider_id,
         prov.brand_name AS provider_name,
         prov.city AS provider_city,
@@ -564,6 +591,7 @@ export class SearchService {
           price: r.price != null ? parseFloat(r.price) : null,
           currency: r.currency,
           photoUrl: r.photo_url,
+          productType: r.product_type || 'product',
           providerId: r.provider_id,
           providerName: r.provider_name,
           providerCity: r.provider_city,
@@ -703,7 +731,7 @@ export class SearchService {
       WHERE p.status IN ('active', 'unverified')
         AND (
           ($2 <> '' AND p.search_vector @@ to_tsquery('english', $2))
-          OR similarity(p.brand_name, $1) > 0.1
+          OR similarity(p.brand_name, $1) > 0.06
           OR p.brand_name ILIKE $1 || '%'
           OR p.brand_name ILIKE '%' || $1 || '%'
         )
@@ -734,6 +762,7 @@ export class SearchService {
   }
 
   private async getProductSuggestions(q: string, limit = 3): Promise<SearchSuggestion[]> {
+    const prefixTsQuery = this.buildPrefixTsQuery(q);
     const sql = `
       SELECT
         prod.id,
@@ -742,24 +771,29 @@ export class SearchService {
         prod.price,
         prod.currency,
         prov.brand_name AS provider_name,
-        similarity(prod.name, $1) AS sim
+        GREATEST(
+          similarity(prod.name, $1),
+          CASE WHEN $2 <> '' AND prod.search_vector @@ to_tsquery('english', $2)
+               THEN 0.5 ELSE 0 END
+        ) AS sim
       FROM products prod
       JOIN providers prov ON prov.id = prod.provider_id
       WHERE prod.is_active = true
         AND prov.status IN ('active', 'unverified')
         AND (
-          similarity(prod.name, $1) > 0.15
+          ($2 <> '' AND prod.search_vector @@ to_tsquery('english', $2))
+          OR similarity(prod.name, $1) > 0.08
           OR prod.name ILIKE $1 || '%'
           OR prod.name ILIKE '%' || $1 || '%'
         )
       ORDER BY
         CASE WHEN lower(prod.name) LIKE lower($1) || '%' THEN 0 ELSE 1 END,
         sim DESC
-      LIMIT $2
+      LIMIT $3
     `;
 
     try {
-      const rows = await this.dataSource.query(sql, [q, limit]);
+      const rows = await this.dataSource.query(sql, [q, prefixTsQuery, limit]);
       return rows.map((r: any) => ({
         text: r.name,
         type: 'product' as const,
@@ -795,7 +829,7 @@ export class SearchService {
       WHERE c.is_active = true
         AND (
           ($2 <> '' AND c.search_vector @@ to_tsquery('english', $2))
-          OR similarity(c.name, $1) > 0.15
+          OR similarity(c.name, $1) > 0.08
           OR c.name ILIKE $1 || '%'
           OR c.name ILIKE '%' || $1 || '%'
           OR $1 = ANY(c.keywords)
@@ -902,6 +936,227 @@ export class SearchService {
   }
 
   // ────────────────────────────────────────────────────────────
+  // FALLBACK STRATEGY (zero-result rescue)
+  // ────────────────────────────────────────────────────────────
+
+  private async buildFallback(
+    q: string,
+    expandedQ: string,
+    prefixTsQuery: string,
+    opts: { lat?: number; lng?: number; radius: number; city?: string; hasGeo: boolean },
+  ): Promise<SearchFallback> {
+    const fallback: SearchFallback = {};
+
+    try {
+      // 1. Relaxed provider search — wider radius + lower thresholds
+      const relaxed = await this.searchProvidersRelaxed(expandedQ, prefixTsQuery, opts);
+      if (relaxed.length > 0) {
+        fallback.relaxedProviders = relaxed;
+      }
+
+      // 2. Related categories — fuzzy name/keyword match
+      const relatedCats = await this.getRelatedCategories(q);
+      if (relatedCats.length > 0) {
+        fallback.relatedCategories = relatedCats;
+      }
+
+      // 3. Trending searches (always has data if there's any search activity)
+      const trending = await this.getTrending(opts.city, 6);
+      if (trending.length > 0) {
+        fallback.trending = trending;
+      }
+
+      // 4. Nearby popular — top-rated providers, no text filter (safety net)
+      if (opts.hasGeo) {
+        const nearbyPopular = await this.getNearbyPopular(opts.lat!, opts.lng!, opts.radius);
+        if (nearbyPopular.length > 0) {
+          fallback.nearbyPopular = nearbyPopular;
+        }
+      }
+    } catch (err) {
+      this.logger.warn('Fallback generation failed', err);
+    }
+
+    return fallback;
+  }
+
+  private async searchProvidersRelaxed(
+    q: string,
+    prefixTsQuery: string,
+    opts: { lat?: number; lng?: number; radius: number; city?: string; hasGeo: boolean },
+  ): Promise<ProviderSearchResult[]> {
+    // Try with 4x radius first, then without geo entirely
+    for (const attempt of ['wide_radius', 'no_geo'] as const) {
+      try {
+        const useGeo = attempt === 'wide_radius' && opts.hasGeo;
+        const wideRadius = Math.min(opts.radius * 4, 100);
+        const params: any[] = [q, prefixTsQuery];
+        let distExpr = 'NULL';
+
+        if (useGeo) {
+          distExpr = `6371 * acos(LEAST(1.0, cos(radians($3)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians($4)) + sin(radians($3)) * sin(radians(p.latitude))))`;
+          params.push(opts.lat, opts.lng);
+        }
+
+        let pi = params.length + 1;
+        const conditions: string[] = [`p.status IN ('active', 'unverified')`];
+
+        if (useGeo) {
+          conditions.push(`p.latitude IS NOT NULL`, `p.longitude IS NOT NULL`);
+          conditions.push(`${distExpr} <= $${pi}`);
+          params.push(wideRadius);
+          pi++;
+        }
+
+        if (opts.city) {
+          conditions.push(`p.city ILIKE $${pi}`);
+          params.push(`%${opts.city}%`);
+          pi++;
+        }
+
+        // Lower similarity thresholds for relaxed search
+        conditions.push(`(
+          ($2 <> '' AND p.search_vector @@ to_tsquery('english', $2))
+          OR similarity(p.brand_name, $1) > 0.05
+          OR p.brand_name ILIKE '%' || $1 || '%'
+          OR p.description ILIKE '%' || $1 || '%'
+        )`);
+
+        params.push(6); // limit
+
+        const sql = `
+          SELECT
+            p.id, p.brand_name, p.description, p.profile_photo_url, p.banner_image_url,
+            p.city, p.area, p.status, p.is_women_led, p.is_featured,
+            ${distExpr} AS distance,
+            (SELECT AVG(r.star_rating) FROM reviews r WHERE r.provider_id = p.id AND r.status = 'active') AS avg_rating,
+            (SELECT COUNT(*) FROM reviews r WHERE r.provider_id = p.id AND r.status = 'active') AS review_count,
+            (SELECT string_agg(DISTINCT c.name, ', ') FROM provider_categories pc JOIN categories c ON c.id = pc.category_id WHERE pc.provider_id = p.id) AS categories,
+            GREATEST(
+              CASE WHEN $2 <> '' THEN COALESCE(ts_rank_cd(p.search_vector, to_tsquery('english', $2)), 0) ELSE 0 END,
+              similarity(p.brand_name, $1)
+            ) AS relevance_score
+          FROM providers p
+          WHERE ${conditions.join(' AND ')}
+          ORDER BY relevance_score DESC, distance ASC NULLS LAST
+          LIMIT $${pi}
+        `;
+
+        const rows = await this.dataSource.query(sql, params);
+        if (rows.length > 0) {
+          return rows.map((r: any) => ({
+            id: r.id,
+            brandName: r.brand_name,
+            description: r.description,
+            profilePhotoUrl: r.profile_photo_url,
+            bannerImageUrl: r.banner_image_url,
+            city: r.city,
+            area: r.area,
+            status: r.status,
+            isWomenLed: r.is_women_led,
+            isFeatured: r.is_featured,
+            distance: r.distance != null ? parseFloat(parseFloat(r.distance).toFixed(2)) : null,
+            avgRating: r.avg_rating != null ? parseFloat(parseFloat(r.avg_rating).toFixed(1)) : null,
+            reviewCount: parseInt(r.review_count, 10),
+            categories: r.categories,
+            relevanceScore: parseFloat(parseFloat(r.relevance_score).toFixed(3)),
+          }));
+        }
+      } catch {
+        continue;
+      }
+    }
+    return [];
+  }
+
+  private async getRelatedCategories(q: string): Promise<CategorySearchResult[]> {
+    try {
+      const sql = `
+        WITH cat_counts AS (
+          SELECT category_id, COUNT(DISTINCT provider_id) AS provider_count
+          FROM provider_categories GROUP BY category_id
+        )
+        SELECT
+          c.id, c.name, c.slug, c.description, c.icon, c.image_url, c.parent_id,
+          COALESCE(cc.provider_count, 0) AS provider_count,
+          GREATEST(
+            similarity(c.name, $1),
+            (SELECT MAX(similarity(kw, $1)) FROM unnest(c.keywords) kw)
+          ) AS relevance_score
+        FROM categories c
+        LEFT JOIN cat_counts cc ON cc.category_id = c.id
+        WHERE c.is_active = true
+          AND (
+            similarity(c.name, $1) > 0.1
+            OR c.name ILIKE '%' || $1 || '%'
+            OR EXISTS (SELECT 1 FROM unnest(c.keywords) kw WHERE similarity(kw, $1) > 0.2 OR kw ILIKE '%' || $1 || '%')
+          )
+        ORDER BY relevance_score DESC NULLS LAST
+        LIMIT 4
+      `;
+      const rows = await this.dataSource.query(sql, [q]);
+      return rows.map((r: any) => ({
+        id: r.id,
+        name: r.name,
+        slug: r.slug,
+        description: r.description,
+        icon: r.icon,
+        imageUrl: r.image_url,
+        parentId: r.parent_id,
+        providerCount: parseInt(r.provider_count, 10),
+        relevanceScore: parseFloat(parseFloat(r.relevance_score || '0').toFixed(3)),
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  private async getNearbyPopular(lat: number, lng: number, radius: number): Promise<ProviderSearchResult[]> {
+    try {
+      const distExpr = `6371 * acos(LEAST(1.0, cos(radians($1)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians($2)) + sin(radians($1)) * sin(radians(p.latitude))))`;
+      const sql = `
+        SELECT
+          p.id, p.brand_name, p.description, p.profile_photo_url, p.banner_image_url,
+          p.city, p.area, p.status, p.is_women_led, p.is_featured,
+          ${distExpr} AS distance,
+          rs.avg_rating, COALESCE(rs.review_count, 0) AS review_count,
+          (SELECT string_agg(DISTINCT c.name, ', ') FROM provider_categories pc JOIN categories c ON c.id = pc.category_id WHERE pc.provider_id = p.id) AS categories,
+          COALESCE(rs.avg_rating, 0) AS relevance_score
+        FROM providers p
+        LEFT JOIN (
+          SELECT provider_id, AVG(star_rating) AS avg_rating, COUNT(*) AS review_count
+          FROM reviews WHERE status = 'active' GROUP BY provider_id
+        ) rs ON rs.provider_id = p.id
+        WHERE p.status IN ('active', 'unverified')
+          AND p.latitude IS NOT NULL AND p.longitude IS NOT NULL
+          AND ${distExpr} <= $3
+        ORDER BY rs.avg_rating DESC NULLS LAST, rs.review_count DESC NULLS LAST
+        LIMIT 6
+      `;
+      const rows = await this.dataSource.query(sql, [lat, lng, radius]);
+      return rows.map((r: any) => ({
+        id: r.id,
+        brandName: r.brand_name,
+        description: r.description,
+        profilePhotoUrl: r.profile_photo_url,
+        bannerImageUrl: r.banner_image_url,
+        city: r.city,
+        area: r.area,
+        status: r.status,
+        isWomenLed: r.is_women_led,
+        isFeatured: r.is_featured,
+        distance: r.distance != null ? parseFloat(parseFloat(r.distance).toFixed(2)) : null,
+        avgRating: r.avg_rating != null ? parseFloat(parseFloat(r.avg_rating).toFixed(1)) : null,
+        reviewCount: parseInt(r.review_count, 10),
+        categories: r.categories,
+        relevanceScore: parseFloat(parseFloat(r.relevance_score || '0').toFixed(3)),
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  // ────────────────────────────────────────────────────────────
   // HELPERS
   // ────────────────────────────────────────────────────────────
 
@@ -937,13 +1192,23 @@ export class SearchService {
   private async getDidYouMean(q: string): Promise<string | undefined> {
     try {
       const sql = `
-        SELECT name, similarity(name, $1) AS sim
-        FROM categories
-        WHERE is_active = true AND similarity(name, $1) > 0.25
-        UNION ALL
-        SELECT DISTINCT kw AS name, similarity(kw, $1) AS sim
-        FROM categories, unnest(keywords) AS kw
-        WHERE is_active = true AND similarity(kw, $1) > 0.4
+        SELECT name, sim FROM (
+          SELECT name, similarity(name, $1) AS sim
+          FROM categories
+          WHERE is_active = true AND similarity(name, $1) > 0.2
+          UNION ALL
+          SELECT DISTINCT kw AS name, similarity(kw, $1) AS sim
+          FROM categories, unnest(keywords) AS kw
+          WHERE is_active = true AND similarity(kw, $1) > 0.3
+          UNION ALL
+          SELECT brand_name AS name, similarity(brand_name, $1) AS sim
+          FROM providers
+          WHERE status IN ('active', 'unverified') AND similarity(brand_name, $1) > 0.3
+          UNION ALL
+          SELECT name, similarity(name, $1) AS sim
+          FROM products
+          WHERE is_active = true AND similarity(name, $1) > 0.3
+        ) sub
         ORDER BY sim DESC
         LIMIT 1
       `;

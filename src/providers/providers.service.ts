@@ -133,7 +133,7 @@ export class ProvidersService {
       : [];
 
     // Parse products JSON (each product may have imageCount for multi-image)
-    let parsedProducts: Array<{ name: string; description?: string; price?: number; currency?: string; imageCount?: number }> = [];
+    let parsedProducts: Array<{ name: string; description?: string; price?: number; currency?: string; imageCount?: number; productType?: 'product' | 'service' }> = [];
     if (productsJson) {
       try {
         parsedProducts = JSON.parse(productsJson);
@@ -155,7 +155,7 @@ export class ProvidersService {
         ...cleanData,
         userId,
         status: 'unverified',
-        isWomenLed: user.gender === 'female',
+        isWomenLed: providerData.isWomenLed != null ? providerData.isWomenLed : user.gender === 'female',
         latitude: latitude ? parseFloat(latitude) : null,
         longitude: longitude ? parseFloat(longitude) : null,
         bannerImageUrl: bannerUpload?.url || (providerData as any).bannerImageUrl || null,
@@ -189,6 +189,7 @@ export class ProvidersService {
             price: p.price != null ? p.price : null,
             currency: p.currency || 'INR',
             photoUrl,
+            productType: p.productType || 'product',
             isActive: true,
             displayOrder: i,
           });

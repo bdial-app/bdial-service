@@ -98,4 +98,10 @@ export class CreateProviderDto {
   @IsOptional()
   @IsBoolean()
   isFeatured?: boolean;
+
+  @ApiPropertyOptional({ example: false, description: 'Mark as women-led business' })
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  @IsBoolean()
+  isWomenLed?: boolean;
 }

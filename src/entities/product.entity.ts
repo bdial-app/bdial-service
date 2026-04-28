@@ -41,6 +41,9 @@ export class Product {
   @Column({ name: 'display_order', type: 'int', default: 0 })
   displayOrder: number;
 
+  @Column({ name: 'product_type', type: 'varchar', length: 10, default: 'product' })
+  productType: 'product' | 'service';
+
   @ManyToOne(() => Provider, (p) => p.products)
   @JoinColumn({ name: 'provider_id' })
   provider: Provider;
