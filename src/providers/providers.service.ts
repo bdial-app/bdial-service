@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, ILike } from 'typeorm';
-import { Provider, User, Verification, ProviderCategory, Review, Product, Photo, Message, ConversationParticipant, ProviderBadge, ProviderOffer, SponsoredListing, ProviderWarning } from '../entities';
+import { Provider, User, Verification, ProviderCategory, Review, Product, Photo, Message, ConversationParticipant, ProviderBadge, ProviderOffer, SponsoredListing, ProviderWarning, SystemSetting } from '../entities';
 import { StorageService } from '../storage/storage.service';
 import { GeocodeService } from '../geocode/geocode.service';
 import { CreateProviderDto } from './dto/create-provider.dto';
@@ -38,6 +38,7 @@ export class ProvidersService {
     @InjectRepository(ProviderOffer) private offerRepo: Repository<ProviderOffer>,
     @InjectRepository(SponsoredListing) private sponsorRepo: Repository<SponsoredListing>,
     @InjectRepository(ProviderWarning) private warningRepo: Repository<ProviderWarning>,
+    @InjectRepository(SystemSetting) private settingRepo: Repository<SystemSetting>,
     private storage: StorageService,
     private dataSource: DataSource,
     private geocodeService: GeocodeService,
@@ -466,9 +467,19 @@ export class ProvidersService {
 
     if (city) qb.andWhere('provider.city ILIKE :city', { city: `%${city}%` });
     if (search) {
+      const prefixWords = search.replace(/[^\w\s]/g, ' ').trim().split(/\s+/).filter(Boolean);
+      const prefixTsQuery = prefixWords.length > 0 ? prefixWords.map((w) => `${w}:*`).join(' & ') : '';
       qb.andWhere(
-        '(provider.brandName ILIKE :search OR provider.description ILIKE :search)',
-        { search: `%${search}%` },
+        `(provider.brandName ILIKE :search OR provider.description ILIKE :search
+          OR (:prefixTsQuery <> '' AND provider.search_vector @@ to_tsquery('english', :prefixTsQuery))
+          OR provider.id IN (
+            SELECT pc.provider_id FROM provider_categories pc
+            JOIN categories c ON c.id = pc.category_id
+            WHERE c.name ILIKE :search OR :searchExact = ANY(c.keywords)
+          )
+          OR :searchExact = ANY(provider.keywords)
+        )`,
+        { search: `%${search}%`, searchExact: search.trim().toLowerCase(), prefixTsQuery },
       );
     }
     if (categoryIds?.length) {
@@ -706,6 +717,7 @@ export class ProvidersService {
       endsAt: new Date(dto.endsAt),
       usageLimit: dto.usageLimit ?? null,
       isActive: true,
+      approvalStatus: await this.requiresApproval('offers_require_approval') ? 'pending_approval' : 'approved',
     });
 
     return this.offerRepo.save(offer);
@@ -809,6 +821,7 @@ export class ProvidersService {
       startsAt: new Date(dto.startsAt),
       endsAt: new Date(dto.endsAt),
       isActive: true,
+      approvalStatus: await this.requiresApproval('sponsorship_requires_approval') ? 'pending_approval' : 'approved',
     });
 
     return this.sponsorRepo.save(listing);
@@ -974,5 +987,10 @@ export class ProvidersService {
         }
       }
     }
+  }
+
+  private async requiresApproval(settingKey: string): Promise<boolean> {
+    const setting = await this.settingRepo.findOneBy({ key: settingKey });
+    return setting?.value === 'true';
   }
 }

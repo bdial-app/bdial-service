@@ -1,5 +1,5 @@
 import { ApiProperty,ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsOptional, IsBoolean, IsNumber } from 'class-validator';
+import { IsString, IsOptional, IsBoolean, IsNumber, IsArray } from 'class-validator';
 
 export class CreateCategoryDto {
   @ApiProperty()
@@ -30,6 +30,12 @@ export class CreateCategoryDto {
   @IsOptional()
   @IsString()
   imageUrl?: string;
+
+  @ApiPropertyOptional({ description: 'Search keywords / synonyms', example: ['glass', 'mirror', 'glazier'] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  keywords?: string[];
 }
 
 export class UpdateCategoryDto {
@@ -62,4 +68,10 @@ export class UpdateCategoryDto {
   @IsOptional()
   @IsString()
   imageUrl?: string;
+
+  @ApiPropertyOptional({ description: 'Search keywords / synonyms', example: ['glass', 'mirror', 'glazier'] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  keywords?: string[];
 }

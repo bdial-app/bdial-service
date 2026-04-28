@@ -58,6 +58,23 @@ export class ProviderOffer {
   @Column({ name: 'usage_limit', type: 'int', nullable: true })
   usageLimit: number | null;
 
+  @Column({
+    name: 'approval_status',
+    type: 'enum',
+    enum: ['pending_approval', 'approved', 'rejected'],
+    default: 'approved',
+  })
+  approvalStatus: 'pending_approval' | 'approved' | 'rejected';
+
+  @Column({ name: 'admin_notes', type: 'text', nullable: true })
+  adminNotes: string | null;
+
+  @Column({ name: 'reviewed_by', type: 'uuid', nullable: true })
+  reviewedBy: string | null;
+
+  @Column({ name: 'reviewed_at', type: 'timestamptz', nullable: true })
+  reviewedAt: Date | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

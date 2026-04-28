@@ -169,6 +169,7 @@ export class ExploreService {
       .andWhere('sl.starts_at <= :now', { now })
       .andWhere('sl.ends_at >= :now', { now })
       .andWhere('sl.spent_amount < sl.budget_amount')
+      .andWhere("sl.approval_status = 'approved'")
       .andWhere("p.status IN ('active', 'unverified')");
 
     this.withReviewStats(qb);
@@ -248,6 +249,7 @@ export class ExploreService {
       .andWhere('o.starts_at <= :now', { now })
       .andWhere('o.ends_at >= :now', { now })
       .andWhere('(o.usage_limit IS NULL OR o.usage_count < o.usage_limit)')
+      .andWhere("o.approval_status = 'approved'")
       .andWhere("p.status IN ('active', 'unverified')");
 
     this.withReviewStats(qb);;
@@ -376,12 +378,32 @@ export class ExploreService {
   // ─── Category Spotlight ──────────────────────────────────────
 
   private async getCategorySpotlight(lat?: number, lng?: number, city?: string) {
-    // Pick a random trending category
+    // Pick a random category that has at least 1 active provider
     const categories = await this.categoryRepo
       .createQueryBuilder('c')
       .select(['c.id AS id', 'c.name AS name', 'c.slug AS slug', 'c.icon AS icon'])
+      .addSelect(
+        `COALESCE((
+          SELECT COUNT(DISTINCT pc.provider_id)::int
+          FROM provider_categories pc
+          JOIN providers p ON p.id = pc.provider_id AND p.status IN ('active', 'unverified')
+          WHERE pc.category_id = c.id
+             OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id = c.id)
+        ), 0)`,
+        'providerCount',
+      )
       .where('c.parentId IS NULL')
       .andWhere('c.isActive = :active', { active: true })
+      .having(
+        `COALESCE((
+          SELECT COUNT(DISTINCT pc.provider_id)::int
+          FROM provider_categories pc
+          JOIN providers p ON p.id = pc.provider_id AND p.status IN ('active', 'unverified')
+          WHERE pc.category_id = c.id
+             OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id = c.id)
+        ), 0) > 0`,
+      )
+      .groupBy('c.id')
       .orderBy('RANDOM()')
       .limit(1)
       .getRawMany();
@@ -508,6 +530,16 @@ export class ExploreService {
       )
       .where('c.parentId IS NULL')
       .andWhere('c.isActive = :active', { active: true })
+      .having(
+        `COALESCE((
+          SELECT COUNT(DISTINCT pc.provider_id)::int
+          FROM provider_categories pc
+          JOIN providers p ON p.id = pc.provider_id AND p.status IN ('active', 'unverified')
+          WHERE pc.category_id = c.id
+             OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id = c.id)
+        ), 0) > 0`,
+      )
+      .groupBy('c.id')
       .orderBy('"providerCount"', 'DESC')
       .addOrderBy('c.displayOrder', 'ASC')
       .limit(limit)
@@ -607,6 +639,7 @@ export class ExploreService {
       .andWhere('o.starts_at <= :now', { now })
       .andWhere('o.ends_at >= :now', { now })
       .andWhere('(o.usage_limit IS NULL OR o.usage_count < o.usage_limit)')
+      .andWhere("o.approval_status = 'approved'")
       .orderBy('o.discount_value', 'DESC')
       .getRawMany();
 

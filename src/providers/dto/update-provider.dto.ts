@@ -1,4 +1,11 @@
-import { PartialType } from '@nestjs/swagger';
+import { PartialType, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsArray, IsOptional, IsString } from 'class-validator';
 import { CreateProviderDto } from './create-provider.dto';
 
-export class UpdateProviderDto extends PartialType(CreateProviderDto) {}
+export class UpdateProviderDto extends PartialType(CreateProviderDto) {
+  @ApiPropertyOptional({ description: 'Search keywords for improved discoverability', example: ['glass', 'mirror'] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  keywords?: string[];
+}

@@ -1,14 +1,9 @@
-import { Injectable, InternalServerErrorException, BadRequestException } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import {
   S3Client,
   DeleteObjectCommand,
   PutObjectCommand,
 } from '@aws-sdk/client-s3';
-import { v4 as uuidv4 } from 'uuid';
-
-const ALLOWED_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp']);
-const ALLOWED_MIMES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp']);
 
 @Injectable()
 export class StorageService {
@@ -16,16 +11,16 @@ export class StorageService {
   private readonly bucket: string;
   private readonly endpoint: string;
 
-  constructor(private readonly config: ConfigService) {
-    this.bucket = this.config.getOrThrow<string>('S3_BUCKET');
-    this.endpoint = this.config.getOrThrow<string>('S3_ENDPOINT');
+  constructor() {
+    this.bucket = process.env.S3_BUCKET!;
+    this.endpoint = process.env.S3_ENDPOINT!;
 
     this.s3 = new S3Client({
       endpoint: this.endpoint,
-      region: this.config.get<string>('S3_REGION', 'ap-southeast-1'),
+      region: process.env.S3_REGION || 'ap-southeast-1',
       credentials: {
-        accessKeyId: this.config.getOrThrow<string>('S3_ACCESS_KEY_ID'),
-        secretAccessKey: this.config.getOrThrow<string>('S3_SECRET_ACCESS_KEY'),
+        accessKeyId: process.env.S3_ACCESS_KEY_ID!,
+        secretAccessKey: process.env.S3_SECRET_ACCESS_KEY!,
       },
       forcePathStyle: true, // required for Supabase S3-compatible storage
     });
@@ -41,13 +36,8 @@ export class StorageService {
     folder: string,
     file: Express.Multer.File,
   ): Promise<{ url: string; storageKey: string }> {
-    const ext = (file.originalname.split('.').pop() || '').toLowerCase();
-    if (!ALLOWED_EXTENSIONS.has(ext)) {
-      throw new BadRequestException(`File extension '.${ext}' is not allowed`);
-    }
-    if (!ALLOWED_MIMES.has(file.mimetype)) {
-      throw new BadRequestException(`MIME type '${file.mimetype}' is not allowed`);
-    }
+    const ext = file.originalname.split('.').pop();
+    const { v4: uuidv4 } = await import('uuid'); // Dynamic import for ESM compatibility
     const storageKey = `${folder}/${uuidv4()}.${ext}`;
 
     try {
@@ -59,9 +49,8 @@ export class StorageService {
           ContentType: file.mimetype,
         }),
       );
-    } catch (err) {if (err instanceof Error) {
-    throw new InternalServerErrorException(`S3 upload failed: ${err.message}`);
-  }
+    } catch (err) {
+      throw new InternalServerErrorException(`S3 upload failed: ${err.message}`);
     }
 
     // Supabase public URL format
@@ -76,16 +65,13 @@ export class StorageService {
   async delete(storageKey: string): Promise<void> {
     try {
       await this.s3.send(
-         new DeleteObjectCommand({
+        new DeleteObjectCommand({
           Bucket: this.bucket,
           Key: storageKey,
         }),
       );
     } catch (err) {
-      if(err instanceof Error){
       throw new InternalServerErrorException(`S3 delete failed: ${err.message}`);
-      }
     }
-
   }
 }

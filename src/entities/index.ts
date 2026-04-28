@@ -27,3 +27,4 @@ export { Report } from './report.entity';
 export { ProviderWarning } from './provider-warning.entity';
 export { AuditLog } from './audit-log.entity';
 export { SystemSetting } from './system-setting.entity';
+export { SearchSynonym } from './search-synonym.entity';

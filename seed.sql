@@ -55,6 +55,10 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen_at   TIMESTAMPTZ;
 -- categories
 ALTER TABLE categories ADD COLUMN IF NOT EXISTS parent_id        UUID;
 ALTER TABLE categories ADD COLUMN IF NOT EXISTS icon_storage_key VARCHAR(300);
+ALTER TABLE categories ADD COLUMN IF NOT EXISTS keywords         TEXT[] DEFAULT NULL;
+
+-- providers (keywords)
+ALTER TABLE providers ADD COLUMN IF NOT EXISTS keywords          TEXT[] DEFAULT NULL;
 
 -- verifications
 ALTER TABLE verifications ADD COLUMN IF NOT EXISTS admin_notes TEXT;

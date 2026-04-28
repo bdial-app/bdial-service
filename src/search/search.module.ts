@@ -5,12 +5,14 @@ import { Product } from '../entities/product.entity';
 import { Category } from '../entities/category.entity';
 import { SearchLog } from '../entities/search-log.entity';
 import { ProviderAnalyticsEvent } from '../entities/provider-analytics-event.entity';
+import { SponsoredListing } from '../entities/sponsored-listing.entity';
+import { SearchSynonym } from '../entities/search-synonym.entity';
 import { SearchController } from './search.controller';
 import { SearchService } from './search.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Provider, Product, Category, SearchLog, ProviderAnalyticsEvent]),
+    TypeOrmModule.forFeature([Provider, Product, Category, SearchLog, ProviderAnalyticsEvent, SponsoredListing, SearchSynonym]),
   ],
   controllers: [SearchController],
   providers: [SearchService],

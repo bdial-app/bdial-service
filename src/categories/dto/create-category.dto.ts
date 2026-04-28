@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsBoolean, IsInt, IsUUID, Min, MaxLength } from 'class-validator';
+import { IsString, IsOptional, IsBoolean, IsInt, IsUUID, Min, MaxLength, IsArray } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateCategoryDto {
@@ -63,4 +63,13 @@ export class CreateCategoryDto {
   @IsString()
   @IsOptional()
   imageUrl?: string;
+
+  @ApiPropertyOptional({
+    description: 'Search keywords / synonyms for improved discoverability',
+    example: ['glass', 'mirror', 'glazier', 'glass cutting'],
+  })
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  keywords?: string[];
 }

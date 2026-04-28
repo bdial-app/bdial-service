@@ -43,6 +43,9 @@ export class Category {
   @Column({ name: 'display_order', type: 'int', default: 0 })
   displayOrder: number;
 
+  @Column({ type: 'text', array: true, nullable: true, default: null })
+  keywords: string[] | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

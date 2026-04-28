@@ -1,9 +1,10 @@
-import { Injectable, ForbiddenException, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, ForbiddenException, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull, In, MoreThan, ILike, Between } from 'typeorm';
-import { Provider, User, Verification, Review, ReviewReport, Report, ProviderWarning, Product, Category, Conversation, ConversationParticipant, Message, PromoBanner, SponsoredListing, ProviderOffer, ProviderBadge, ProviderAnalyticsEvent, ProviderLead, SearchLog, AdEvent, AppInvite, AuditLog, SystemSetting } from '../entities';
+import { Repository, DataSource, IsNull, In, MoreThan, ILike, Between } from 'typeorm';
+import { Provider, User, Verification, Review, ReviewReport, Report, ProviderWarning, Product, Category, ProviderCategory, Conversation, ConversationParticipant, Message, PromoBanner, SponsoredListing, ProviderOffer, ProviderBadge, ProviderAnalyticsEvent, ProviderLead, SearchLog, AdEvent, AppInvite, AuditLog, SystemSetting, Photo, ReviewPhoto } from '../entities';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { BugReport } from '../bug-reports/bug-report.entity';
+import { AdminCreateUserDto, AdminCreateProviderWithUserDto } from './dto/admin-create-user.dto';
 
 @Injectable()
 export class AdminService {
@@ -31,6 +32,10 @@ export class AdminService {
     @InjectRepository(AuditLog) private auditLogRepo: Repository<AuditLog>,
     @InjectRepository(SystemSetting) private settingRepo: Repository<SystemSetting>,
     @InjectRepository(BugReport) private bugReportRepo: Repository<BugReport>,
+    @InjectRepository(ProviderCategory) private providerCatRepo: Repository<ProviderCategory>,
+    @InjectRepository(Photo) private photoRepo: Repository<Photo>,
+    @InjectRepository(ReviewPhoto) private reviewPhotoRepo: Repository<ReviewPhoto>,
+    private dataSource: DataSource,
     private notificationDispatch: NotificationDispatchService,
   ) {}
 
@@ -50,6 +55,7 @@ export class AdminService {
       newUsersThisWeek, newUsersThisMonth, newProvidersThisWeek,
       totalSearches, totalLeads, totalConversations, totalInvites,
       activeOffers, activeSponsorships, activeBanners,
+      pendingSponsorships, pendingOffers,
     ] = await Promise.all([
       this.providerRepo.count({ where: { status: 'pending' } }),
       this.providerRepo.count(),
@@ -69,6 +75,8 @@ export class AdminService {
       this.offerRepo.count({ where: { isActive: true } }),
       this.sponsoredRepo.count({ where: { isActive: true } }),
       this.bannerRepo.count({ where: { isActive: true } }),
+      this.sponsoredRepo.count({ where: { approvalStatus: 'pending_approval' } }),
+      this.offerRepo.count({ where: { approvalStatus: 'pending_approval' } }),
     ]);
 
     return {
@@ -77,6 +85,7 @@ export class AdminService {
       newUsersThisWeek, newUsersThisMonth, newProvidersThisWeek,
       totalSearches, totalLeads, totalConversations, totalInvites,
       activeOffers, activeSponsorships, activeBanners,
+      pendingSponsorships, pendingOffers,
     };
   }
 
@@ -582,6 +591,7 @@ export class AdminService {
     status?: string,
     role?: string,
     city?: string,
+    hasProvider?: string,
   ) {
     this.assertAdmin(admin);
     const currentPage = Math.max(1, page || 1);
@@ -601,6 +611,17 @@ export class AdminService {
     if (status && VALID_USER_STATUSES.includes(status)) qb.andWhere('u.status = :status', { status });
     if (role && VALID_USER_ROLES.includes(role)) qb.andWhere('u.role = :role', { role });
     if (city) qb.andWhere('u.city ILIKE :city', { city: `%${city}%` });
+
+    // Filter by whether user has a provider profile
+    if (hasProvider === 'false') {
+      qb.andWhere(
+        'NOT EXISTS (SELECT 1 FROM providers p WHERE p.user_id = u.id AND p.deleted_at IS NULL)',
+      );
+    } else if (hasProvider === 'true') {
+      qb.andWhere(
+        'EXISTS (SELECT 1 FROM providers p WHERE p.user_id = u.id AND p.deleted_at IS NULL)',
+      );
+    }
 
     qb.orderBy('u.createdAt', 'DESC').skip(skip).take(pageSize);
 
@@ -1193,6 +1214,8 @@ export class AdminService {
     };
   }
 
+  // Note: approvalStatus filter is available via getPendingSponsorships()
+
   async getSponsoredById(admin: any, id: string) {
     this.assertAdmin(admin);
     const listing = await this.sponsoredRepo.findOne({
@@ -1263,6 +1286,8 @@ export class AdminService {
       meta: { total, page: currentPage, limit: pageSize, totalPages: Math.ceil(total / pageSize) },
     };
   }
+
+  // Note: approvalStatus filter is available via getPendingOffers()
 
   async getOfferById(admin: any, id: string) {
     this.assertAdmin(admin);
@@ -1669,7 +1694,7 @@ export class AdminService {
       if (existing.role === 'admin') throw new BadRequestException('User is already an admin');
       existing.role = 'admin';
       const updated = await this.userRepo.save(existing);
-      await this.createAuditLog(admin.sub, 'promote_to_admin', 'user', existing.id, { role: 'customer' }, { role: 'admin' });
+      await this.createAuditLog(admin.id, 'promote_to_admin', 'user', existing.id, { role: 'customer' }, { role: 'admin' });
       return updated;
     }
     const user = this.userRepo.create({
@@ -1681,7 +1706,7 @@ export class AdminService {
       status: 'active',
     });
     const saved = await this.userRepo.save(user);
-    await this.createAuditLog(admin.sub, 'create_admin', 'user', saved.id, null, { name: saved.name, role: 'admin' });
+    await this.createAuditLog(admin.id, 'create_admin', 'user', saved.id, null, { name: saved.name, role: 'admin' });
     return saved;
   }
 
@@ -1689,23 +1714,23 @@ export class AdminService {
     this.assertAdmin(admin);
     const user = await this.userRepo.findOneBy({ id, role: 'admin' });
     if (!user) throw new NotFoundException('Admin user not found');
-    if (id === admin.sub) throw new BadRequestException('Cannot modify own account');
+    if (id === admin.id) throw new BadRequestException('Cannot modify own account');
     const prev = { name: user.name, status: user.status };
     if (body.name) user.name = body.name;
     if (body.status) user.status = body.status;
     const updated = await this.userRepo.save(user);
-    await this.createAuditLog(admin.sub, 'update_admin', 'user', id, prev, { name: updated.name, status: updated.status });
+    await this.createAuditLog(admin.id, 'update_admin', 'user', id, prev, { name: updated.name, status: updated.status });
     return updated;
   }
 
   async removeAdminUser(admin: any, id: string) {
     this.assertAdmin(admin);
-    if (id === admin.sub) throw new BadRequestException('Cannot remove own admin access');
+    if (id === admin.id) throw new BadRequestException('Cannot remove own admin access');
     const user = await this.userRepo.findOneBy({ id, role: 'admin' });
     if (!user) throw new NotFoundException('Admin user not found');
     user.role = 'customer';
     await this.userRepo.save(user);
-    await this.createAuditLog(admin.sub, 'demote_admin', 'user', id, { role: 'admin' }, { role: 'customer' });
+    await this.createAuditLog(admin.id, 'demote_admin', 'user', id, { role: 'admin' }, { role: 'customer' });
     return { message: 'Admin access removed' };
   }
 
@@ -1780,12 +1805,12 @@ export class AdminService {
         const prev = setting.value;
         setting.value = s.value;
         const updated = await this.settingRepo.save(setting);
-        await this.createAuditLog(admin.sub, 'update_setting', 'system_setting', setting.id, { value: prev }, { value: s.value }, `Setting: ${s.key}`);
+        await this.createAuditLog(admin.id, 'update_setting', 'system_setting', setting.id, { value: prev }, { value: s.value }, `Setting: ${s.key}`);
         results.push(updated);
       } else {
         setting = this.settingRepo.create({ key: s.key, value: s.value, type: 'string' });
         const saved = await this.settingRepo.save(setting);
-        await this.createAuditLog(admin.sub, 'create_setting', 'system_setting', saved.id, null, { key: s.key, value: s.value });
+        await this.createAuditLog(admin.id, 'create_setting', 'system_setting', saved.id, null, { key: s.key, value: s.value });
         results.push(saved);
       }
     }
@@ -1798,7 +1823,7 @@ export class AdminService {
     if (existing) throw new BadRequestException(`Setting "${body.key}" already exists`);
     const setting = this.settingRepo.create(body);
     const saved = await this.settingRepo.save(setting);
-    await this.createAuditLog(admin.sub, 'create_setting', 'system_setting', saved.id, null, body);
+    await this.createAuditLog(admin.id, 'create_setting', 'system_setting', saved.id, null, body);
     return saved;
   }
 
@@ -1806,9 +1831,832 @@ export class AdminService {
     this.assertAdmin(admin);
     const setting = await this.settingRepo.findOneBy({ id });
     if (!setting) throw new NotFoundException('Setting not found');
-    await this.createAuditLog(admin.sub, 'delete_setting', 'system_setting', id, { key: setting.key, value: setting.value }, null);
+    await this.createAuditLog(admin.id, 'delete_setting', 'system_setting', id, { key: setting.key, value: setting.value }, null);
     await this.settingRepo.remove(setting);
     return { message: 'Setting deleted' };
+  }
+
+  // ============================================
+  // Admin Create User
+  // ============================================
+
+  async adminCreateUser(admin: any, dto: AdminCreateUserDto) {
+    this.assertAdmin(admin);
+
+    // Check for duplicate mobile number
+    const existingByMobile = await this.userRepo.findOne({ where: { mobileNumber: dto.mobileNumber } });
+    if (existingByMobile) {
+      throw new ConflictException(`User with mobile number ${dto.mobileNumber} already exists`);
+    }
+
+    // Check for duplicate email if provided
+    if (dto.email) {
+      const existingByEmail = await this.userRepo.findOne({ where: { email: dto.email } });
+      if (existingByEmail) {
+        throw new ConflictException(`User with email ${dto.email} already exists`);
+      }
+    }
+
+    const user = this.userRepo.create({
+      mobileNumber: dto.mobileNumber,
+      name: dto.name,
+      gender: dto.gender,
+      email: dto.email || null,
+      city: dto.city || null,
+      area: dto.area || null,
+      pincode: dto.pincode || null,
+      latitude: dto.latitude ? parseFloat(dto.latitude) : null,
+      longitude: dto.longitude ? parseFloat(dto.longitude) : null,
+      role: 'customer',
+      status: 'active',
+    });
+
+    const saved = await this.userRepo.save(user);
+    await this.createAuditLog(admin.id, 'admin_create_user', 'user', saved.id, null, {
+      name: saved.name,
+      mobileNumber: saved.mobileNumber,
+      gender: saved.gender,
+    });
+
+    return saved;
+  }
+
+  // ============================================
+  // Admin Create Provider with User (End-to-End)
+  // ============================================
+
+  async adminCreateProviderWithUser(admin: any, dto: AdminCreateProviderWithUserDto) {
+    this.assertAdmin(admin);
+
+    // ── Pre-flight validations ────────────────────────────
+    // 1. Check duplicate user mobile
+    const existingUser = await this.userRepo.findOne({ where: { mobileNumber: dto.userMobileNumber } });
+    if (existingUser) {
+      // Check if user already has a provider
+      const existingProvider = await this.providerRepo.findOne({ where: { userId: existingUser.id } });
+      if (existingProvider) {
+        throw new ConflictException(`User with mobile ${dto.userMobileNumber} already has a provider profile`);
+      }
+    }
+
+    // 2. Check duplicate email
+    if (dto.userEmail) {
+      const existingByEmail = await this.userRepo.findOne({ where: { email: dto.userEmail } });
+      if (existingByEmail && (!existingUser || existingByEmail.id !== existingUser.id)) {
+        throw new ConflictException(`User with email ${dto.userEmail} already exists`);
+      }
+    }
+
+    // 3. Validate category IDs exist
+    if (dto.categoryIds?.length) {
+      const categoriesToCheck = await this.categoryRepo.findBy({ id: In(dto.categoryIds) });
+      if (categoriesToCheck.length !== dto.categoryIds.length) {
+        const foundIds = categoriesToCheck.map(c => c.id);
+        const missing = dto.categoryIds.filter(id => !foundIds.includes(id));
+        throw new BadRequestException(`Invalid category IDs: ${missing.join(', ')}`);
+      }
+    }
+
+    // 4. Validate products
+    if (dto.products?.length) {
+      for (const p of dto.products) {
+        if (!p.name || p.name.trim().length === 0) {
+          throw new BadRequestException('Product name cannot be empty');
+        }
+        if (p.price != null && p.price < 0) {
+          throw new BadRequestException(`Product "${p.name}" has an invalid price`);
+        }
+      }
+    }
+
+    // ── Execute in a transaction ──────────────────────────
+    return this.dataSource.transaction(async (manager) => {
+      // Step 1: Create or reuse user
+      let user: User;
+      if (existingUser) {
+        user = existingUser;
+        // Update user fields if needed
+        user.name = dto.userName;
+        user.gender = dto.userGender;
+        if (dto.userEmail) user.email = dto.userEmail;
+        if (dto.syncLocation !== false) {
+          user.city = dto.city || user.city;
+          user.area = dto.area || user.area;
+          user.pincode = dto.pincode || user.pincode;
+          user.latitude = dto.latitude ? parseFloat(dto.latitude) : user.latitude;
+          user.longitude = dto.longitude ? parseFloat(dto.longitude) : user.longitude;
+        }
+        user.preferredMode = 'provider';
+        user = await manager.save(User, user);
+      } else {
+        user = manager.create(User, {
+          mobileNumber: dto.userMobileNumber,
+          name: dto.userName,
+          gender: dto.userGender,
+          email: dto.userEmail || null,
+          city: dto.syncLocation !== false ? (dto.city || null) : null,
+          area: dto.syncLocation !== false ? (dto.area || null) : null,
+          pincode: dto.syncLocation !== false ? (dto.pincode || null) : null,
+          latitude: dto.syncLocation !== false && dto.latitude ? parseFloat(dto.latitude) : null,
+          longitude: dto.syncLocation !== false && dto.longitude ? parseFloat(dto.longitude) : null,
+          role: 'customer',
+          status: 'active',
+          preferredMode: 'provider',
+        });
+        user = await manager.save(User, user);
+      }
+
+      // Step 2: Create provider
+      const provider = manager.create(Provider, {
+        userId: user.id,
+        brandName: dto.brandName,
+        description: dto.description || null,
+        address: dto.address || null,
+        city: dto.city,
+        area: dto.area || null,
+        pincode: dto.pincode || null,
+        latitude: dto.latitude ? parseFloat(dto.latitude) : null,
+        longitude: dto.longitude ? parseFloat(dto.longitude) : null,
+        contactNumber: dto.contactNumber,
+        openTime: dto.openTime || null,
+        closeTime: dto.closeTime || null,
+        isWomenLed: dto.isWomenLed ?? (dto.userGender === 'female'),
+        status: (dto.providerStatus as any) || 'active',
+      });
+      const savedProvider = await manager.save(Provider, provider);
+
+      // Step 3: Create category associations
+      if (dto.categoryIds?.length) {
+        const cats = dto.categoryIds.map((catId) =>
+          manager.create(ProviderCategory, { providerId: savedProvider.id, categoryId: catId }),
+        );
+        await manager.save(ProviderCategory, cats);
+      }
+
+      // Step 4: Create products
+      const savedProducts: Product[] = [];
+      if (dto.products?.length) {
+        for (let i = 0; i < dto.products.length; i++) {
+          const p = dto.products[i];
+          const product = manager.create(Product, {
+            providerId: savedProvider.id,
+            name: p.name.trim(),
+            description: p.description || null,
+            price: p.price != null ? p.price : null,
+            currency: p.currency || 'INR',
+            isActive: true,
+            displayOrder: i,
+          });
+          savedProducts.push(await manager.save(Product, product));
+        }
+      }
+
+      // Step 5: Audit log
+      await this.createAuditLog(admin.id, 'admin_create_provider_with_user', 'provider', savedProvider.id, null, {
+        userId: user.id,
+        userName: user.name,
+        userMobile: user.mobileNumber,
+        brandName: savedProvider.brandName,
+        city: savedProvider.city,
+        contactNumber: savedProvider.contactNumber,
+        providerStatus: savedProvider.status,
+        categoryCount: dto.categoryIds?.length || 0,
+        productCount: savedProducts.length,
+      });
+
+      // Return full result
+      return {
+        user,
+        provider: savedProvider,
+        products: savedProducts,
+        categories: dto.categoryIds || [],
+      };
+    });
+  }
+
+  // ============================================
+  // Admin OTP Management (for verification in flow)
+  // ============================================
+
+  private adminOtpStore = new Map<string, { otp: string; expiresAt: Date; sentAt: Date; purpose: string }>();
+
+  async adminSendOtp(admin: any, mobileNumber: string, purpose = 'user_verification') {
+    this.assertAdmin(admin);
+    const phone = mobileNumber.trim();
+    if (!/^\d{10}$/.test(phone)) {
+      throw new BadRequestException('Mobile number must be exactly 10 digits');
+    }
+
+    // Check cooldown
+    const existing = this.adminOtpStore.get(`${phone}_${purpose}`);
+    if (existing && new Date() < existing.expiresAt) {
+      const timeSinceSent = Date.now() - existing.sentAt.getTime();
+      if (timeSinceSent < 60 * 1000) {
+        const remaining = Math.ceil((60 * 1000 - timeSinceSent) / 1000);
+        throw new BadRequestException({
+          message: 'OTP recently sent. Please wait.',
+          retryAfterSeconds: remaining,
+          error_code: 'OTP_RATE_LIMITED',
+        });
+      }
+    }
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+    this.adminOtpStore.set(`${phone}_${purpose}`, { otp, expiresAt, sentAt: new Date(), purpose });
+    console.log(`[Admin OTP] ${phone} (${purpose}): ${otp} (Expires: ${expiresAt.toISOString()})`);
+
+    return { message: 'OTP sent successfully', data: { mobileNumber: phone, expiresIn: '5 minutes', otp } };
+  }
+
+  async adminVerifyOtp(admin: any, mobileNumber: string, otp: string, purpose = 'user_verification') {
+    this.assertAdmin(admin);
+    const phone = mobileNumber.trim();
+    const code = otp.trim();
+
+    if (!/^\d{10}$/.test(phone)) throw new BadRequestException('Mobile number must be exactly 10 digits');
+    if (!/^\d{6}$/.test(code)) throw new BadRequestException('OTP must be exactly 6 digits');
+
+    const key = `${phone}_${purpose}`;
+    const record = this.adminOtpStore.get(key);
+    if (!record) {
+      throw new BadRequestException({ message: 'No OTP found for this number', error_code: 'OTP_NOT_FOUND' });
+    }
+    if (new Date() > record.expiresAt) {
+      this.adminOtpStore.delete(key);
+      throw new BadRequestException({ message: 'OTP has expired', error_code: 'OTP_EXPIRED' });
+    }
+    if (record.otp !== code) {
+      throw new BadRequestException({ message: 'Invalid OTP', error_code: 'INVALID_OTP' });
+    }
+    this.adminOtpStore.delete(key);
+
+    return { message: 'OTP verified successfully', verified: true, mobileNumber: phone, purpose };
+  }
+
+  // ============================================
+  // Admin Check User Exists
+  // ============================================
+
+  async adminCheckUser(admin: any, mobileNumber: string) {
+    this.assertAdmin(admin);
+    const phone = mobileNumber.trim();
+    if (!/^\d{10}$/.test(phone)) throw new BadRequestException('Mobile number must be exactly 10 digits');
+
+    const user = await this.userRepo.findOne({
+      where: { mobileNumber: phone },
+      relations: ['provider'],
+    });
+
+    if (!user) {
+      return { exists: false, hasProvider: false, user: null };
+    }
+
+    return {
+      exists: true,
+      hasProvider: !!user.provider,
+      user: {
+        id: user.id,
+        name: user.name,
+        mobileNumber: user.mobileNumber,
+        email: user.email,
+        gender: user.gender,
+        city: user.city,
+        status: user.status,
+      },
+      provider: user.provider ? {
+        id: user.provider.id,
+        brandName: user.provider.brandName,
+        status: user.provider.status,
+      } : null,
+    };
+  }
+
+  // ============================================
+  // Provider Lifecycle (Disable / Enable / Delete)
+  // ============================================
+
+  async disableProvider(admin: any, providerId: string) {
+    this.assertAdmin(admin);
+    const provider = await this.providerRepo.findOneBy({ id: providerId });
+    if (!provider) throw new NotFoundException('Provider not found');
+    if (provider.deletedAt) throw new BadRequestException('Provider is already deleted');
+
+    const prevStatus = provider.status;
+    await this.providerRepo.update(providerId, { status: 'disabled' });
+    await this.createAuditLog(admin.id, 'disable_provider', 'provider', providerId, { status: prevStatus }, { status: 'disabled' });
+
+    this.notificationDispatch.sendToUser(
+      provider.userId, 'provider_status', 'Provider Profile Disabled',
+      'Your provider profile has been disabled by admin. Contact support for details.',
+      { route: '/provider-details', params: { id: providerId } },
+    ).catch(() => {});
+
+    return { ...provider, status: 'disabled' };
+  }
+
+  async enableProvider(admin: any, providerId: string) {
+    this.assertAdmin(admin);
+    const provider = await this.providerRepo.findOneBy({ id: providerId });
+    if (!provider) throw new NotFoundException('Provider not found');
+    if (provider.status !== 'disabled') throw new BadRequestException('Provider is not disabled');
+
+    await this.providerRepo.update(providerId, { status: 'active' });
+    await this.createAuditLog(admin.id, 'enable_provider', 'provider', providerId, { status: 'disabled' }, { status: 'active' });
+
+    this.notificationDispatch.sendToUser(
+      provider.userId, 'provider_status', 'Provider Profile Re-enabled',
+      'Your provider profile has been re-enabled and is now active.',
+      { route: '/provider-details', params: { id: providerId } },
+    ).catch(() => {});
+
+    return { ...provider, status: 'active' };
+  }
+
+  async softDeleteProvider(admin: any, providerId: string) {
+    this.assertAdmin(admin);
+    const provider = await this.providerRepo.findOneBy({ id: providerId });
+    if (!provider) throw new NotFoundException('Provider not found');
+    if (provider.deletedAt) throw new BadRequestException('Provider is already deleted');
+
+    const prevStatus = provider.status;
+    await this.providerRepo.update(providerId, { deletedAt: new Date(), status: 'disabled' });
+    await this.createAuditLog(admin.id, 'delete_provider', 'provider', providerId, { status: prevStatus, deletedAt: null }, { status: 'disabled', deletedAt: new Date().toISOString() });
+
+    this.notificationDispatch.sendToUser(
+      provider.userId, 'provider_status', 'Provider Profile Removed',
+      'Your provider profile has been removed. Contact support if you believe this is an error.',
+      { route: '/' },
+    ).catch(() => {});
+
+    return { message: 'Provider soft-deleted', id: providerId };
+  }
+
+  async toggleFeaturedProvider(admin: any, providerId: string, isFeatured: boolean) {
+    this.assertAdmin(admin);
+    const provider = await this.providerRepo.findOneBy({ id: providerId });
+    if (!provider) throw new NotFoundException('Provider not found');
+
+    await this.providerRepo.update(providerId, { isFeatured });
+    await this.createAuditLog(admin.id, 'toggle_featured', 'provider', providerId, { isFeatured: provider.isFeatured }, { isFeatured });
+
+    return { ...provider, isFeatured };
+  }
+
+  // ============================================
+  // User Lifecycle (Unsuspend / Delete)
+  // ============================================
+
+  async unsuspendUser(admin: any, userId: string) {
+    this.assertAdmin(admin);
+    const user = await this.userRepo.findOneBy({ id: userId });
+    if (!user) throw new NotFoundException('User not found');
+    if (user.status !== 'suspended') throw new BadRequestException('User is not suspended');
+
+    await this.userRepo.update(userId, { status: 'active' });
+    await this.createAuditLog(admin.id, 'unsuspend_user', 'user', userId, { status: 'suspended' }, { status: 'active' });
+
+    return { ...user, status: 'active' };
+  }
+
+  async softDeleteUser(admin: any, userId: string) {
+    this.assertAdmin(admin);
+    const user = await this.userRepo.findOneBy({ id: userId });
+    if (!user) throw new NotFoundException('User not found');
+    if (user.role === 'admin') throw new BadRequestException('Cannot delete admin users through this endpoint');
+
+    await this.userRepo.update(userId, { status: 'deleted', deletedAt: new Date() });
+    await this.createAuditLog(admin.id, 'delete_user', 'user', userId, { status: user.status }, { status: 'deleted' });
+
+    // Also disable their provider if they have one
+    const provider = await this.providerRepo.findOneBy({ userId });
+    if (provider && !provider.deletedAt) {
+      await this.providerRepo.update(provider.id, { status: 'disabled', deletedAt: new Date() });
+    }
+
+    return { message: 'User soft-deleted', id: userId };
+  }
+
+  // ============================================
+  // Photo Moderation
+  // ============================================
+
+  async getPhotosForModeration(admin: any, page?: number, limit?: number, type?: string) {
+    this.assertAdmin(admin);
+    const currentPage = Math.max(1, page || 1);
+    const pageSize = Math.min(100, Math.max(1, limit || 20));
+    const skip = (currentPage - 1) * pageSize;
+
+    const results: any[] = [];
+    let total = 0;
+
+    if (!type || type === 'provider') {
+      const [photos, count] = await this.photoRepo.findAndCount({
+        relations: ['provider'],
+        order: { uploadedAt: 'DESC' },
+        skip: type === 'provider' ? skip : 0,
+        take: type === 'provider' ? pageSize : undefined,
+      });
+      results.push(...photos.map(p => ({ ...p, photoType: 'provider', brandName: p.provider?.brandName })));
+      total += count;
+    }
+
+    if (!type || type === 'review') {
+      const [photos, count] = await this.reviewPhotoRepo.findAndCount({
+        relations: ['review'],
+        skip: type === 'review' ? skip : 0,
+        take: type === 'review' ? pageSize : undefined,
+      });
+      results.push(...photos.map(p => ({ ...p, photoType: 'review' })));
+      total += count;
+    }
+
+    if (!type || type === 'product') {
+      const qb = this.productRepo.createQueryBuilder('p')
+        .select(['p.id', 'p.name', 'p.photoUrl', 'p.photoUrls', 'p.providerId'])
+        .where('(p.photoUrl IS NOT NULL OR array_length(p.photo_urls, 1) > 0)');
+      const productCount = await qb.getCount();
+      total += productCount;
+
+      if (type === 'product') {
+        qb.skip(skip).take(pageSize);
+      }
+      const products = await qb.getMany();
+      for (const prod of products) {
+        const urls = [prod.photoUrl, ...(prod.photoUrls || [])].filter(Boolean);
+        for (const url of urls) {
+          results.push({ id: prod.id, imageUrl: url, photoType: 'product', productName: prod.name, providerId: prod.providerId });
+        }
+      }
+    }
+
+    // Sort by newest and paginate if mixed type
+    if (!type) {
+      const paged = results.slice(skip, skip + pageSize);
+      return { items: paged, meta: { total, page: currentPage, limit: pageSize, totalPages: Math.ceil(total / pageSize) } };
+    }
+
+    return { items: results, meta: { total, page: currentPage, limit: pageSize, totalPages: Math.ceil(total / pageSize) } };
+  }
+
+  async removePhoto(admin: any, id: string, type: string) {
+    this.assertAdmin(admin);
+
+    if (type === 'provider') {
+      const photo = await this.photoRepo.findOneBy({ id });
+      if (!photo) throw new NotFoundException('Photo not found');
+      await this.photoRepo.remove(photo);
+      await this.createAuditLog(admin.id, 'remove_photo', 'photo', id, { imageUrl: photo.imageUrl, providerId: photo.providerId }, null, 'Provider gallery photo removed');
+      return { message: 'Provider photo removed' };
+    }
+
+    if (type === 'review') {
+      const photo = await this.reviewPhotoRepo.findOneBy({ id });
+      if (!photo) throw new NotFoundException('Review photo not found');
+      await this.reviewPhotoRepo.remove(photo);
+      await this.createAuditLog(admin.id, 'remove_photo', 'review_photo', id, { imageUrl: photo.imageUrl, reviewId: photo.reviewId }, null, 'Review photo removed');
+      return { message: 'Review photo removed' };
+    }
+
+    if (type === 'product') {
+      const product = await this.productRepo.findOneBy({ id });
+      if (!product) throw new NotFoundException('Product not found');
+      await this.productRepo.update(id, { photoUrl: null, photoUrls: [] });
+      await this.createAuditLog(admin.id, 'remove_photo', 'product', id, { photoUrl: product.photoUrl, photoUrls: product.photoUrls }, { photoUrl: null, photoUrls: [] }, 'Product photos removed');
+      return { message: 'Product photos removed' };
+    }
+
+    throw new BadRequestException('Invalid photo type. Must be provider, review, or product');
+  }
+
+  // ============================================
+  // Bulk Actions
+  // ============================================
+
+  async bulkProviderAction(admin: any, ids: string[], action: 'approve' | 'suspend' | 'unsuspend' | 'disable') {
+    this.assertAdmin(admin);
+    if (!ids?.length) throw new BadRequestException('No IDs provided');
+    if (ids.length > 50) throw new BadRequestException('Maximum 50 items per bulk action');
+
+    const statusMap = { approve: 'active', suspend: 'suspended', unsuspend: 'active', disable: 'disabled' };
+    const newStatus = statusMap[action] as any;
+
+    const result = await this.providerRepo.update(ids.map(id => id), { status: newStatus });
+    await this.createAuditLog(admin.id, `bulk_${action}_providers`, 'provider', null, { ids }, { status: newStatus, count: result.affected }, `Bulk ${action} on ${ids.length} providers`);
+
+    // Send notifications for significant actions
+    if (action === 'approve' || action === 'suspend') {
+      const providers = await this.providerRepo.find({ where: { id: In(ids) } });
+      for (const provider of providers) {
+        const title = action === 'approve' ? 'Provider Approved!' : 'Provider Suspended';
+        const body = action === 'approve'
+          ? 'Your provider profile has been approved and is now live.'
+          : 'Your provider profile has been suspended. Contact support for details.';
+        this.notificationDispatch.sendToUser(provider.userId, 'provider_status', title, body, { route: '/provider-details', params: { id: provider.id } }).catch(() => {});
+      }
+    }
+
+    return { message: `Bulk ${action} completed`, affected: result.affected };
+  }
+
+  async bulkUserAction(admin: any, ids: string[], action: 'suspend' | 'unsuspend') {
+    this.assertAdmin(admin);
+    if (!ids?.length) throw new BadRequestException('No IDs provided');
+    if (ids.length > 50) throw new BadRequestException('Maximum 50 items per bulk action');
+
+    const newStatus = action === 'suspend' ? 'suspended' : 'active';
+    const result = await this.userRepo.update(ids.map(id => id), { status: newStatus });
+    await this.createAuditLog(admin.id, `bulk_${action}_users`, 'user', null, { ids }, { status: newStatus, count: result.affected }, `Bulk ${action} on ${ids.length} users`);
+
+    return { message: `Bulk ${action} completed`, affected: result.affected };
+  }
+
+  async bulkProductAction(admin: any, ids: string[], action: 'activate' | 'deactivate' | 'delete') {
+    this.assertAdmin(admin);
+    if (!ids?.length) throw new BadRequestException('No IDs provided');
+    if (ids.length > 50) throw new BadRequestException('Maximum 50 items per bulk action');
+
+    if (action === 'delete') {
+      const result = await this.productRepo.update(ids.map(id => id), { isActive: false });
+      await this.createAuditLog(admin.id, 'bulk_delete_products', 'product', null, { ids }, { isActive: false, count: result.affected }, `Bulk delete ${ids.length} products`);
+      return { message: 'Bulk delete completed', affected: result.affected };
+    }
+
+    const isActive = action === 'activate';
+    const result = await this.productRepo.update(ids.map(id => id), { isActive });
+    await this.createAuditLog(admin.id, `bulk_${action}_products`, 'product', null, { ids }, { isActive, count: result.affected }, `Bulk ${action} on ${ids.length} products`);
+
+    return { message: `Bulk ${action} completed`, affected: result.affected };
+  }
+
+  // ============================================
+  // Sponsorship Approval Workflow
+  // ============================================
+
+  async getPendingSponsorships(admin: any, page?: number, limit?: number) {
+    this.assertAdmin(admin);
+    const currentPage = Math.max(1, page || 1);
+    const pageSize = Math.min(100, Math.max(1, limit || 20));
+    const skip = (currentPage - 1) * pageSize;
+
+    const [items, total] = await this.sponsoredRepo.findAndCount({
+      where: { approvalStatus: 'pending_approval' },
+      relations: ['provider'],
+      order: { createdAt: 'ASC' },
+      skip,
+      take: pageSize,
+    });
+
+    return { items, meta: { total, page: currentPage, limit: pageSize, totalPages: Math.ceil(total / pageSize) } };
+  }
+
+  async approveSponsorship(admin: any, id: string) {
+    this.assertAdmin(admin);
+    const listing = await this.sponsoredRepo.findOne({ where: { id }, relations: ['provider'] });
+    if (!listing) throw new NotFoundException('Sponsored listing not found');
+    if (listing.approvalStatus !== 'pending_approval') throw new BadRequestException('Listing is not pending approval');
+
+    await this.sponsoredRepo.update(id, { approvalStatus: 'approved', reviewedBy: admin.id, reviewedAt: new Date() });
+    await this.createAuditLog(admin.id, 'approve_sponsorship', 'sponsored_listing', id, { approvalStatus: 'pending_approval' }, { approvalStatus: 'approved' });
+
+    if (listing.provider) {
+      this.notificationDispatch.sendToUser(listing.provider.userId, 'provider_status', 'Sponsorship Approved!', 'Your sponsored listing has been approved and is now active.', { route: '/' }).catch(() => {});
+    }
+
+    return { ...listing, approvalStatus: 'approved' };
+  }
+
+  async rejectSponsorship(admin: any, id: string, adminNotes?: string) {
+    this.assertAdmin(admin);
+    const listing = await this.sponsoredRepo.findOne({ where: { id }, relations: ['provider'] });
+    if (!listing) throw new NotFoundException('Sponsored listing not found');
+
+    await this.sponsoredRepo.update(id, { approvalStatus: 'rejected', isActive: false, adminNotes: adminNotes || null, reviewedBy: admin.id, reviewedAt: new Date() });
+    await this.createAuditLog(admin.id, 'reject_sponsorship', 'sponsored_listing', id, { approvalStatus: listing.approvalStatus }, { approvalStatus: 'rejected', adminNotes });
+
+    if (listing.provider) {
+      this.notificationDispatch.sendToUser(listing.provider.userId, 'provider_status', 'Sponsorship Not Approved', adminNotes || 'Your sponsorship request was not approved. Please review and resubmit.', { route: '/' }).catch(() => {});
+    }
+
+    return { ...listing, approvalStatus: 'rejected', isActive: false };
+  }
+
+  // ============================================
+  // Offer Approval Workflow
+  // ============================================
+
+  async getPendingOffers(admin: any, page?: number, limit?: number) {
+    this.assertAdmin(admin);
+    const currentPage = Math.max(1, page || 1);
+    const pageSize = Math.min(100, Math.max(1, limit || 20));
+    const skip = (currentPage - 1) * pageSize;
+
+    const [items, total] = await this.offerRepo.findAndCount({
+      where: { approvalStatus: 'pending_approval' },
+      relations: ['provider'],
+      order: { createdAt: 'ASC' },
+      skip,
+      take: pageSize,
+    });
+
+    return { items, meta: { total, page: currentPage, limit: pageSize, totalPages: Math.ceil(total / pageSize) } };
+  }
+
+  async approveOffer(admin: any, id: string) {
+    this.assertAdmin(admin);
+    const offer = await this.offerRepo.findOne({ where: { id }, relations: ['provider'] });
+    if (!offer) throw new NotFoundException('Offer not found');
+    if (offer.approvalStatus !== 'pending_approval') throw new BadRequestException('Offer is not pending approval');
+
+    await this.offerRepo.update(id, { approvalStatus: 'approved', reviewedBy: admin.id, reviewedAt: new Date() });
+    await this.createAuditLog(admin.id, 'approve_offer', 'provider_offer', id, { approvalStatus: 'pending_approval' }, { approvalStatus: 'approved' });
+
+    if (offer.provider) {
+      this.notificationDispatch.sendToUser(offer.provider.userId, 'provider_status', 'Offer Approved!', `Your offer "${offer.title}" has been approved and is now visible.`, { route: '/' }).catch(() => {});
+    }
+
+    return { ...offer, approvalStatus: 'approved' };
+  }
+
+  async rejectOffer(admin: any, id: string, adminNotes?: string) {
+    this.assertAdmin(admin);
+    const offer = await this.offerRepo.findOne({ where: { id }, relations: ['provider'] });
+    if (!offer) throw new NotFoundException('Offer not found');
+
+    await this.offerRepo.update(id, { approvalStatus: 'rejected', isActive: false, adminNotes: adminNotes || null, reviewedBy: admin.id, reviewedAt: new Date() });
+    await this.createAuditLog(admin.id, 'reject_offer', 'provider_offer', id, { approvalStatus: offer.approvalStatus }, { approvalStatus: 'rejected', adminNotes });
+
+    if (offer.provider) {
+      this.notificationDispatch.sendToUser(offer.provider.userId, 'provider_status', 'Offer Not Approved', adminNotes || `Your offer "${offer.title}" was not approved.`, { route: '/' }).catch(() => {});
+    }
+
+    return { ...offer, approvalStatus: 'rejected', isActive: false };
+  }
+
+  // ============================================
+  // Feature Flags
+  // ============================================
+
+  async getFeatureFlags(admin: any) {
+    this.assertAdmin(admin);
+    const flags = await this.settingRepo.find({
+      where: [{ group: 'feature_flags' }, { group: 'limits' }],
+      order: { group: 'ASC', key: 'ASC' },
+    });
+    return flags;
+  }
+
+  async updateFeatureFlags(admin: any, flags: { key: string; value: string }[]) {
+    this.assertAdmin(admin);
+    const results: SystemSetting[] = [];
+    for (const flag of flags) {
+      const setting = await this.settingRepo.findOneBy({ key: flag.key });
+      if (!setting) throw new NotFoundException(`Setting "${flag.key}" not found`);
+      if (setting.group !== 'feature_flags' && setting.group !== 'limits') {
+        throw new BadRequestException(`Setting "${flag.key}" is not a feature flag or limit`);
+      }
+      const prev = setting.value;
+      setting.value = flag.value;
+      const saved = await this.settingRepo.save(setting);
+      await this.createAuditLog(admin.id, 'update_feature_flag', 'system_setting', setting.id, { value: prev }, { value: flag.value }, `Feature flag: ${flag.key}`);
+      results.push(saved);
+    }
+    return results;
+  }
+
+  // ============================================
+  // CSV Export
+  // ============================================
+
+  async exportData(admin: any, entity: string, filters: { status?: string; city?: string; search?: string }) {
+    this.assertAdmin(admin);
+    const validEntities = ['users', 'providers', 'products', 'reviews', 'reports'];
+    if (!validEntities.includes(entity)) {
+      throw new BadRequestException(`Invalid entity: ${entity}. Must be one of: ${validEntities.join(', ')}`);
+    }
+
+    let rows: any[] = [];
+
+    if (entity === 'users') {
+      const qb = this.userRepo.createQueryBuilder('u')
+        .select(['u.id', 'u.name', 'u.mobileNumber', 'u.email', 'u.gender', 'u.role', 'u.city', 'u.area', 'u.status', 'u.createdAt']);
+      if (filters.status) qb.andWhere('u.status = :status', { status: filters.status });
+      if (filters.city) qb.andWhere('u.city ILIKE :city', { city: `%${filters.city}%` });
+      if (filters.search) qb.andWhere('(u.name ILIKE :s OR u.mobileNumber ILIKE :s OR u.email ILIKE :s)', { s: `%${filters.search}%` });
+      qb.orderBy('u.createdAt', 'DESC').take(10000);
+      rows = await qb.getMany();
+    }
+
+    if (entity === 'providers') {
+      const qb = this.providerRepo.createQueryBuilder('p')
+        .leftJoinAndSelect('p.user', 'user')
+        .select(['p.id', 'p.brandName', 'p.contactNumber', 'p.city', 'p.area', 'p.status', 'p.isWomenLed', 'p.isFeatured', 'p.createdAt', 'user.name', 'user.mobileNumber']);
+      if (filters.status) qb.andWhere('p.status = :status', { status: filters.status });
+      if (filters.city) qb.andWhere('p.city ILIKE :city', { city: `%${filters.city}%` });
+      if (filters.search) qb.andWhere('(p.brandName ILIKE :s OR user.name ILIKE :s)', { s: `%${filters.search}%` });
+      qb.andWhere('p.deletedAt IS NULL').orderBy('p.createdAt', 'DESC').take(10000);
+      rows = await qb.getMany();
+    }
+
+    if (entity === 'products') {
+      const qb = this.productRepo.createQueryBuilder('p')
+        .leftJoin('p.provider', 'prov')
+        .select(['p.id', 'p.name', 'p.description', 'p.price', 'p.currency', 'p.isActive', 'prov.brandName']);
+      if (filters.search) qb.andWhere('(p.name ILIKE :s OR p.description ILIKE :s)', { s: `%${filters.search}%` });
+      qb.orderBy('p.displayOrder', 'ASC').take(10000);
+      rows = await qb.getMany();
+    }
+
+    if (entity === 'reviews') {
+      const qb = this.reviewRepo.createQueryBuilder('r')
+        .leftJoin('r.user', 'user')
+        .leftJoin('r.provider', 'prov')
+        .select(['r.id', 'r.rating', 'r.text', 'r.status', 'r.createdAt', 'user.name', 'prov.brandName']);
+      if (filters.status) qb.andWhere('r.status = :status', { status: filters.status });
+      qb.orderBy('r.createdAt', 'DESC').take(10000);
+      rows = await qb.getMany();
+    }
+
+    if (entity === 'reports') {
+      const qb = this.entityReportRepo.createQueryBuilder('r')
+        .leftJoin('r.reporter', 'user')
+        .select(['r.id', 'r.entityType', 'r.reason', 'r.status', 'r.createdAt', 'user.name']);
+      if (filters.status) qb.andWhere('r.status = :status', { status: filters.status });
+      qb.orderBy('r.createdAt', 'DESC').take(10000);
+      rows = await qb.getMany();
+    }
+
+    // Convert to CSV
+    if (!rows.length) return { csv: '', count: 0 };
+
+    const flattenObj = (obj: any, prefix = ''): Record<string, any> => {
+      const result: Record<string, any> = {};
+      for (const [k, v] of Object.entries(obj)) {
+        const key = prefix ? `${prefix}_${k}` : k;
+        if (v && typeof v === 'object' && !(v instanceof Date) && !Array.isArray(v)) {
+          Object.assign(result, flattenObj(v, key));
+        } else {
+          result[key] = v instanceof Date ? v.toISOString() : v;
+        }
+      }
+      return result;
+    };
+
+    const flatRows = rows.map(r => flattenObj(r));
+    const headers = [...new Set(flatRows.flatMap(r => Object.keys(r)))];
+    const csvLines = [
+      headers.join(','),
+      ...flatRows.map(r => headers.map(h => {
+        const val = r[h] ?? '';
+        const str = String(val).replace(/"/g, '""');
+        return str.includes(',') || str.includes('"') || str.includes('\n') ? `"${str}"` : str;
+      }).join(',')),
+    ];
+
+    await this.createAuditLog(admin.id, 'export_data', entity, null, null, { count: rows.length, filters }, `Exported ${rows.length} ${entity}`);
+
+    return { csv: csvLines.join('\n'), count: rows.length, headers };
+  }
+
+  // ============================================
+  // Unified Moderation Queue
+  // ============================================
+
+  async getModerationQueue(admin: any) {
+    this.assertAdmin(admin);
+
+    const [
+      pendingProviders,
+      pendingVerifications,
+      openReports,
+      flaggedReviews,
+      pendingSponsorships,
+      pendingOffers,
+      openBugReports,
+    ] = await Promise.all([
+      this.providerRepo.count({ where: { status: 'pending' } }),
+      this.verificationRepo.count({ where: { aadhaarStatus: 'pending' } }),
+      this.entityReportRepo.count({ where: { status: 'pending' } }),
+      this.reportRepo.count({ where: { status: 'pending' } }),
+      this.sponsoredRepo.count({ where: { approvalStatus: 'pending_approval' } }),
+      this.offerRepo.count({ where: { approvalStatus: 'pending_approval' } }),
+      this.bugReportRepo.count({ where: { status: 'open' } }),
+    ]);
+
+    const totalPending = pendingProviders + pendingVerifications + openReports + flaggedReviews + pendingSponsorships + pendingOffers + openBugReports;
+
+    return {
+      totalPending,
+      items: [
+        { type: 'providers', label: 'Pending Providers', count: pendingProviders, route: '/providers?status=pending' },
+        { type: 'verifications', label: 'Pending Verifications', count: pendingVerifications, route: '/registrations?status=pending' },
+        { type: 'reports', label: 'Open Reports', count: openReports, route: '/reports?status=pending' },
+        { type: 'reviews', label: 'Flagged Reviews', count: flaggedReviews, route: '/reviews?status=flagged' },
+        { type: 'sponsorships', label: 'Pending Sponsorships', count: pendingSponsorships, route: '/sponsorships?approvalStatus=pending_approval' },
+        { type: 'offers', label: 'Pending Offers', count: pendingOffers, route: '/offers?approvalStatus=pending_approval' },
+        { type: 'bugReports', label: 'Open Bug Reports', count: openBugReports, route: '/bug-reports-admin?status=open' },
+      ],
+    };
   }
 }
 

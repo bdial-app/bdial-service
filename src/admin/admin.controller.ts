@@ -2,6 +2,7 @@ import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards, Request, 
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiBody, ApiQuery, ApiParam } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import { AdminService } from './admin.service';
+import { AdminCreateUserDto, AdminCreateProviderWithUserDto, AdminSendOtpDto, AdminVerifyOtpDto } from './dto/admin-create-user.dto';
 
 @ApiTags('Admin')
 @ApiBearerAuth()
@@ -206,6 +207,7 @@ export class AdminController {
   @ApiQuery({ name: 'status', required: false, type: String })
   @ApiQuery({ name: 'role', required: false, type: String })
   @ApiQuery({ name: 'city', required: false, type: String })
+  @ApiQuery({ name: 'hasProvider', required: false, type: String, description: 'Filter by provider status: true/false' })
   getUsers(
     @Request() req,
     @Query('page') page?: number,
@@ -214,8 +216,9 @@ export class AdminController {
     @Query('status') status?: string,
     @Query('role') role?: string,
     @Query('city') city?: string,
+    @Query('hasProvider') hasProvider?: string,
   ) {
-    return this.adminService.getUsers(req.user, page, limit, search, status, role, city);
+    return this.adminService.getUsers(req.user, page, limit, search, status, role, city, hasProvider);
   }
 
   @Get('users/:id')
@@ -814,5 +817,293 @@ export class AdminController {
     @Body('adminNotes') adminNotes?: string,
   ) {
     return this.adminService.updateBugReport(req.user, id, status, adminNotes);
+  }
+
+  // ============================================
+  // Admin User & Provider Creation
+  // ============================================
+
+  @Post('create-user')
+  @ApiOperation({ summary: 'Admin creates a new user with all details (OTP optional)' })
+  createUser(@Request() req, @Body() body: AdminCreateUserDto) {
+    return this.adminService.adminCreateUser(req.user, body);
+  }
+
+  @Post('create-provider-with-user')
+  @ApiOperation({ summary: 'Admin creates user + provider + products in one atomic flow' })
+  createProviderWithUser(@Request() req, @Body() body: AdminCreateProviderWithUserDto) {
+    return this.adminService.adminCreateProviderWithUser(req.user, body);
+  }
+
+  @Get('check-user/:mobileNumber')
+  @ApiOperation({ summary: 'Check if a user exists by mobile number (for pre-flight validation)' })
+  @ApiParam({ name: 'mobileNumber', description: '10-digit mobile number' })
+  checkUser(@Param('mobileNumber') mobileNumber: string, @Request() req) {
+    return this.adminService.adminCheckUser(req.user, mobileNumber);
+  }
+
+  @Post('otp/send')
+  @ApiOperation({ summary: 'Admin-triggered OTP send for user/business number verification' })
+  adminSendOtp(@Request() req, @Body() body: AdminSendOtpDto) {
+    return this.adminService.adminSendOtp(req.user, body.mobileNumber, body.purpose);
+  }
+
+  @Post('otp/verify')
+  @ApiOperation({ summary: 'Admin-triggered OTP verification' })
+  adminVerifyOtp(@Request() req, @Body() body: AdminVerifyOtpDto & { purpose?: string }) {
+    return this.adminService.adminVerifyOtp(req.user, body.mobileNumber, body.otp, body.purpose);
+  }
+
+  // ============================================
+  // Provider Lifecycle (Disable / Enable / Delete)
+  // ============================================
+
+  @Patch('providers/:id/disable')
+  @ApiOperation({ summary: 'Disable a provider (provider can re-enable)' })
+  @ApiParam({ name: 'id', description: 'Provider ID' })
+  disableProvider(@Param('id') id: string, @Request() req) {
+    return this.adminService.disableProvider(req.user, id);
+  }
+
+  @Patch('providers/:id/enable')
+  @ApiOperation({ summary: 'Re-enable a disabled provider' })
+  @ApiParam({ name: 'id', description: 'Provider ID' })
+  enableProvider(@Param('id') id: string, @Request() req) {
+    return this.adminService.enableProvider(req.user, id);
+  }
+
+  @Delete('providers/:id')
+  @ApiOperation({ summary: 'Soft-delete a provider' })
+  @ApiParam({ name: 'id', description: 'Provider ID' })
+  softDeleteProvider(@Param('id') id: string, @Request() req) {
+    return this.adminService.softDeleteProvider(req.user, id);
+  }
+
+  @Patch('providers/:id/feature')
+  @ApiOperation({ summary: 'Toggle featured status of a provider' })
+  @ApiParam({ name: 'id', description: 'Provider ID' })
+  @ApiBody({ schema: { properties: { isFeatured: { type: 'boolean' } }, required: ['isFeatured'] } })
+  toggleFeaturedProvider(@Param('id') id: string, @Request() req, @Body('isFeatured') isFeatured: boolean) {
+    return this.adminService.toggleFeaturedProvider(req.user, id, isFeatured);
+  }
+
+  // ============================================
+  // User Lifecycle (Unsuspend / Delete)
+  // ============================================
+
+  @Patch('users/:id/unsuspend')
+  @ApiOperation({ summary: 'Unsuspend a user' })
+  @ApiParam({ name: 'id', description: 'User ID' })
+  unsuspendUser(@Param('id') id: string, @Request() req) {
+    return this.adminService.unsuspendUser(req.user, id);
+  }
+
+  @Delete('users/:id')
+  @ApiOperation({ summary: 'Soft-delete a user' })
+  @ApiParam({ name: 'id', description: 'User ID' })
+  softDeleteUser(@Param('id') id: string, @Request() req) {
+    return this.adminService.softDeleteUser(req.user, id);
+  }
+
+  // ============================================
+  // Photo Moderation
+  // ============================================
+
+  @Get('photos')
+  @ApiOperation({ summary: 'Paginated list of all photos for moderation' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'type', required: false, type: String, description: 'provider | product | review' })
+  getPhotos(
+    @Request() req,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+    @Query('type') type?: string,
+  ) {
+    return this.adminService.getPhotosForModeration(req.user, page, limit, type);
+  }
+
+  @Delete('photos/:id')
+  @ApiOperation({ summary: 'Remove a photo (provider gallery photo)' })
+  @ApiParam({ name: 'id', description: 'Photo ID' })
+  @ApiQuery({ name: 'type', required: true, type: String, description: 'provider | product | review' })
+  removePhoto(@Param('id') id: string, @Request() req, @Query('type') type: string) {
+    return this.adminService.removePhoto(req.user, id, type);
+  }
+
+  // ============================================
+  // Bulk Actions
+  // ============================================
+
+  @Post('providers/bulk-action')
+  @ApiOperation({ summary: 'Bulk action on providers (approve, suspend, unsuspend, disable)' })
+  @ApiBody({
+    schema: {
+      properties: {
+        ids: { type: 'array', items: { type: 'string' } },
+        action: { type: 'string', enum: ['approve', 'suspend', 'unsuspend', 'disable'] },
+      },
+      required: ['ids', 'action'],
+    },
+  })
+  bulkProviderAction(
+    @Request() req,
+    @Body('ids') ids: string[],
+    @Body('action') action: 'approve' | 'suspend' | 'unsuspend' | 'disable',
+  ) {
+    return this.adminService.bulkProviderAction(req.user, ids, action);
+  }
+
+  @Post('users/bulk-action')
+  @ApiOperation({ summary: 'Bulk action on users (suspend, unsuspend)' })
+  @ApiBody({
+    schema: {
+      properties: {
+        ids: { type: 'array', items: { type: 'string' } },
+        action: { type: 'string', enum: ['suspend', 'unsuspend'] },
+      },
+      required: ['ids', 'action'],
+    },
+  })
+  bulkUserAction(
+    @Request() req,
+    @Body('ids') ids: string[],
+    @Body('action') action: 'suspend' | 'unsuspend',
+  ) {
+    return this.adminService.bulkUserAction(req.user, ids, action);
+  }
+
+  @Post('products/bulk-action')
+  @ApiOperation({ summary: 'Bulk action on products (activate, deactivate, delete)' })
+  @ApiBody({
+    schema: {
+      properties: {
+        ids: { type: 'array', items: { type: 'string' } },
+        action: { type: 'string', enum: ['activate', 'deactivate', 'delete'] },
+      },
+      required: ['ids', 'action'],
+    },
+  })
+  bulkProductAction(
+    @Request() req,
+    @Body('ids') ids: string[],
+    @Body('action') action: 'activate' | 'deactivate' | 'delete',
+  ) {
+    return this.adminService.bulkProductAction(req.user, ids, action);
+  }
+
+  // ============================================
+  // Sponsorship Approval Workflow
+  // ============================================
+
+  @Get('sponsorships/pending')
+  @ApiOperation({ summary: 'List sponsorships pending approval' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  getPendingSponsorships(
+    @Request() req,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.adminService.getPendingSponsorships(req.user, page, limit);
+  }
+
+  @Patch('sponsorships/:id/approve')
+  @ApiOperation({ summary: 'Approve a sponsorship' })
+  @ApiParam({ name: 'id', description: 'Sponsored listing ID' })
+  approveSponsorship(@Param('id') id: string, @Request() req) {
+    return this.adminService.approveSponsorship(req.user, id);
+  }
+
+  @Patch('sponsorships/:id/reject')
+  @ApiOperation({ summary: 'Reject a sponsorship' })
+  @ApiParam({ name: 'id', description: 'Sponsored listing ID' })
+  @ApiBody({ schema: { properties: { adminNotes: { type: 'string' } } } })
+  rejectSponsorship(@Param('id') id: string, @Request() req, @Body('adminNotes') adminNotes?: string) {
+    return this.adminService.rejectSponsorship(req.user, id, adminNotes);
+  }
+
+  // ============================================
+  // Offer Approval Workflow
+  // ============================================
+
+  @Get('offers/pending')
+  @ApiOperation({ summary: 'List offers pending approval' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  getPendingOffers(
+    @Request() req,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.adminService.getPendingOffers(req.user, page, limit);
+  }
+
+  @Patch('offers/:id/approve')
+  @ApiOperation({ summary: 'Approve an offer' })
+  @ApiParam({ name: 'id', description: 'Offer ID' })
+  approveOffer(@Param('id') id: string, @Request() req) {
+    return this.adminService.approveOffer(req.user, id);
+  }
+
+  @Patch('offers/:id/reject')
+  @ApiOperation({ summary: 'Reject an offer' })
+  @ApiParam({ name: 'id', description: 'Offer ID' })
+  @ApiBody({ schema: { properties: { adminNotes: { type: 'string' } } } })
+  rejectOffer(@Param('id') id: string, @Request() req, @Body('adminNotes') adminNotes?: string) {
+    return this.adminService.rejectOffer(req.user, id, adminNotes);
+  }
+
+  // ============================================
+  // Feature Flags
+  // ============================================
+
+  @Get('feature-flags')
+  @ApiOperation({ summary: 'Get all feature flags (settings in feature_flags group)' })
+  getFeatureFlags(@Request() req) {
+    return this.adminService.getFeatureFlags(req.user);
+  }
+
+  @Patch('feature-flags')
+  @ApiOperation({ summary: 'Update feature flags in batch' })
+  @ApiBody({
+    schema: {
+      properties: {
+        flags: { type: 'array', items: { properties: { key: { type: 'string' }, value: { type: 'string' } } } },
+      },
+    },
+  })
+  updateFeatureFlags(@Request() req, @Body('flags') flags: { key: string; value: string }[]) {
+    return this.adminService.updateFeatureFlags(req.user, flags);
+  }
+
+  // ============================================
+  // CSV Export
+  // ============================================
+
+  @Get('export/:entity')
+  @ApiOperation({ summary: 'Export entity data as CSV' })
+  @ApiParam({ name: 'entity', description: 'Entity to export: users, providers, products, reviews, reports' })
+  @ApiQuery({ name: 'status', required: false, type: String })
+  @ApiQuery({ name: 'city', required: false, type: String })
+  @ApiQuery({ name: 'search', required: false, type: String })
+  exportData(
+    @Param('entity') entity: string,
+    @Request() req,
+    @Query('status') status?: string,
+    @Query('city') city?: string,
+    @Query('search') search?: string,
+  ) {
+    return this.adminService.exportData(req.user, entity, { status, city, search });
+  }
+
+  // ============================================
+  // Moderation Queue (Unified)
+  // ============================================
+
+  @Get('moderation/queue')
+  @ApiOperation({ summary: 'Unified moderation queue with counts of all pending items' })
+  getModerationQueue(@Request() req) {
+    return this.adminService.getModerationQueue(req.user);
   }
 }

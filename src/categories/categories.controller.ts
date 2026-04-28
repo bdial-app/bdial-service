@@ -67,6 +67,16 @@ export class CategoriesController {
     return this.categoriesService.findTopLevel();
   }
 
+  @Get('tree')
+  @ApiOperation({ summary: 'Get full category tree (all active categories with children nested)' })
+  @ApiResponse({
+    status: 200,
+    description: 'Full category tree retrieved successfully',
+  })
+  findTree() {
+    return this.categoriesService.findTree();
+  }
+
   @Get(':parentId/subcategories')
   @ApiOperation({ summary: 'Get sub-categories by parent ID with pagination' })
   @ApiResponse({

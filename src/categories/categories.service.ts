@@ -27,22 +27,127 @@ export class CategoriesService {
     const { page = 1, limit = 10 } = paginationDto;
     const skip = (page - 1) * limit;
 
-    const [data, total] = await this.categoryRepo.findAndCount({
-      where: { isActive: true },
-      skip,
-      take: limit,
-      order: { displayOrder: 'ASC' },
-      relations: ['children'],
-    });
+    const providerCountExpr = `COALESCE((
+      SELECT COUNT(DISTINCT pc.provider_id)::int
+      FROM provider_categories pc
+      JOIN providers p ON p.id = pc.provider_id AND p.status IN ('active', 'unverified')
+      WHERE pc.category_id = c.id
+         OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id = c.id)
+    ), 0)`;
+
+    // Get total count of categories with providers
+    const [{ count: total }] = await this.categoryRepo.query(
+      `SELECT COUNT(*)::int AS count FROM (
+        SELECT c.id FROM categories c
+        WHERE c.is_active = true
+        AND ${providerCountExpr} > 0
+      ) sub`,
+    );
+
+    // Get paginated categories with children
+    const data = await this.categoryRepo
+      .createQueryBuilder('c')
+      .leftJoinAndSelect('c.children', 'ch')
+      .where('c.is_active = true')
+      .andWhere(`${providerCountExpr} > 0`)
+      .orderBy(`${providerCountExpr}`, 'DESC')
+      .addOrderBy('c.display_order', 'ASC')
+      .offset(skip)
+      .limit(limit)
+      .getMany();
 
     return { data, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
   }
 
-  findTopLevel() {
-    return this.categoryRepo.find({
-      where: { parentId: IsNull(), isActive: true },
-      order: { displayOrder: 'ASC' },
+  async findTopLevel() {
+    // Only return categories that have at least 1 active provider, sorted by provider count
+    const raw = await this.categoryRepo
+      .createQueryBuilder('c')
+      .select([
+        'c.id AS id',
+        'c.name AS name',
+        'c.slug AS slug',
+        'c.description AS description',
+        'c.icon AS icon',
+        'c.image_url AS "imageUrl"',
+        'c.is_active AS "isActive"',
+        'c.display_order AS "displayOrder"',
+        'c.parent_id AS "parentId"',
+      ])
+      .addSelect(
+        `COALESCE((
+          SELECT COUNT(DISTINCT pc.provider_id)::int
+          FROM provider_categories pc
+          JOIN providers p ON p.id = pc.provider_id AND p.status IN ('active', 'unverified')
+          WHERE pc.category_id = c.id
+             OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id = c.id)
+        ), 0)`,
+        'providerCount',
+      )
+      .where('c.parent_id IS NULL')
+      .andWhere('c.is_active = true')
+      .having(
+        `COALESCE((
+          SELECT COUNT(DISTINCT pc.provider_id)::int
+          FROM provider_categories pc
+          JOIN providers p ON p.id = pc.provider_id AND p.status IN ('active', 'unverified')
+          WHERE pc.category_id = c.id
+             OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id = c.id)
+        ), 0) > 0`,
+      )
+      .groupBy('c.id')
+      .orderBy('"providerCount"', 'DESC')
+      .addOrderBy('c.display_order', 'ASC')
+      .getRawMany();
+
+    return raw.map((r: any) => ({
+      id: r.id,
+      name: r.name,
+      slug: r.slug,
+      description: r.description,
+      icon: r.icon,
+      imageUrl: r.imageUrl,
+      isActive: r.isActive,
+      displayOrder: r.displayOrder,
+      parentId: r.parentId,
+      providerCount: parseInt(r.providerCount, 10) || 0,
+    }));
+  }
+
+  async findTree(): Promise<any[]> {
+    const all = await this.categoryRepo.find({
+      where: { isActive: true },
+      order: { displayOrder: 'ASC', name: 'ASC' },
     });
+
+    const map = new Map<string, any>();
+    const roots: any[] = [];
+
+    for (const cat of all) {
+      map.set(cat.id, {
+        id: cat.id,
+        parentId: cat.parentId,
+        name: cat.name,
+        slug: cat.slug,
+        description: cat.description,
+        icon: cat.icon,
+        imageUrl: cat.imageUrl,
+        isActive: cat.isActive,
+        displayOrder: cat.displayOrder,
+        children: [],
+      });
+    }
+
+    for (const cat of all) {
+      const node = map.get(cat.id);
+      if (cat.parentId && map.has(cat.parentId)) {
+        map.get(cat.parentId).children.push(node);
+      } else {
+        roots.push(node);
+      }
+    }
+
+    return roots;
   }
 
   create(data: any) {

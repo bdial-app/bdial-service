@@ -1,6 +1,7 @@
 -- ============================================================
--- Search Infrastructure: Extensions, Indexes & Generated Columns
+-- Search Infrastructure: Extensions, Indexes & Triggers
 -- Run this against the production PostgreSQL database.
+-- NOTE: Run migration-search-vectors.sql AFTER this if upgrading.
 -- ============================================================
 
 -- 0. Ensure typeorm_metadata table exists (TypeORM needs this to introspect generated columns)
@@ -26,21 +27,13 @@ AS $func$
 $func$;
 
 -- ============================================================
--- PROVIDERS: Full-text search vector + trigram indexes
+-- PROVIDERS: Trigger-based weighted tsvector + trigram indexes
 -- ============================================================
 
--- Add tsvector generated column
+-- search_vector is a plain tsvector column maintained by trigger
+-- (see migration-search-vectors.sql for the trigger definition)
 ALTER TABLE providers
-  ADD COLUMN IF NOT EXISTS search_vector tsvector
-  GENERATED ALWAYS AS (
-    to_tsvector('english',
-      coalesce(brand_name, '') || ' ' ||
-      coalesce(description, '') || ' ' ||
-      coalesce(address, '') || ' ' ||
-      coalesce(city, '') || ' ' ||
-      coalesce(area, '')
-    )
-  ) STORED;
+  ADD COLUMN IF NOT EXISTS search_vector tsvector;
 
 -- GIN index for full-text search
 CREATE INDEX IF NOT EXISTS idx_providers_search_vector
@@ -59,18 +52,12 @@ CREATE INDEX IF NOT EXISTS idx_providers_brand_name_lower
   ON providers (lower(brand_name) varchar_pattern_ops);
 
 -- ============================================================
--- PRODUCTS: Full-text search vector + trigram indexes
+-- PRODUCTS: Trigger-based weighted tsvector + trigram indexes
 -- ============================================================
 
--- Add tsvector generated column
+-- Plain tsvector column (trigger-maintained, see migration-search-vectors.sql)
 ALTER TABLE products
-  ADD COLUMN IF NOT EXISTS search_vector tsvector
-  GENERATED ALWAYS AS (
-    to_tsvector('english',
-      coalesce(name, '') || ' ' ||
-      coalesce(description, '')
-    )
-  ) STORED;
+  ADD COLUMN IF NOT EXISTS search_vector tsvector;
 
 -- GIN index for full-text search
 CREATE INDEX IF NOT EXISTS idx_products_search_vector
@@ -81,18 +68,12 @@ CREATE INDEX IF NOT EXISTS idx_products_name_trgm
   ON products USING gin(name gin_trgm_ops);
 
 -- ============================================================
--- CATEGORIES: Full-text search vector + trigram indexes
+-- CATEGORIES: Trigger-based weighted tsvector + trigram indexes
 -- ============================================================
 
--- Add tsvector generated column
+-- Plain tsvector column (trigger-maintained, see migration-search-vectors.sql)
 ALTER TABLE categories
-  ADD COLUMN IF NOT EXISTS search_vector tsvector
-  GENERATED ALWAYS AS (
-    to_tsvector('english',
-      coalesce(name, '') || ' ' ||
-      coalesce(description, '')
-    )
-  ) STORED;
+  ADD COLUMN IF NOT EXISTS search_vector tsvector;
 
 -- GIN index for full-text search
 CREATE INDEX IF NOT EXISTS idx_categories_search_vector

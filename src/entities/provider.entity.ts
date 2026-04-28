@@ -83,6 +83,9 @@ export class Provider {
   @Column({ name: 'is_featured', type: 'boolean', default: false })
   isFeatured: boolean;
 
+  @Column({ type: 'text', array: true, nullable: true, default: null })
+  keywords: string[] | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

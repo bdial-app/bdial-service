@@ -586,6 +586,16 @@ export class HomeService {
       )
       .where('c.parentId IS NULL')
       .andWhere('c.isActive = :active', { active: true })
+      .having(
+        `COALESCE((
+          SELECT COUNT(DISTINCT pc.provider_id)::int
+          FROM provider_categories pc
+          JOIN providers p ON p.id = pc.provider_id AND p.status IN ('active', 'unverified')
+          WHERE pc.category_id = c.id
+             OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id = c.id)
+        ), 0) > 0`,
+      )
+      .groupBy('c.id')
       .orderBy('"recentBookings"', 'DESC')
       .addOrderBy('"providerCount"', 'DESC')
       .addOrderBy('c.displayOrder', 'ASC')

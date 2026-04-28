@@ -453,4 +453,56 @@ export class SupabaseAuthService {
       oauthProviders: ['google', 'github'], // Configured providers
     };
   }
+
+  /** Returns true when Supabase credentials are configured */
+  isConfigured(): boolean {
+    return !!this.supabase;
+  }
+
+  /**
+   * Send a phone OTP via Supabase (uses the configured SMS provider)
+   */
+  async sendPhoneOtp(phone: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      if (!this.supabase) {
+        return { success: false, error: 'Supabase client not configured' };
+      }
+      const { error } = await this.supabase.auth.signInWithOtp({ phone });
+      if (error) {
+        this.logger.error(`sendPhoneOtp error for ${phone}: ${error.message}`);
+        return { success: false, error: error.message };
+      }
+      return { success: true };
+    } catch (err) {
+      this.logger.error('Error in sendPhoneOtp:', err);
+      return { success: false, error: String(err) };
+    }
+  }
+
+  /**
+   * Verify a phone OTP via Supabase
+   */
+  async verifyPhoneOtp(
+    phone: string,
+    token: string,
+  ): Promise<{ valid: boolean; supabaseUserId?: string; error?: string }> {
+    try {
+      if (!this.supabase) {
+        return { valid: false, error: 'Supabase client not configured' };
+      }
+      const { data, error } = await this.supabase.auth.verifyOtp({
+        phone,
+        token,
+        type: 'sms',
+      });
+      if (error) {
+        this.logger.error(`verifyPhoneOtp error for ${phone}: ${error.message}`);
+        return { valid: false, error: error.message };
+      }
+      return { valid: true, supabaseUserId: data?.user?.id };
+    } catch (err) {
+      this.logger.error('Error in verifyPhoneOtp:', err);
+      return { valid: false, error: String(err) };
+    }
+  }
 }
