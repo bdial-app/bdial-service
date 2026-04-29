@@ -56,12 +56,12 @@ export class SearchQueryDto {
   limit?: number = 10;
 
   @ApiPropertyOptional({
-    enum: ['all', 'providers', 'products', 'categories'],
+    enum: ['all', 'providers', 'products', 'categories', 'services'],
     default: 'all',
   })
   @IsOptional()
-  @IsEnum(['all', 'providers', 'products', 'categories'])
-  type?: 'all' | 'providers' | 'products' | 'categories' = 'all';
+  @IsEnum(['all', 'providers', 'products', 'categories', 'services'])
+  type?: 'all' | 'providers' | 'products' | 'categories' | 'services' = 'all';
 
   @ApiPropertyOptional({ description: 'Filter by category IDs (comma-separated or array)', type: [String] })
   @IsOptional()

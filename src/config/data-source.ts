@@ -1,6 +1,6 @@
 import { DataSource, DataSourceOptions } from 'typeorm';
-import { User } from '../entities/user.entity';
-import { Category } from '../entities/category.entity';
+import { join } from 'path';
+import { User } from '../entities/user.entity';import { Category } from '../entities/category.entity';
 import { ProviderCategory } from '../entities/provider-category.entity';
 import { Verification } from '../entities/verification.entity';
 import { Photo } from '../entities/photo.entity';
@@ -72,9 +72,15 @@ export const ALL_ENTITIES = [
 ];
 
 export function buildTypeOrmOptions(url?: string): DataSourceOptions {
+  // Resolve migrations from both TS (dev/CLI) and JS (compiled dist)
+  const migrationsPath = join(__dirname, '..', 'migrations', '*{.ts,.js}');
+
   const base: Partial<DataSourceOptions> = {
     entities: ALL_ENTITIES,
-    synchronize: process.env.NODE_ENV === 'development',
+    migrations: [migrationsPath],
+    migrationsTableName: 'typeorm_migrations',
+    migrationsRun: true, // auto-run pending migrations on app start
+    synchronize: false,  // never use synchronize — migrations handle schema
     extra: {
       max: 3,
       idleTimeoutMillis: 5000,

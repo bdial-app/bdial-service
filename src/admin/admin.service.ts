@@ -5,6 +5,7 @@ import { Provider, User, Verification, Review, ReviewReport, Report, ProviderWar
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { BugReport } from '../bug-reports/bug-report.entity';
 import { AdminCreateUserDto, AdminCreateProviderWithUserDto } from './dto/admin-create-user.dto';
+import { StorageService } from '../storage/storage.service';
 
 @Injectable()
 export class AdminService {
@@ -37,6 +38,7 @@ export class AdminService {
     @InjectRepository(ReviewPhoto) private reviewPhotoRepo: Repository<ReviewPhoto>,
     private dataSource: DataSource,
     private notificationDispatch: NotificationDispatchService,
+    private storageService: StorageService,
   ) {}
 
   private assertAdmin(user: any) {
@@ -825,6 +827,26 @@ export class AdminService {
     return product;
   }
 
+  async uploadProductImages(admin: any, productId: string, files: Express.Multer.File[]) {
+    this.assertAdmin(admin);
+    const product = await this.productRepo.findOneBy({ id: productId });
+    if (!product) throw new NotFoundException('Product not found');
+    if (!files.length) throw new BadRequestException('No images provided');
+
+    const uploaded: string[] = [];
+    for (const file of files) {
+      const result = await this.storageService.upload('products', file);
+      uploaded.push(result.url);
+    }
+
+    const newUrls = [...(product.photoUrls ?? []), ...uploaded];
+    await this.productRepo.update(productId, {
+      photoUrls: newUrls,
+      photoUrl: newUrls[0] ?? null,
+    });
+    return this.productRepo.findOne({ where: { id: productId }, relations: ['provider'] });
+  }
+
   async updateProductAdmin(admin: any, productId: string, body: Partial<Product>) {
     this.assertAdmin(admin);
     const allowed: string[] = ['isActive', 'displayOrder', 'name', 'description', 'price'];
@@ -1143,12 +1165,18 @@ export class AdminService {
     return banner;
   }
 
-  async createBanner(admin: any, body: Partial<PromoBanner>) {
+  async createBanner(admin: any, body: Partial<PromoBanner>, file?: Express.Multer.File) {
     this.assertAdmin(admin);
     const maxOrder = await this.bannerRepo
       .createQueryBuilder('b')
       .select('MAX(b.display_order)', 'max')
       .getRawOne();
+
+    if (file) {
+      const result = await this.storageService.upload('banners', file);
+      body.imageUrl = result.url;
+    }
+
     const banner = this.bannerRepo.create({
       ...body,
       displayOrder: (maxOrder?.max ?? -1) + 1,
@@ -1156,10 +1184,26 @@ export class AdminService {
     return this.bannerRepo.save(banner);
   }
 
-  async updateBanner(admin: any, bannerId: string, body: Partial<PromoBanner>) {
+  async updateBanner(admin: any, bannerId: string, body: Partial<PromoBanner>, file?: Express.Multer.File) {
     this.assertAdmin(admin);
     const banner = await this.bannerRepo.findOneBy({ id: bannerId });
     if (!banner) throw new NotFoundException('Banner not found');
+
+    // If a new image is uploaded, delete the old one from storage
+    if (file) {
+      if (banner.imageUrl) {
+        const oldKey = this.storageService.extractKeyFromUrl(banner.imageUrl);
+        if (oldKey) await this.storageService.delete(oldKey).catch(() => {});
+      }
+      const result = await this.storageService.upload('banners', file);
+      body.imageUrl = result.url;
+    }
+
+    // If explicitly removing image (imageUrl set to null and no file)
+    if (!file && body.imageUrl === null && banner.imageUrl) {
+      const oldKey = this.storageService.extractKeyFromUrl(banner.imageUrl);
+      if (oldKey) await this.storageService.delete(oldKey).catch(() => {});
+    }
 
     const allowed = ['title', 'subtitle', 'imageUrl', 'gradient', 'emoji', 'cta', 'tag', 'linkUrl', 'isActive', 'displayOrder', 'startsAt', 'endsAt'];
     const update: any = {};
@@ -1175,6 +1219,11 @@ export class AdminService {
     this.assertAdmin(admin);
     const banner = await this.bannerRepo.findOneBy({ id: bannerId });
     if (!banner) throw new NotFoundException('Banner not found');
+    // Clean up uploaded image from storage
+    if (banner.imageUrl) {
+      const key = this.storageService.extractKeyFromUrl(banner.imageUrl);
+      if (key) await this.storageService.delete(key).catch(() => {});
+    }
     await this.bannerRepo.remove(banner);
     return { success: true };
   }

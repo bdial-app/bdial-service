@@ -25,8 +25,6 @@ DELETE FROM photos;
 DELETE FROM provider_categories;
 DELETE FROM promo_banners;
 DELETE FROM verifications;
-DELETE FROM listing_categories;
-DELETE FROM listings;
 DELETE FROM providers;
 DELETE FROM categories;
 DELETE FROM users;

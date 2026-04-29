@@ -21,7 +21,14 @@
     "seed:supabase-users": "npx ts-node src/scripts/seed-supabase-users.ts",
     "db:migrate": "bash scripts/run-migrations.sh",
     "db:migrate:dry": "bash scripts/run-migrations.sh --dry",
-    "typeorm": "typeorm-ts-node-commonjs"
+    "db:seed:uat": "bash scripts/run-uat-seed.sh",
+    "db:seed:uat:dry": "bash scripts/run-uat-seed.sh --dry",
+    "typeorm": "typeorm-ts-node-commonjs",
+    "migration:generate": "typeorm-ts-node-commonjs migration:generate -d src/config/data-source.ts",
+    "migration:create": "typeorm-ts-node-commonjs migration:create",
+    "migration:run": "typeorm-ts-node-commonjs migration:run -d src/config/data-source.ts",
+    "migration:revert": "typeorm-ts-node-commonjs migration:revert -d src/config/data-source.ts",
+    "migration:show": "typeorm-ts-node-commonjs migration:show -d src/config/data-source.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1019.0",

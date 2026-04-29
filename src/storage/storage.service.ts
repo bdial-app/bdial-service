@@ -74,4 +74,15 @@ export class StorageService {
       throw new InternalServerErrorException(`S3 delete failed: ${err.message}`);
     }
   }
+
+  /**
+   * Extract the S3 storage key from a public Supabase URL.
+   * Returns null if the URL doesn't match the expected format.
+   */
+  extractKeyFromUrl(url: string): string | null {
+    const marker = `/${this.bucket}/`;
+    const idx = url.indexOf(marker);
+    if (idx === -1) return null;
+    return url.slice(idx + marker.length);
+  }
 }

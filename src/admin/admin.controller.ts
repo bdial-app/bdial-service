@@ -1,6 +1,8 @@
-import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards, Request, Query } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiBody, ApiQuery, ApiParam } from '@nestjs/swagger';
+import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards, Request, Query, UseInterceptors, UploadedFile, UploadedFiles } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiBody, ApiQuery, ApiParam, ApiConsumes } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
+import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import { AdminService } from './admin.service';
 import { AdminCreateUserDto, AdminCreateProviderWithUserDto, AdminSendOtpDto, AdminVerifyOtpDto } from './dto/admin-create-user.dto';
 
@@ -318,6 +320,19 @@ export class AdminController {
     return this.adminService.deleteProductAdmin(req.user, id);
   }
 
+  @Post('products/:id/images')
+  @ApiOperation({ summary: 'Upload images for a product (max 5 files, 5MB each)' })
+  @ApiParam({ name: 'id', description: 'Product ID' })
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(FilesInterceptor('images', 5, { storage: memoryStorage() }))
+  uploadProductImages(
+    @Param('id') id: string,
+    @Request() req,
+    @UploadedFiles() files: Express.Multer.File[],
+  ) {
+    return this.adminService.uploadProductImages(req.user, id, files ?? []);
+  }
+
   // ============================================
   // Reviews Management
   // ============================================
@@ -482,15 +497,34 @@ export class AdminController {
 
   @Post('banners')
   @ApiOperation({ summary: 'Create a new banner' })
-  createBanner(@Request() req, @Body() body: any) {
-    return this.adminService.createBanner(req.user, body);
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(FileInterceptor('image', { storage: memoryStorage() }))
+  createBanner(@Request() req, @Body() body: any, @UploadedFile() file?: Express.Multer.File) {
+    // Parse JSON string fields that come through FormData
+    const parsed = this.parseBannerBody(body);
+    return this.adminService.createBanner(req.user, parsed, file);
   }
 
   @Patch('banners/:id')
   @ApiOperation({ summary: 'Update a banner' })
   @ApiParam({ name: 'id', description: 'Banner ID' })
-  updateBanner(@Param('id') id: string, @Request() req, @Body() body: any) {
-    return this.adminService.updateBanner(req.user, id, body);
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(FileInterceptor('image', { storage: memoryStorage() }))
+  updateBanner(@Param('id') id: string, @Request() req, @Body() body: any, @UploadedFile() file?: Express.Multer.File) {
+    const parsed = this.parseBannerBody(body);
+    return this.adminService.updateBanner(req.user, id, parsed, file);
+  }
+
+  private parseBannerBody(body: any) {
+    const parsed = { ...body };
+    if (parsed.isActive !== undefined) {
+      parsed.isActive = parsed.isActive === 'true' || parsed.isActive === true;
+    }
+    // Handle null string from FormData
+    for (const key of ['imageUrl', 'subtitle', 'gradient', 'emoji', 'cta', 'tag', 'linkUrl', 'startsAt', 'endsAt']) {
+      if (parsed[key] === 'null' || parsed[key] === '') parsed[key] = null;
+    }
+    return parsed;
   }
 
   @Delete('banners/:id')
