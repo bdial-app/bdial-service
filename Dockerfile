@@ -3,8 +3,8 @@ FROM node:20-alpine AS builder
 
 WORKDIR /usr/src/app
 
-COPY package.json yarn.lock ./
-RUN yarn install --frozen-lockfile
+COPY package.json ./
+RUN yarn install
 
 COPY . .
 RUN npm run build
@@ -17,8 +17,8 @@ WORKDIR /usr/src/app
 # Run as non-root
 RUN addgroup -g 1001 -S appgroup && adduser -S appuser -G appgroup -u 1001
 
-COPY package.json yarn.lock ./
-RUN yarn install --frozen-lockfile --production && yarn cache clean
+COPY package.json ./
+RUN yarn install --production && yarn cache clean
 
 COPY --from=builder /usr/src/app/dist ./dist
 
