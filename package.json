@@ -21,6 +21,8 @@
     "seed:supabase-users": "npx ts-node src/scripts/seed-supabase-users.ts",
     "db:migrate": "bash scripts/run-migrations.sh",
     "db:migrate:dry": "bash scripts/run-migrations.sh --dry",
+    "db:seed:uat": "bash scripts/run-uat-seed.sh",
+    "db:seed:uat:dry": "bash scripts/run-uat-seed.sh --dry",
     "typeorm": "typeorm-ts-node-commonjs"
   },
   "dependencies": {
