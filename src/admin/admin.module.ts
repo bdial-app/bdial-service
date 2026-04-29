@@ -6,6 +6,7 @@ import { AuthModule } from '../auth/auth.module';
 import { Provider, User, Verification, Review, ReviewReport, Report, ProviderWarning, Product, Category, ProviderCategory, Conversation, ConversationParticipant, Message, PromoBanner, SponsoredListing, ProviderOffer, ProviderBadge, ProviderAnalyticsEvent, ProviderLead, SearchLog, AdEvent, AppInvite, AuditLog, SystemSetting, Photo, ReviewPhoto } from '../entities';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { BugReport } from '../bug-reports/bug-report.entity';
+import { StorageModule } from '../storage/storage.module';
 
 @Module({
   imports: [

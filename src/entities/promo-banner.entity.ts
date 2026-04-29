@@ -21,7 +21,7 @@ export class PromoBanner {
   @Column({ name: 'image_url', type: 'varchar', length: 500, nullable: true })
   imageUrl: string | null;
 
-  @Column({ type: 'varchar', length: 100, nullable: true })
+  @Column({ type: 'varchar', length: 500, nullable: true })
   gradient: string | null;
 
   @Column({ type: 'varchar', length: 10, nullable: true })

@@ -28,4 +28,5 @@ EXPOSE 3001
 
 USER appuser
 
+# Migrations run automatically on app start via migrationsRun: true
 CMD ["node", "dist/main.js"]
