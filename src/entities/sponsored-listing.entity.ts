@@ -9,6 +9,7 @@ import {
   Index,
 } from 'typeorm';
 import { Provider } from './provider.entity';
+import { Payment } from './payment.entity';
 
 @Entity('sponsored_listings')
 @Index(['providerId', 'isActive'])
@@ -77,6 +78,9 @@ export class SponsoredListing {
   @Column({ name: 'reviewed_at', type: 'timestamptz', nullable: true })
   reviewedAt: Date | null;
 
+  @Column({ name: 'payment_id', type: 'uuid', nullable: true })
+  paymentId: string | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
@@ -86,4 +90,8 @@ export class SponsoredListing {
   @ManyToOne(() => Provider, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'provider_id' })
   provider: Provider;
+
+  @ManyToOne(() => Payment, { nullable: true })
+  @JoinColumn({ name: 'payment_id' })
+  payment: Payment | null;
 }

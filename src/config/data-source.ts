@@ -1,3 +1,4 @@
+import 'dotenv/config'; // load .env for TypeORM CLI (NestJS uses ConfigModule instead)
 import { DataSource, DataSourceOptions } from 'typeorm';
 import { join } from 'path';
 import { User } from '../entities/user.entity';import { Category } from '../entities/category.entity';
@@ -33,6 +34,11 @@ import { Notification } from '../entities/notification.entity';
 import { NotificationPreference } from '../entities/notification-preference.entity';
 import { NotificationBatch } from '../entities/notification-batch.entity';
 import { BugReport } from '../bug-reports/bug-report.entity';
+import { Payment } from '../entities/payment.entity';
+import { SubscriptionPlan } from '../entities/subscription-plan.entity';
+import { Subscription } from '../entities/subscription.entity';
+import { Voucher } from '../entities/voucher.entity';
+import { VoucherRedemption } from '../entities/voucher-redemption.entity';
 
 export const ALL_ENTITIES = [
   User,
@@ -69,6 +75,11 @@ export const ALL_ENTITIES = [
   NotificationPreference,
   NotificationBatch,
   BugReport,
+  Payment,
+  SubscriptionPlan,
+  Subscription,
+  Voucher,
+  VoucherRedemption,
 ];
 
 export function buildTypeOrmOptions(url?: string): DataSourceOptions {

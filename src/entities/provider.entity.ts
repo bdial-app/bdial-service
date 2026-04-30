@@ -86,6 +86,9 @@ export class Provider {
   @Column({ type: 'text', array: true, nullable: true, default: null })
   keywords: string[] | null;
 
+  @Column({ name: 'stripe_customer_id', type: 'varchar', length: 255, nullable: true })
+  stripeCustomerId: string | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

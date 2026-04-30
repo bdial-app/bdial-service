@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, ILike } from 'typeorm';
-import { Provider, User, Verification, ProviderCategory, Review, Product, Photo, Message, ConversationParticipant, ProviderBadge, ProviderOffer, SponsoredListing, ProviderWarning, SystemSetting } from '../entities';
+import { Provider, User, Verification, ProviderCategory, Review, Product, Photo, Message, ConversationParticipant, ProviderBadge, ProviderOffer, SponsoredListing, ProviderWarning, SystemSetting, Subscription } from '../entities';
 import { StorageService } from '../storage/storage.service';
 import { GeocodeService } from '../geocode/geocode.service';
 import { CreateProviderDto } from './dto/create-provider.dto';
@@ -39,6 +39,7 @@ export class ProvidersService {
     @InjectRepository(SponsoredListing) private sponsorRepo: Repository<SponsoredListing>,
     @InjectRepository(ProviderWarning) private warningRepo: Repository<ProviderWarning>,
     @InjectRepository(SystemSetting) private settingRepo: Repository<SystemSetting>,
+    @InjectRepository(Subscription) private subscriptionRepo: Repository<Subscription>,
     private storage: StorageService,
     private dataSource: DataSource,
     private geocodeService: GeocodeService,
@@ -739,12 +740,29 @@ export class ProvidersService {
       .andWhere('o.startsAt <= :now', { now })
       .getCount();
 
+    // Check subscription for higher limits
+    let maxTotalDeals = 5;
+    let maxActiveDeals = 3;
+    let planName: string | null = null;
+
+    const subscription = await this.subscriptionRepo.findOne({
+      where: { providerId: provider.id, status: 'active' },
+      relations: ['plan'],
+    });
+
+    if (subscription?.plan) {
+      maxTotalDeals = subscription.plan.maxTotalDeals;
+      maxActiveDeals = subscription.plan.maxActiveDeals;
+      planName = subscription.plan.name;
+    }
+
     return {
       totalDeals: totalOffers,
-      maxTotalDeals: 5,
+      maxTotalDeals,
       activeDeals: activeCount,
-      maxActiveDeals: 3,
-      requiresPayment: totalOffers >= 5,
+      maxActiveDeals,
+      requiresPayment: totalOffers >= maxTotalDeals,
+      currentPlan: planName,
     };
   }
 
@@ -822,7 +840,7 @@ export class ProvidersService {
       startsAt: new Date(dto.startsAt),
       endsAt: new Date(dto.endsAt),
       isActive: true,
-      approvalStatus: await this.requiresApproval('sponsorship_requires_approval') ? 'pending_approval' : 'approved',
+      approvalStatus: 'approved',
     });
 
     return this.sponsorRepo.save(listing);

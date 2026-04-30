@@ -94,4 +94,14 @@ export class SearchQueryDto {
   @IsOptional()
   @IsString()
   city?: string;
+
+  @ApiPropertyOptional({ description: 'Filter to verified providers only' })
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  verifiedOnly?: boolean;
+
+  @ApiPropertyOptional({ description: 'Filter to women-led providers only' })
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  womenLedOnly?: boolean;
 }

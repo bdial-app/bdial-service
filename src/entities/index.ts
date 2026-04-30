@@ -28,3 +28,8 @@ export { ProviderWarning } from './provider-warning.entity';
 export { AuditLog } from './audit-log.entity';
 export { SystemSetting } from './system-setting.entity';
 export { SearchSynonym } from './search-synonym.entity';
+export { Payment } from './payment.entity';
+export { SubscriptionPlan } from './subscription-plan.entity';
+export { Subscription } from './subscription.entity';
+export { Voucher } from './voucher.entity';
+export { VoucherRedemption } from './voucher-redemption.entity';

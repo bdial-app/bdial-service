@@ -422,11 +422,12 @@ export class AnalyticsService {
     if (!lead) throw new NotFoundException('Lead not found');
     if (lead.isUnlocked) throw new BadRequestException('Lead already unlocked');
 
-    // TODO: Payment gateway check goes here
-    lead.isUnlocked = true;
-    await this.leadRepo.save(lead);
-
-    return { unlocked: true };
+    // Payment is now handled by PaymentModule via POST /api/payments/lead-unlock/checkout
+    // This endpoint is kept for backward compatibility but requires payment flow
+    return {
+      unlocked: false,
+      message: 'Use POST /api/payments/lead-unlock/checkout to unlock leads with payment',
+    };
   }
 
   // ─── Top Products ─────────────────────────────────────────────────

@@ -3,6 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { CacheModule } from '@nestjs/cache-manager';
+import { ScheduleModule } from '@nestjs/schedule';
 import { APP_GUARD } from '@nestjs/core';
 import { buildTypeOrmOptions } from './config/data-source';
 import { AppController } from './app.controller';
@@ -34,6 +35,8 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { ContentSanitizerModule } from './common/content-sanitizer';
 import { BugReportsModule } from './bug-reports/bug-reports.module';
+import { PaymentModule } from './payment/payment.module';
+import { VoucherModule } from './voucher/voucher.module';
 import { SystemSetting } from './entities';
 
 @Module({
@@ -52,6 +55,9 @@ import { SystemSetting } from './entities';
 
     // In-memory cache with 5-minute default TTL
     CacheModule.register({ isGlobal: true, ttl: 300000 }),
+
+    // Scheduled tasks (materialized view refresh, etc.)
+    ScheduleModule.forRoot(),
 
     StorageModule,
     PhotosModule,
@@ -79,6 +85,8 @@ import { SystemSetting } from './entities';
     NotificationsModule,
     ContentSanitizerModule,
     BugReportsModule,
+    PaymentModule,
+    VoucherModule,
     TypeOrmModule.forFeature([SystemSetting]),
   ],
   controllers: [AppController],

@@ -12,6 +12,7 @@ import { AllExceptionsFilter } from './common/all-exceptions.filter';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     logger: ['error', 'warn', 'log'],
+    rawBody: true,
   });
 
   const configService = app.get(ConfigService);
