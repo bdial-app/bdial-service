@@ -8,6 +8,8 @@ import {
   PromoBanner,
   Booking,
   Photo,
+  ProviderOffer,
+  SponsoredListing,
 } from '../entities';
 import { HomeFeedDto } from './dto/home-feed.dto';
 
@@ -20,6 +22,8 @@ export class HomeService {
     @InjectRepository(PromoBanner) private bannerRepo: Repository<PromoBanner>,
     @InjectRepository(Booking) private bookingRepo: Repository<Booking>,
     @InjectRepository(Photo) private photoRepo: Repository<Photo>,
+    @InjectRepository(ProviderOffer) private offerRepo: Repository<ProviderOffer>,
+    @InjectRepository(SponsoredListing) private sponsoredRepo: Repository<SponsoredListing>,
   ) {}
 
   // ─── Performance Helpers ─────────────────────────────────────
@@ -80,27 +84,39 @@ export class HomeService {
   async getFeed(dto: HomeFeedDto, userId?: string) {
     const { lat, lng, city } = dto;
 
+    // Phase 1: Fetch sponsored first (they get priority placement)
+    const [sponsoredProviders, promoBanners, trendingCategories, communityReviews, platformStats] =
+      await Promise.all([
+        this.getSponsoredProviders(lat, lng, city, 6),
+        this.getActivePromoBanners(),
+        this.getTrendingCategories(6),
+        this.getCommunityReviews(10),
+        this.getPlatformStats(),
+      ]);
+
+    // Collect sponsored provider IDs so we never repeat them in other sections
+    const sponsoredIds = new Set(sponsoredProviders.map((s) => s.id));
+
+    // Phase 2: Fetch remaining sections, passing exclusion set
     const [
       nearbyProviders,
       featuredCategory,
-      promoBanners,
-      trendingCategories,
-      communityReviews,
-      platformStats,
       topRatedProviders,
       cityProviders,
       newArrivals,
+      dealsAroundYou,
     ] = await Promise.all([
       this.getNearbyProviders(lat, lng, city, 10),
       this.getRandomFeaturedCategory(lat, lng, city, 6),
-      this.getActivePromoBanners(),
-      this.getTrendingCategories(6),
-      this.getCommunityReviews(10),
-      this.getPlatformStats(),
       this.getTopRatedProviders(lat, lng, city, 6),
       this.getCityProviders(city, lat, lng, 6),
       this.getNewArrivals(lat, lng, city, 6),
+      this.getDealsAroundYou(lat, lng, city, 8, sponsoredIds),
     ]);
+
+    // Cross-section deduplication: remove sponsored businesses from other lists
+    const filterSponsored = <T extends { id: string }>(list: T[]): T[] =>
+      list.filter((p) => !sponsoredIds.has(p.id));
 
     // Build dynamic search prompts from trending categories
     const searchPrompts = trendingCategories
@@ -109,15 +125,21 @@ export class HomeService {
       .map((c) => c.name);
 
     return {
-      nearbyProviders,
-      featuredCategory,
+      nearbyProviders: filterSponsored(nearbyProviders),
+      featuredCategory: featuredCategory
+        ? { ...featuredCategory, providers: filterSponsored(featuredCategory.providers) }
+        : null,
       promoBanners,
       trendingCategories,
       communityReviews,
       platformStats,
-      topRatedProviders,
-      cityProviders,
-      newArrivals,
+      topRatedProviders: filterSponsored(topRatedProviders),
+      cityProviders: cityProviders
+        ? { ...cityProviders, providers: filterSponsored(cityProviders.providers) }
+        : null,
+      newArrivals: filterSponsored(newArrivals),
+      dealsAroundYou,
+      sponsoredProviders,
       searchPrompts,
     };
   }
@@ -454,6 +476,247 @@ export class HomeService {
       services: r.services || null,
       verified: r.status === 'active',
       distance: r.distance ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
+    }));
+  }
+
+  // ─── Deals Around You ────────────────────────────────────────
+  // Deduplicates by provider (shows only their best deal),
+  // includes total offer count per provider, and randomizes
+  // order on each refresh so every deal gets spotlight.
+
+  private async getDealsAroundYou(
+    lat?: number,
+    lng?: number,
+    city?: string,
+    limit = 8,
+    excludeProviderIds?: Set<string>,
+  ) {
+    const now = new Date();
+    const hasLocation = lat != null && lng != null;
+
+    const haversine = hasLocation
+      ? HomeService.HAVERSINE
+      : 'NULL';
+
+    // Step 1: Fetch all active offers (limited to a reasonable pool)
+    const qb = this.offerRepo
+      .createQueryBuilder('o')
+      .innerJoin('providers', 'p', 'p.id = o.provider_id')
+      .select([
+        'p.id AS id',
+        'p.brand_name AS name',
+        'p.profile_photo_url AS image',
+        'p.banner_image_url AS "bannerImage"',
+        'p.city AS city',
+        'p.area AS area',
+        'p.status AS status',
+        'o.id AS "offerId"',
+        'o.title AS "offerTitle"',
+        'o.discount_type AS "discountType"',
+        'o.discount_value AS "discountValue"',
+        'o.ends_at AS "offerEndsAt"',
+      ])
+      // Subquery: count total active offers per provider for the badge
+      .addSelect(
+        `(SELECT COUNT(*)::int FROM provider_offers po2
+          WHERE po2.provider_id = p.id
+            AND po2.is_active = true
+            AND po2.starts_at <= NOW()
+            AND po2.ends_at >= NOW()
+            AND po2.approval_status = 'approved')`,
+        'totalOffers',
+      )
+      .where('o.is_active = :active', { active: true })
+      .andWhere('o.starts_at <= :now', { now })
+      .andWhere('o.ends_at >= :now', { now })
+      .andWhere('(o.usage_limit IS NULL OR o.usage_count < o.usage_limit)')
+      .andWhere("o.approval_status = 'approved'")
+      .andWhere("p.status IN ('active', 'unverified')");
+
+    this.withReviewStats(qb);
+
+    if (hasLocation) {
+      qb.setParameter('lat', lat).setParameter('lng', lng);
+      qb.addSelect(haversine, 'distance');
+      qb.andWhere('p.latitude IS NOT NULL')
+        .andWhere('p.longitude IS NOT NULL');
+    } else if (city) {
+      qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
+    }
+
+    // Order by highest discount first (within each provider we want the best deal)
+    qb.orderBy('o.discount_value', 'DESC');
+    // Fetch more than needed so we have a pool to deduplicate and randomize from
+    qb.limit(limit * 5);
+
+    const raw = await qb.getRawMany();
+
+    // Step 2: Deduplicate — keep only the best deal (highest discount) per provider
+    // Also exclude providers already shown in the sponsored section
+    const seenProviders = new Set<string>(excludeProviderIds ?? []);
+    const deduplicated: typeof raw = [];
+    for (const r of raw) {
+      if (seenProviders.has(r.id)) continue;
+      seenProviders.add(r.id);
+      deduplicated.push(r);
+    }
+
+    // Step 3: Randomize order (Fisher-Yates shuffle) so each refresh shows different deals
+    for (let i = deduplicated.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [deduplicated[i], deduplicated[j]] = [deduplicated[j], deduplicated[i]];
+    }
+
+    // Step 4: Take the limit
+    const results = deduplicated.slice(0, limit);
+
+    return results.map((r) => ({
+      id: r.id,
+      name: r.name,
+      image: r.bannerImage || r.image,
+      location: [r.area, r.city].filter(Boolean).join(', '),
+      rating: parseFloat(r.rating) || 0,
+      reviewCount: parseInt(r.reviewCount, 10) || 0,
+      verified: r.status === 'active',
+      distance: r.distance ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
+      offerId: r.offerId,
+      offerTitle: r.offerTitle,
+      discountType: r.discountType,
+      discountValue: parseFloat(r.discountValue),
+      offerEndsAt: r.offerEndsAt,
+      hasActiveOffer: true,
+      totalOffers: parseInt(r.totalOffers, 10) || 1,
+    }));
+  }
+
+  /**
+   * Sponsored/featured businesses carousel.
+   * Shows premium providers who purchased sponsorship placement.
+   * Rotates on each request for fairness. Increments impressions for analytics.
+   */
+  private async getSponsoredProviders(
+    lat?: number,
+    lng?: number,
+    city?: string,
+    limit = 6,
+  ) {
+    const now = new Date();
+    const hasLocation = lat != null && lng != null;
+
+    const qb = this.sponsoredRepo
+      .createQueryBuilder('s')
+      .innerJoin('providers', 'p', 'p.id = s.provider_id')
+      .select([
+        'p.id AS id',
+        'p.brand_name AS name',
+        'p.profile_photo_url AS image',
+        'p.banner_image_url AS "bannerImage"',
+        'p.description AS description',
+        'p.city AS city',
+        'p.area AS area',
+        'p.status AS status',
+        's.id AS "sponsoredListingId"',
+        's.type AS "sponsorType"',
+        's.starts_at AS "startsAt"',
+        's.ends_at AS "endsAt"',
+      ])
+      .addSelect(
+        `(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`,
+        'listingPhoto',
+      )
+      // Subquery: provider's primary category
+      .addSelect(
+        `(SELECT cats.name FROM provider_categories pcs
+          INNER JOIN categories cats ON cats.id = pcs.category_id
+          WHERE pcs.provider_id = p.id LIMIT 1)`,
+        'primaryCategory',
+      )
+      // Subquery: does this provider also have an active deal?
+      .addSelect(
+        `EXISTS (SELECT 1 FROM provider_offers po
+          WHERE po.provider_id = p.id
+            AND po.is_active = true
+            AND po.starts_at <= NOW()
+            AND po.ends_at >= NOW()
+            AND po.approval_status = 'approved')`,
+        'hasActiveOffer',
+      )
+      .where('s.is_active = :active', { active: true })
+      .andWhere('s.starts_at <= :now', { now })
+      .andWhere('s.ends_at >= :now', { now })
+      .andWhere('s.spent_amount < s.budget_amount')
+      .andWhere("s.approval_status = 'approved'")
+      .andWhere("p.status IN ('active', 'unverified')");
+
+    this.withReviewStats(qb);
+    this.withCategoryServices(qb);
+
+    if (hasLocation) {
+      qb.setParameter('lat', lat).setParameter('lng', lng);
+      qb.addSelect(HomeService.HAVERSINE, 'distance');
+      qb.andWhere('p.latitude IS NOT NULL')
+        .andWhere('p.longitude IS NOT NULL');
+      // Optional: filter by target radius if set on the listing
+      // (skip if null = nationwide)
+    } else if (city) {
+      qb.andWhere(
+        `(s.target_cities IS NULL OR :city = ANY(s.target_cities))`,
+        { city },
+      );
+    }
+
+    // Prioritize by bid (cost_per_click) then randomize for fairness
+    qb.orderBy('s.cost_per_click', 'DESC')
+      .addOrderBy('RANDOM()')
+      .limit(limit * 3);
+
+    const raw = await qb.getRawMany();
+
+    // Deduplicate by provider (one sponsor slot per business)
+    const seenProviders = new Set<string>();
+    const deduplicated: typeof raw = [];
+    for (const r of raw) {
+      if (seenProviders.has(r.id)) continue;
+      seenProviders.add(r.id);
+      deduplicated.push(r);
+    }
+
+    // Shuffle for fair rotation
+    for (let i = deduplicated.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [deduplicated[i], deduplicated[j]] = [deduplicated[j], deduplicated[i]];
+    }
+
+    const results = deduplicated.slice(0, limit);
+
+    // Fire-and-forget: increment impressions for each shown listing
+    if (results.length > 0) {
+      const listingIds = results.map((r) => r.sponsoredListingId);
+      this.sponsoredRepo
+        .createQueryBuilder()
+        .update()
+        .set({ impressions: () => 'impressions + 1' })
+        .where('id IN (:...ids)', { ids: listingIds })
+        .execute()
+        .catch(() => {}); // non-blocking
+    }
+
+    return results.map((r) => ({
+      id: r.id,
+      name: r.name,
+      image: r.bannerImage || r.image || r.listingPhoto,
+      description: r.description ? r.description.slice(0, 80) : null,
+      location: [r.area, r.city].filter(Boolean).join(', '),
+      rating: parseFloat(r.rating) || 0,
+      reviewCount: parseInt(r.reviewCount, 10) || 0,
+      services: r.services || null,
+      primaryCategory: r.primaryCategory || null,
+      verified: r.status === 'active',
+      distance: r.distance ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
+      sponsorType: r.sponsorType,
+      hasActiveOffer: r.hasActiveOffer === true || r.hasActiveOffer === 't',
+      sponsoredListingId: r.sponsoredListingId,
+      endsAt: r.endsAt,
     }));
   }
 

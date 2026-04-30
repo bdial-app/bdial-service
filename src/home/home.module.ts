@@ -9,6 +9,8 @@ import {
   PromoBanner,
   Booking,
   Photo,
+  ProviderOffer,
+  SponsoredListing,
 } from '../entities';
 
 @Module({
@@ -20,6 +22,8 @@ import {
       PromoBanner,
       Booking,
       Photo,
+      ProviderOffer,
+      SponsoredListing,
     ]),
   ],
   controllers: [HomeController],

@@ -23,6 +23,8 @@ export interface SearchSuggestion {
   id: string;
   subtitle?: string;
   imageUrl?: string;
+  isSponsored?: boolean;
+  hasActiveOffer?: boolean;
 }
 
 export interface ProviderSearchResult {
@@ -384,6 +386,15 @@ export class SearchService {
         WHERE po.is_active = true AND po.starts_at <= NOW() AND po.ends_at >= NOW()
         ORDER BY po.provider_id, po.discount_value DESC
       ),
+      active_sponsorships AS (
+        SELECT DISTINCT sl.provider_id
+        FROM sponsored_listings sl
+        WHERE sl.is_active = true
+          AND sl.starts_at <= NOW()
+          AND sl.ends_at >= NOW()
+          AND sl.spent_amount < sl.budget_amount
+          AND sl.approval_status = 'approved'
+      ),
       search_results AS (
         SELECT
           p.id,
@@ -405,22 +416,25 @@ export class SearchService {
           ao.offer_title,
           ao.discount_value,
           ao.discount_type,
+          asp.provider_id IS NOT NULL AS is_sponsored,
           (
-            CASE WHEN $2 <> '' THEN COALESCE(ts_rank_cd(p.search_vector, to_tsquery('english', $2)), 0) * 0.30 ELSE 0 END +
+            CASE WHEN $2 <> '' THEN COALESCE(ts_rank_cd(p.search_vector, to_tsquery('english', $2)), 0) * 0.25 ELSE 0 END +
             COALESCE(similarity(p.brand_name, $1), 0) * 0.10 +
-            CASE WHEN ao.provider_id IS NOT NULL THEN 0.10 ELSE 0 END +
-            COALESCE(rs.avg_rating / 5.0, 0) * 0.20 +
-            LEAST(COALESCE(LOG(rs.review_count + 1) / LOG(50), 0), 1.0) * 0.10 +
+            CASE WHEN ao.provider_id IS NOT NULL THEN 0.15 ELSE 0 END +
+            CASE WHEN asp.provider_id IS NOT NULL THEN 0.08 ELSE 0 END +
+            COALESCE(rs.avg_rating / 5.0, 0) * 0.15 +
+            LEAST(COALESCE(LOG(rs.review_count + 1) / LOG(50), 0), 1.0) * 0.08 +
             CASE WHEN ${distExpr} IS NOT NULL THEN (1.0 - LEAST(${distExpr} / ${radiusParam}::float, 1.0)) * 0.10 ELSE 0 END +
             CASE WHEN p.is_featured THEN 0.05 ELSE 0 END +
             CASE WHEN p.status = 'active' THEN 0.02 ELSE 0 END +
-            CASE WHEN p.updated_at > NOW() - INTERVAL '30 days' THEN 0.03 ELSE 0 END
+            CASE WHEN p.updated_at > NOW() - INTERVAL '30 days' THEN 0.02 ELSE 0 END
           ) AS relevance_score,
           COUNT(*) OVER() AS total_count
         FROM providers p
         LEFT JOIN provider_rating_stats rs ON rs.provider_id = p.id
         LEFT JOIN cat_names cn ON cn.provider_id = p.id
         LEFT JOIN active_offers ao ON ao.provider_id = p.id
+        LEFT JOIN active_sponsorships asp ON asp.provider_id = p.id
         WHERE ${whereClause}
         ORDER BY ${orderClause}
         LIMIT $${pi} OFFSET $${pi + 1}
@@ -453,6 +467,7 @@ export class SearchService {
           reviewCount: parseInt(r.review_count, 10),
           categories: r.categories,
           relevanceScore: parseFloat(parseFloat(r.relevance_score).toFixed(3)),
+          isSponsored: r.is_sponsored || false,
           hasActiveOffer: r.has_active_offer || false,
           offerTitle: r.offer_title || null,
           discountValue: r.discount_value != null ? parseFloat(r.discount_value) : null,
@@ -1019,7 +1034,24 @@ export class SearchService {
           similarity(p.brand_name, $1),
           CASE WHEN $2 <> '' AND p.search_vector @@ to_tsquery('english', $2)
                THEN 0.5 ELSE 0 END
-        ) AS sim
+        ) AS sim,
+        CASE WHEN EXISTS (
+          SELECT 1 FROM sponsored_listings sl
+          WHERE sl.provider_id = p.id
+            AND sl.is_active = true
+            AND sl.starts_at <= NOW()
+            AND sl.ends_at >= NOW()
+            AND sl.spent_amount < sl.budget_amount
+            AND sl.approval_status = 'approved'
+        ) THEN true ELSE false END AS is_sponsored,
+        CASE WHEN EXISTS (
+          SELECT 1 FROM provider_offers po
+          WHERE po.provider_id = p.id
+            AND po.is_active = true
+            AND po.starts_at <= NOW()
+            AND po.ends_at >= NOW()
+            AND po.approval_status = 'approved'
+        ) THEN true ELSE false END AS has_active_offer
       FROM providers p
       LEFT JOIN LATERAL (
         SELECT string_agg(DISTINCT c.name, ', ') AS categories
@@ -1038,6 +1070,8 @@ export class SearchService {
         CASE WHEN lower(p.brand_name) = lower($1) THEN 0
              WHEN lower(p.brand_name) LIKE lower($1) || '%' THEN 1
              ELSE 2 END,
+        is_sponsored DESC,
+        has_active_offer DESC,
         sim DESC,
         distance ASC NULLS LAST
       LIMIT $${pi}
@@ -1056,6 +1090,8 @@ export class SearchService {
           r.distance != null ? `${parseFloat(r.distance).toFixed(1)} km` : null,
         ].filter(Boolean).join(' · '),
         imageUrl: r.profile_photo_url,
+        isSponsored: r.is_sponsored || false,
+        hasActiveOffer: r.has_active_offer || false,
       }));
     } catch {
       return [];

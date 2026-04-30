@@ -289,6 +289,177 @@ export class ExploreService {
     }));
   }
 
+  // ─── Paginated Deals ────────────────────────────────────────
+
+  async getDeals(dto: {
+    lat?: number;
+    lng?: number;
+    radius?: number;
+    city?: string;
+    category?: string;
+    discountType?: 'percentage' | 'flat';
+    minDiscount?: number;
+    page?: number;
+    limit?: number;
+    sort?: 'discount' | 'ending_soon' | 'distance' | 'newest';
+  }) {
+    const now = new Date();
+    const hasLocation = dto.lat != null && dto.lng != null;
+    const page = dto.page ?? 1;
+    const limit = Math.min(dto.limit ?? 20, 50);
+    const offset = (page - 1) * limit;
+    const radius = dto.radius ?? 25;
+    const showAllAreas = radius === 0 || radius >= 200;
+
+    const haversine = hasLocation
+      ? ExploreService.HAVERSINE
+      : 'NULL';
+
+    const qb = this.offerRepo
+      .createQueryBuilder('o')
+      .innerJoin('providers', 'p', 'p.id = o.provider_id')
+      .select([
+        'p.id AS id',
+        'p.brand_name AS name',
+        'p.profile_photo_url AS image',
+        'p.banner_image_url AS "bannerImage"',
+        'p.city AS city',
+        'p.area AS area',
+        'p.status AS status',
+        'p.is_women_led AS "isWomenLed"',
+        'o.id AS "offerId"',
+        'o.title AS "offerTitle"',
+        'o.discount_type AS "discountType"',
+        'o.discount_value AS "discountValue"',
+        'o.ends_at AS "offerEndsAt"',
+        'o.starts_at AS "offerStartsAt"',
+        'o.created_at AS "createdAt"',
+      ])
+      // Count total active offers per provider (for "X offers" badge)
+      .addSelect(
+        `(SELECT COUNT(*)::int FROM provider_offers po2
+          WHERE po2.provider_id = p.id
+            AND po2.is_active = true
+            AND po2.starts_at <= NOW()
+            AND po2.ends_at >= NOW()
+            AND po2.approval_status = 'approved')`,
+        'providerDealCount',
+      )
+      .where('o.is_active = :active', { active: true })
+      .andWhere('o.starts_at <= :now', { now })
+      .andWhere('o.ends_at >= :now', { now })
+      .andWhere('(o.usage_limit IS NULL OR o.usage_count < o.usage_limit)')
+      .andWhere("o.approval_status = 'approved'")
+      .andWhere("p.status IN ('active', 'unverified')");
+
+    this.withReviewStats(qb);
+
+    // Location filtering — only apply radius if NOT "all areas"
+    if (hasLocation) {
+      qb.setParameter('lat', dto.lat).setParameter('lng', dto.lng);
+      qb.addSelect(haversine, 'distance');
+      qb.andWhere('p.latitude IS NOT NULL')
+        .andWhere('p.longitude IS NOT NULL');
+      if (!showAllAreas) {
+        const dLat = radius / 111.32;
+        const dLng = radius / (111.32 * Math.cos((dto.lat! * Math.PI) / 180));
+        qb.andWhere('p.latitude BETWEEN :minLat AND :maxLat', { minLat: dto.lat! - dLat, maxLat: dto.lat! + dLat })
+          .andWhere('p.longitude BETWEEN :minLng AND :maxLng', { minLng: dto.lng! - dLng, maxLng: dto.lng! + dLng });
+      }
+    } else if (dto.city && !showAllAreas) {
+      qb.andWhere('p.city ILIKE :city', { city: `%${dto.city}%` });
+    }
+
+    // Category filter
+    if (dto.category) {
+      qb.andWhere(
+        `p.id IN (SELECT pc.provider_id FROM provider_categories pc WHERE pc.category_id = :catId)`,
+        { catId: dto.category },
+      );
+    }
+
+    // Discount type filter
+    if (dto.discountType) {
+      qb.andWhere('o.discount_type = :discountType', { discountType: dto.discountType });
+    }
+
+    // Minimum discount filter
+    if (dto.minDiscount != null && dto.minDiscount > 0) {
+      qb.andWhere('o.discount_value >= :minDiscount', { minDiscount: dto.minDiscount });
+    }
+
+    // Add category services for display
+    qb.leftJoin(
+      (sub) => sub
+        .select('pcs.provider_id', 'provider_id')
+        .addSelect("string_agg(DISTINCT cats.name, ', ' ORDER BY cats.name)", 'services')
+        .from('provider_categories', 'pcs')
+        .innerJoin('categories', 'cats', 'cats.id = pcs.category_id')
+        .groupBy('pcs.provider_id'),
+      'cs',
+      'cs.provider_id = p.id',
+    );
+    qb.addSelect('cs.services', 'services');
+
+    // Sorting
+    switch (dto.sort) {
+      case 'ending_soon':
+        qb.orderBy('o.ends_at', 'ASC');
+        break;
+      case 'distance':
+        if (hasLocation) {
+          qb.orderBy('distance', 'ASC');
+        } else {
+          qb.orderBy('o.discount_value', 'DESC');
+        }
+        break;
+      case 'newest':
+        qb.orderBy('o.created_at', 'DESC');
+        break;
+      case 'discount':
+      default:
+        qb.orderBy('o.discount_value', 'DESC');
+        break;
+    }
+
+    // Get total count
+    const totalQb = qb.clone();
+    const total = await totalQb.getCount();
+
+    // Apply pagination
+    qb.offset(offset).limit(limit);
+
+    const raw = await qb.getRawMany();
+
+    const data = raw.map((r) => ({
+      id: r.id,
+      name: r.name,
+      image: r.bannerImage || r.image,
+      location: [r.area, r.city].filter(Boolean).join(', '),
+      rating: parseFloat(r.rating) || 0,
+      reviewCount: parseInt(r.reviewCount, 10) || 0,
+      verified: r.status === 'active',
+      isWomenLed: r.isWomenLed || false,
+      services: r.services || null,
+      distance: r.distance ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
+      offerId: r.offerId,
+      offerTitle: r.offerTitle,
+      discountType: r.discountType,
+      discountValue: parseFloat(r.discountValue),
+      offerEndsAt: r.offerEndsAt,
+      hasActiveOffer: true,
+      providerDealCount: parseInt(r.providerDealCount, 10) || 1,
+    }));
+
+    return {
+      data,
+      total,
+      page,
+      limit,
+      hasMore: offset + data.length < total,
+    };
+  }
+
   // ─── Popular Nearby ──────────────────────────────────────────
 
   private async getPopularNearby(lat?: number, lng?: number, city?: string, limit = 6) {

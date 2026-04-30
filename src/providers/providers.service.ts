@@ -316,7 +316,7 @@ export class ProvidersService {
     });
     if (!provider) throw new NotFoundException(`Provider with ID '${id}' not found`);
 
-    const [photos, products, reviews, badges, activeOffers] = await Promise.all([
+    const [photos, products, reviews, badges, activeOffers, activeSponsor] = await Promise.all([
       this.photoRepo.find({
         where: { providerId: id },
         order: { displayOrder: 'ASC' },
@@ -342,6 +342,15 @@ export class ProvidersService {
         .andWhere('o.ends_at > NOW()')
         .orderBy('o.ends_at', 'ASC')
         .getMany(),
+      this.sponsorRepo
+        .createQueryBuilder('s')
+        .where('s.provider_id = :id', { id })
+        .andWhere('s.is_active = true')
+        .andWhere('s.starts_at <= NOW()')
+        .andWhere('s.ends_at > NOW()')
+        .andWhere('s.spent_amount < s.budget_amount')
+        .andWhere("s.approval_status = 'approved'")
+        .getOne(),
     ]);
 
     const ratingDist = [0, 0, 0, 0, 0];
@@ -377,6 +386,8 @@ export class ProvidersService {
       reviews,
       badges,
       activeOffers,
+      isSponsored: !!activeSponsor,
+      sponsorEndsAt: activeSponsor?.endsAt ?? null,
       stats: {
         rating: Number(rating.toFixed(2)),
         reviewCount,
