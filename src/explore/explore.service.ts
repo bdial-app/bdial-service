@@ -299,6 +299,10 @@ export class ExploreService {
     category?: string;
     discountType?: 'percentage' | 'flat';
     minDiscount?: number;
+    verified?: boolean;
+    minRating?: number;
+    endingSoon?: boolean;
+    womenLed?: boolean;
     page?: number;
     limit?: number;
     sort?: 'discount' | 'ending_soon' | 'distance' | 'newest';
@@ -386,6 +390,31 @@ export class ExploreService {
     // Minimum discount filter
     if (dto.minDiscount != null && dto.minDiscount > 0) {
       qb.andWhere('o.discount_value >= :minDiscount', { minDiscount: dto.minDiscount });
+    }
+
+    // Verified only filter
+    if (dto.verified) {
+      qb.andWhere("p.status = 'active'");
+    }
+
+    // Minimum rating filter
+    if (dto.minRating != null && dto.minRating > 0) {
+      qb.andWhere(
+        `(SELECT COALESCE(AVG(rv.star_rating), 0) FROM reviews rv WHERE rv.provider_id = p.id AND rv.status = 'active') >= :minRating`,
+        { minRating: dto.minRating },
+      );
+    }
+
+    // Ending soon filter (within 7 days)
+    if (dto.endingSoon) {
+      const sevenDays = new Date();
+      sevenDays.setDate(sevenDays.getDate() + 7);
+      qb.andWhere('o.ends_at <= :sevenDays', { sevenDays });
+    }
+
+    // Women-led businesses only
+    if (dto.womenLed) {
+      qb.andWhere('p.is_women_led = true');
     }
 
     // Add category services for display

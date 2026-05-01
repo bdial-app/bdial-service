@@ -1,5 +1,5 @@
-import { IsOptional, IsNumber, IsString, IsIn } from 'class-validator';
-import { Type } from 'class-transformer';
+import { IsOptional, IsNumber, IsString, IsIn, IsBoolean } from 'class-validator';
+import { Type, Transform } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
 export class DealsQueryDto {
@@ -41,6 +41,30 @@ export class DealsQueryDto {
   @IsNumber()
   @Type(() => Number)
   minDiscount?: number;
+
+  @ApiPropertyOptional({ description: 'Only show verified providers', example: true })
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  @IsBoolean()
+  verified?: boolean;
+
+  @ApiPropertyOptional({ description: 'Minimum provider rating', example: 4 })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  minRating?: number;
+
+  @ApiPropertyOptional({ description: 'Only show deals ending within 7 days', example: true })
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  @IsBoolean()
+  endingSoon?: boolean;
+
+  @ApiPropertyOptional({ description: 'Only show women-led businesses', example: true })
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  @IsBoolean()
+  womenLed?: boolean;
 
   @ApiPropertyOptional({ description: 'Page number', example: 1, default: 1 })
   @IsOptional()

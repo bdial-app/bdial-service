@@ -6,13 +6,14 @@ import { Reflector } from '@nestjs/core';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import helmet from 'helmet';
 import compression from 'compression';
-import { json } from 'express';
+import { json, urlencoded } from 'express';
 import { AllExceptionsFilter } from './common/all-exceptions.filter';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     logger: ['error', 'warn', 'log'],
     rawBody: true,
+    bodyParser: false, // We register body parsers manually below
   });
 
   const configService = app.get(ConfigService);
@@ -20,21 +21,26 @@ async function bootstrap() {
   // Global prefix
   app.setGlobalPrefix('api');
 
+  // CORS — must be FIRST so error responses also get CORS headers
+  const corsOrigin = configService.get<string>('CORS_ORIGIN', '*');
+  app.enableCors({
+    origin: corsOrigin === '*' ? '*' : corsOrigin.split(',').map((o) => o.trim()),
+    credentials: true,
+  });
+
   // Security headers
   app.use(helmet());
 
   // Response compression
   app.use(compression());
 
-  // Body size limit
-  app.use(json({ limit: '1mb' }));
-
-  // CORS — restrict to configured origins
-  const corsOrigin = configService.get<string>('CORS_ORIGIN', '*');
-  app.enableCors({
-    origin: corsOrigin === '*' ? '*' : corsOrigin.split(',').map((o) => o.trim()),
-    credentials: true,
-  });
+  // Body parsers — only for JSON/urlencoded; multipart is handled by Multer
+  // The verify callback stores rawBody for Stripe webhook signature verification
+  app.use(json({
+    limit: '5mb',
+    verify: (req: any, _res, buf) => { req.rawBody = buf; },
+  }));
+  app.use(urlencoded({ extended: true, limit: '5mb' }));
 
   // Validation
   app.useGlobalPipes(

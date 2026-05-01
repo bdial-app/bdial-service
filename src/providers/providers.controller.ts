@@ -85,7 +85,9 @@ export class ProvidersController {
     { name: 'bannerImage', maxCount: 1 },
     { name: 'profileImage', maxCount: 1 },
     { name: 'productImages', maxCount: 20 },
-  ]))
+  ], {
+    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB per file
+  }))
   @ApiOperation({ summary: 'Become a provider (creates provider, uploads photos, creates products, and verification records)' })
   @ApiResponse({ status: 201, description: 'Provider and verification created successfully' })
   @ApiResponse({ status: 400, description: 'Bad Request' })
@@ -275,7 +277,9 @@ export class ProvidersController {
   @ApiBearerAuth()
   @UseGuards(AuthGuard('jwt'))
   @ApiConsumes('multipart/form-data')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', {
+    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  }))
   @ApiOperation({ summary: 'Submit identity verification document for existing provider' })
   @ApiResponse({ status: 201, description: 'Verification submitted successfully' })
   @ApiResponse({ status: 400, description: 'Bad Request' })

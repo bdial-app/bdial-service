@@ -74,6 +74,34 @@ export class FirebaseService implements OnModuleInit {
         body: payload.body,
         ...(payload.imageUrl && { imageUrl: payload.imageUrl }),
       },
+      // Android-specific: high priority ensures delivery even in Doze mode
+      android: {
+        priority: 'high',
+        notification: {
+          channelId: 'default',
+          sound: 'default',
+          defaultVibrateTimings: true,
+          defaultSound: true,
+          ...(payload.imageUrl && { imageUrl: payload.imageUrl }),
+        },
+      },
+      // iOS/APNs-specific: ensures immediate delivery and badge/sound
+      apns: {
+        payload: {
+          aps: {
+            alert: {
+              title: payload.title,
+              body: payload.body,
+            },
+            sound: 'default',
+            badge: 1,
+            'mutable-content': 1,
+          },
+        },
+        headers: {
+          'apns-priority': '10',
+        },
+      },
       webpush: {
         fcmOptions: {
           link: payload.data?.route || '/',
@@ -116,6 +144,34 @@ export class FirebaseService implements OnModuleInit {
         title: payload.title,
         body: payload.body,
         ...(payload.imageUrl && { imageUrl: payload.imageUrl }),
+      },
+      // Android-specific: high priority ensures delivery even in Doze mode
+      android: {
+        priority: 'high',
+        notification: {
+          channelId: 'default',
+          sound: 'default',
+          defaultVibrateTimings: true,
+          defaultSound: true,
+          ...(payload.imageUrl && { imageUrl: payload.imageUrl }),
+        },
+      },
+      // iOS/APNs-specific: ensures immediate delivery and badge/sound
+      apns: {
+        payload: {
+          aps: {
+            alert: {
+              title: payload.title,
+              body: payload.body,
+            },
+            sound: 'default',
+            badge: 1,
+            'mutable-content': 1,
+          },
+        },
+        headers: {
+          'apns-priority': '10',
+        },
       },
       webpush: {
         fcmOptions: {
