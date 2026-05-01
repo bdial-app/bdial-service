@@ -6,6 +6,7 @@ import { NotificationDispatchService } from '../notifications/notification-dispa
 import { BugReport } from '../bug-reports/bug-report.entity';
 import { AdminCreateUserDto, AdminCreateProviderWithUserDto } from './dto/admin-create-user.dto';
 import { StorageService } from '../storage/storage.service';
+import { OtpService } from '../otp/otp.service';
 
 @Injectable()
 export class AdminService {
@@ -39,6 +40,7 @@ export class AdminService {
     private dataSource: DataSource,
     private notificationDispatch: NotificationDispatchService,
     private storageService: StorageService,
+    private otpService: OtpService,
   ) {}
 
   private assertAdmin(user: any) {
@@ -2087,8 +2089,6 @@ export class AdminService {
   // Admin OTP Management (for verification in flow)
   // ============================================
 
-  private adminOtpStore = new Map<string, { otp: string; expiresAt: Date; sentAt: Date; purpose: string }>();
-
   async adminSendOtp(admin: any, mobileNumber: string, purpose = 'user_verification') {
     this.assertAdmin(admin);
     const phone = mobileNumber.trim();
@@ -2096,26 +2096,8 @@ export class AdminService {
       throw new BadRequestException('Mobile number must be exactly 10 digits');
     }
 
-    // Check cooldown
-    const existing = this.adminOtpStore.get(`${phone}_${purpose}`);
-    if (existing && new Date() < existing.expiresAt) {
-      const timeSinceSent = Date.now() - existing.sentAt.getTime();
-      if (timeSinceSent < 60 * 1000) {
-        const remaining = Math.ceil((60 * 1000 - timeSinceSent) / 1000);
-        throw new BadRequestException({
-          message: 'OTP recently sent. Please wait.',
-          retryAfterSeconds: remaining,
-          error_code: 'OTP_RATE_LIMITED',
-        });
-      }
-    }
-
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-    this.adminOtpStore.set(`${phone}_${purpose}`, { otp, expiresAt, sentAt: new Date(), purpose });
-    console.log(`[Admin OTP] ${phone} (${purpose}): ${otp} (Expires: ${expiresAt.toISOString()})`);
-
-    return { message: 'OTP sent successfully', data: { mobileNumber: phone, expiresIn: '5 minutes', otp } };
+    const result = await this.otpService.sendOtpWithKey(`admin_action_${phone}_${purpose}`, phone);
+    return { message: 'OTP sent successfully', data: { mobileNumber: phone, expiresIn: result.expiresIn, ...(result.otp ? { otp: result.otp } : {}) } };
   }
 
   async adminVerifyOtp(admin: any, mobileNumber: string, otp: string, purpose = 'user_verification') {
@@ -2126,19 +2108,7 @@ export class AdminService {
     if (!/^\d{10}$/.test(phone)) throw new BadRequestException('Mobile number must be exactly 10 digits');
     if (!/^\d{6}$/.test(code)) throw new BadRequestException('OTP must be exactly 6 digits');
 
-    const key = `${phone}_${purpose}`;
-    const record = this.adminOtpStore.get(key);
-    if (!record) {
-      throw new BadRequestException({ message: 'No OTP found for this number', error_code: 'OTP_NOT_FOUND' });
-    }
-    if (new Date() > record.expiresAt) {
-      this.adminOtpStore.delete(key);
-      throw new BadRequestException({ message: 'OTP has expired', error_code: 'OTP_EXPIRED' });
-    }
-    if (record.otp !== code) {
-      throw new BadRequestException({ message: 'Invalid OTP', error_code: 'INVALID_OTP' });
-    }
-    this.adminOtpStore.delete(key);
+    await this.otpService.verifyOtpWithKey(`admin_action_${phone}_${purpose}`, phone, code);
 
     return { message: 'OTP verified successfully', verified: true, mobileNumber: phone, purpose };
   }

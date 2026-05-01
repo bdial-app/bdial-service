@@ -10,6 +10,7 @@ import { Repository, DataSource, ILike } from 'typeorm';
 import { Provider, User, Verification, ProviderCategory, Review, Product, Photo, Message, ConversationParticipant, ProviderBadge, ProviderOffer, SponsoredListing, ProviderWarning, SystemSetting, Subscription } from '../entities';
 import { StorageService } from '../storage/storage.service';
 import { GeocodeService } from '../geocode/geocode.service';
+import { OtpService } from '../otp/otp.service';
 import { CreateProviderDto } from './dto/create-provider.dto';
 import { UpdateProviderDto } from './dto/update-provider.dto';
 import { ProviderPaginationDto } from './dto/provider-pagination.dto';
@@ -22,8 +23,6 @@ import { ContentSanitizerService } from '../common/content-sanitizer';
 
 @Injectable()
 export class ProvidersService {
-  private providerOtpStore = new Map<string, { otp: string; expiresAt: Date; sentAt: Date }>();
-
   constructor(
     @InjectRepository(Provider) private providerRepo: Repository<Provider>,
     @InjectRepository(User) private userRepo: Repository<User>,
@@ -44,6 +43,7 @@ export class ProvidersService {
     private dataSource: DataSource,
     private geocodeService: GeocodeService,
     private contentSanitizer: ContentSanitizerService,
+    private otpService: OtpService,
   ) {}
 
   async sendProviderOtp(mobileNumber: string) {
@@ -52,21 +52,8 @@ export class ProvidersService {
     }
     const mobile = mobileNumber.trim();
 
-    const existing = this.providerOtpStore.get(mobile);
-    if (existing && new Date() < existing.expiresAt) {
-      const timeSinceSent = Date.now() - existing.sentAt.getTime();
-      if (timeSinceSent < 60 * 1000) {
-        const remaining = Math.ceil((60 * 1000 - timeSinceSent) / 1000);
-        throw new BadRequestException({ message: 'OTP recently sent. Please wait before resending.', retryAfterSeconds: remaining, error_code: 'OTP_RATE_LIMITED' });
-      }
-    }
-
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-    this.providerOtpStore.set(mobile, { otp, expiresAt, sentAt: new Date() });
-    console.log(`[Provider OTP] ${mobile}: ${otp} (Expires: ${expiresAt.toISOString()})`);
-
-    return { message: 'OTP sent successfully', data: { mobileNumber: mobile, expiresIn: '5 minutes', otp } };
+    const result = await this.otpService.sendOtpWithKey(`provider_${mobile}`, mobile);
+    return { message: 'OTP sent successfully', data: { mobileNumber: mobile, expiresIn: result.expiresIn, ...(result.otp ? { otp: result.otp } : {}) } };
   }
 
   async verifyProviderOtp(mobileNumber: string, otp: string) {
@@ -79,14 +66,7 @@ export class ProvidersService {
     if (!/^\d{10}$/.test(mobile)) throw new BadRequestException('Mobile number must be exactly 10 digits');
     if (!/^\d{6}$/.test(code)) throw new BadRequestException('OTP must be exactly 6 digits');
 
-    const record = this.providerOtpStore.get(mobile);
-    if (!record) throw new BadRequestException({ message: 'No OTP found for this number', error_code: 'OTP_NOT_FOUND' });
-    if (new Date() > record.expiresAt) {
-      this.providerOtpStore.delete(mobile);
-      throw new BadRequestException({ message: 'OTP has expired', error_code: 'OTP_EXPIRED' });
-    }
-    if (record.otp !== code) throw new BadRequestException({ message: 'Invalid OTP', error_code: 'INVALID_OTP' });
-    this.providerOtpStore.delete(mobile);
+    await this.otpService.verifyOtpWithKey(`provider_${mobile}`, mobile, code);
 
     return { message: 'OTP verified successfully', verified: true };
   }

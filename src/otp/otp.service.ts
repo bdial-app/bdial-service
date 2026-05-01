@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { SupabaseAuthService } from '../supabase/supabase-auth.service';
+import { Msg91Service } from '../msg91/msg91.service';
 
 interface OtpRecord {
   otp: string;
@@ -20,8 +20,6 @@ export interface SendOtpResult {
 export interface VerifyOtpResult {
   valid: boolean;
   message: string;
-  /** Supabase user ID — available in production after successful verification */
-  supabaseUserId?: string;
 }
 
 @Injectable()
@@ -37,7 +35,7 @@ export class OtpService {
 
   constructor(
     private readonly config: ConfigService,
-    private readonly supabaseAuth: SupabaseAuthService,
+    private readonly msg91: Msg91Service,
   ) {
     this.isDevelopment = config.get<string>('NODE_ENV', 'development') === 'development';
     this.countryCode = config.get<string>('SMS_COUNTRY_CODE', '+91');
@@ -45,14 +43,14 @@ export class OtpService {
     this.resendCooldownMs = 60 * 1000; // 60 seconds
 
     if (!this.isDevelopment) {
-      if (!this.supabaseAuth.isConfigured()) {
+      if (!this.msg91.isConfigured()) {
         this.logger.error(
-          'Supabase is not configured. Cannot start in production without OTP provider. ' +
-          'Ensure SUPABASE_URL, SUPABASE_ANON_KEY are set, and Twilio is configured in Supabase dashboard.',
+          'MSG91 is not configured. Cannot start in production without OTP provider. ' +
+          'Ensure MSG91_AUTH_KEY and MSG91_TEMPLATE_ID are set.',
         );
-        throw new Error('Supabase Phone Auth configuration is incomplete for production.');
+        throw new Error('MSG91 configuration is incomplete for production.');
       }
-      this.logger.log('Supabase Phone Auth initialized for production OTP delivery (Twilio via Supabase)');
+      this.logger.log('MSG91 initialized for production OTP delivery');
     } else {
       this.logger.log('Development mode: OTP will be generated locally (no SMS sent)');
     }
@@ -76,7 +74,7 @@ export class OtpService {
     if (this.isDevelopment) {
       return this.sendOtpDev(phone);
     }
-    return this.sendOtpSupabase(phone);
+    return this.sendOtpMsg91(phone);
   }
 
   /**
@@ -105,7 +103,7 @@ export class OtpService {
     if (this.isDevelopment) {
       return this.verifyOtpDev(phone, otp);
     }
-    return this.verifyOtpSupabase(phone, otp);
+    return this.verifyOtpMsg91(phone, otp);
   }
 
   /**
@@ -129,8 +127,8 @@ export class OtpService {
     if (this.isDevelopment) {
       return this.sendOtpDev(key, metadata);
     }
-    // In production, Supabase uses the phone number directly — keys don't matter
-    return this.sendOtpSupabase(phone);
+    // In production, MSG91 uses the phone number directly — keys don't matter
+    return this.sendOtpMsg91(phone);
   }
 
   /**
@@ -152,7 +150,7 @@ export class OtpService {
     if (this.isDevelopment) {
       return this.verifyOtpDev(key, otp);
     }
-    return this.verifyOtpSupabase(phone, otp);
+    return this.verifyOtpMsg91(phone, otp);
   }
 
   /**
@@ -239,17 +237,15 @@ export class OtpService {
     }
   }
 
-  // ─── Production mode (Supabase Phone Auth → Twilio Verify) ─────
+  // ─── Production mode (MSG91 OTP API) ─────────────────────────
 
-  private async sendOtpSupabase(phone: string): Promise<SendOtpResult> {
-    const fullNumber = `${this.countryCode}${phone}`;
+  private async sendOtpMsg91(phone: string): Promise<SendOtpResult> {
+    const result = await this.msg91.sendOtp(phone);
 
-    const { success, error } = await this.supabaseAuth.sendPhoneOtp(fullNumber);
+    if (!result.success) {
+      this.logger.error(`MSG91 OTP send failed for ${phone}: ${result.error}`);
 
-    if (!success) {
-      this.logger.error(`Supabase phone OTP send failed for ${fullNumber}: ${error}`);
-
-      if (error?.includes('rate') || error?.includes('limit')) {
+      if (result.error?.includes('rate') || result.error?.includes('limit') || result.error?.includes('already sent')) {
         throw new BadRequestException({
           statusCode: 429,
           message: 'Too many OTP requests. Please wait before trying again.',
@@ -267,31 +263,36 @@ export class OtpService {
     return {
       success: true,
       message: 'OTP sent successfully',
-      // No OTP returned in production — Supabase/Twilio manages it
-      expiresIn: '10 minutes',
+      // No OTP returned in production — MSG91 manages it
+      expiresIn: '5 minutes',
     };
   }
 
-  private async verifyOtpSupabase(phone: string, code: string): Promise<VerifyOtpResult> {
-    const fullNumber = `${this.countryCode}${phone}`;
+  private async verifyOtpMsg91(phone: string, code: string): Promise<VerifyOtpResult> {
+    const result = await this.msg91.verifyOtp(phone, code);
 
-    const { valid, supabaseUserId, error } = await this.supabaseAuth.verifyPhoneOtp(fullNumber, code);
+    if (!result.valid) {
+      this.logger.warn(`MSG91 OTP verify failed for ${phone}: ${result.error}`);
 
-    if (!valid) {
-      this.logger.error(`Supabase phone OTP verify failed for ${fullNumber}: ${error}`);
-
-      if (error?.includes('expired') || error?.includes('Token has expired')) {
+      if (result.error?.includes('expired') || result.error?.includes('Expired')) {
         throw new BadRequestException({
           statusCode: 400,
           message: 'OTP has expired. Please request a new one.',
           error_code: 'OTP_EXPIRED',
         });
       }
-      if (error?.includes('invalid') || error?.includes('Invalid')) {
+      if (result.error?.includes('invalid') || result.error?.includes('Invalid') || result.error?.includes('not match')) {
         throw new BadRequestException({
           statusCode: 400,
           message: 'Invalid OTP',
           error_code: 'INVALID_OTP',
+        });
+      }
+      if (result.error?.includes('already verified')) {
+        throw new BadRequestException({
+          statusCode: 400,
+          message: 'OTP has already been used',
+          error_code: 'OTP_ALREADY_VERIFIED',
         });
       }
 
@@ -302,6 +303,6 @@ export class OtpService {
       });
     }
 
-    return { valid: true, message: 'OTP verified successfully', supabaseUserId };
+    return { valid: true, message: 'OTP verified successfully' };
   }
 }

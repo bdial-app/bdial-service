@@ -19,6 +19,8 @@ import { StorageModule } from './storage/storage.module';
 import { PhotosModule } from './photos/photos.module';
 import { ProvidersModule } from './providers/providers.module';
 import { SupabaseModule } from './supabase/supabase.module';
+import { Msg91Module } from './msg91/msg91.module';
+import { OtpModule } from './otp/otp.module';
 import { GeocodeModule } from './geocode/geocode.module';
 import { SavedLocationsModule } from './saved-locations/saved-locations.module';
 import { HomeModule } from './home/home.module';
@@ -61,6 +63,8 @@ import { SystemSetting } from './entities';
 
     StorageModule,
     PhotosModule,
+    Msg91Module,
+    OtpModule,
     SupabaseModule,
     AuthModule,
     AdminAuthModule,
