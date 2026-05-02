@@ -231,9 +231,25 @@ export class AdminService {
       reviewedBy: admin.id,
     };
     if (ijamatStatus) data.ijamatStatus = ijamatStatus;
+
+    // Update overall status based on aadhaar review result
+    data.status = aadhaarStatus;
+
     await this.verificationRepo.update(verificationId, data);
 
-    const verification = await this.verificationRepo.findOneBy({ id: verificationId });
+    const verification = await this.verificationRepo.findOne({
+      where: { id: verificationId },
+      relations: ['user'],
+    });
+
+    // If approved, also activate the provider
+    if (verification && aadhaarStatus === 'approved') {
+      const provider = await this.providerRepo.findOneBy({ userId: verification.userId });
+      if (provider && provider.status === 'unverified') {
+        provider.status = 'active';
+        await this.providerRepo.save(provider);
+      }
+    }
 
     // Notify user of verification result
     if (verification) {

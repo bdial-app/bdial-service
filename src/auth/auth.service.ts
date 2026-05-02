@@ -71,7 +71,7 @@ export class AuthService {
       throw new BadRequestException({ statusCode: 400, message: 'Mobile number must be exactly 10 digits', field: 'mobileNumber', received_length: mobileNumber.length });
     }
 
-    const result = await this.otpService.sendOtpWithKey(`reg_${mobileNumber}`, mobileNumber);
+    const result = await this.otpService.sendOtpWithKey(`login_${mobileNumber}`, mobileNumber);
     return { message: 'OTP sent successfully', data: { mobileNumber, expiresIn: result.expiresIn, ...(result.otp ? { otp: result.otp } : {}) } };
   }
 

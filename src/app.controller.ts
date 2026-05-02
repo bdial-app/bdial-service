@@ -17,4 +17,10 @@ export class AppController {
   getFeatureFlags() {
     return this.appService.getPublicFeatureFlags();
   }
+
+  @Get('config/monetization')
+  @Public()
+  getMonetizationConfig() {
+    return this.appService.getMonetizationConfig();
+  }
 }

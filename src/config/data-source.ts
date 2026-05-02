@@ -39,6 +39,7 @@ import { SubscriptionPlan } from '../entities/subscription-plan.entity';
 import { Subscription } from '../entities/subscription.entity';
 import { Voucher } from '../entities/voucher.entity';
 import { VoucherRedemption } from '../entities/voucher-redemption.entity';
+import { UserCategoryInteraction } from '../entities/user-category-interaction.entity';
 
 export const ALL_ENTITIES = [
   User,
@@ -80,6 +81,7 @@ export const ALL_ENTITIES = [
   Subscription,
   Voucher,
   VoucherRedemption,
+  UserCategoryInteraction,
 ];
 
 export function buildTypeOrmOptions(url?: string): DataSourceOptions {

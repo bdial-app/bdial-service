@@ -354,6 +354,15 @@ export class ProvidersController {
 
   // ─── Provider Disable / Enable / Delete ────────────────────────
 
+  @Get('my-provider/cooldown-status')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @ApiOperation({ summary: 'Get cooldown status for provider disable/enable' })
+  @ApiResponse({ status: 200, description: 'Cooldown status returned' })
+  getCooldownStatus(@Request() req) {
+    return this.providersService.getCooldownStatus(req.user.id);
+  }
+
   @Post('my-provider/disable')
   @ApiBearerAuth()
   @UseGuards(AuthGuard('jwt'))

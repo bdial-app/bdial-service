@@ -14,6 +14,7 @@ import { SubscriptionPlan } from '../entities/subscription-plan.entity';
 import { Voucher } from '../entities/voucher.entity';
 import { VoucherRedemption } from '../entities/voucher-redemption.entity';
 import { SystemSetting } from '../entities/system-setting.entity';
+import { ProviderOffer } from '../entities/provider-offer.entity';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { SystemSetting } from '../entities/system-setting.entity';
       Voucher,
       VoucherRedemption,
       SystemSetting,
+      ProviderOffer,
     ]),
   ],
   controllers: [PaymentController, AdminPaymentController, PaymentWebhookController],

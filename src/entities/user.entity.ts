@@ -88,6 +88,9 @@ export class User {
   @Column({ name: 'preferred_language', type: 'varchar', length: 10, default: 'en' })
   preferredLanguage: string;
 
+  @Column({ name: 'preferred_category_ids', type: 'uuid', array: true, nullable: true, default: null })
+  preferredCategoryIds: string[] | null;
+
   @Column({ name: 'last_seen_at', type: 'timestamptz', nullable: true })
   lastSeenAt: Date | null;
 

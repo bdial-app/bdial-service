@@ -89,6 +89,15 @@ export class Provider {
   @Column({ name: 'stripe_customer_id', type: 'varchar', length: 255, nullable: true })
   stripeCustomerId: string | null;
 
+  @Column({ name: 'free_leads_used_this_month', type: 'int', default: 0 })
+  freeLeadsUsedThisMonth: number;
+
+  @Column({ name: 'free_leads_reset_at', type: 'timestamptz', nullable: true })
+  freeLeadsResetAt: Date | null;
+
+  @Column({ name: 'free_deals_created', type: 'int', default: 0 })
+  freeDealsCreated: number;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
@@ -97,6 +106,9 @@ export class Provider {
 
   @Column({ name: 'deleted_at', type: 'timestamptz', nullable: true })
   deletedAt: Date | null;
+
+  @Column({ name: 'disabled_at', type: 'timestamptz', nullable: true })
+  disabledAt: Date | null;
 
   @OneToOne(() => User, (u) => u.provider, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })

@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, IsNull, Not, MoreThan, LessThan } from 'typeorm';
+import { Repository, In, IsNull, Not, MoreThan, LessThan, DataSource } from 'typeorm';
 import {
   Provider,
   Category,
@@ -11,6 +11,7 @@ import {
   ProviderOffer,
   SponsoredListing,
 } from '../entities';
+import { CategoryPersonalizationService } from '../users/category-personalization.service';
 import { HomeFeedDto } from './dto/home-feed.dto';
 
 @Injectable()
@@ -24,6 +25,8 @@ export class HomeService {
     @InjectRepository(Photo) private photoRepo: Repository<Photo>,
     @InjectRepository(ProviderOffer) private offerRepo: Repository<ProviderOffer>,
     @InjectRepository(SponsoredListing) private sponsoredRepo: Repository<SponsoredListing>,
+    private readonly categoryPersonalization: CategoryPersonalizationService,
+    private readonly dataSource: DataSource,
   ) {}
 
   // ─── Performance Helpers ─────────────────────────────────────
@@ -114,6 +117,30 @@ export class HomeService {
       this.getDealsAroundYou(lat, lng, city, 8, sponsoredIds),
     ]);
 
+    // Phase 3: Personalization (if user is logged in)
+    let personalizedCategories: any[] | null = null;
+    let forYouProviders: any[] | null = null;
+
+    if (userId) {
+      const [catWeights, forYou] = await Promise.all([
+        this.categoryPersonalization.getPersonalizedCategories(userId, 10),
+        this.getForYouProviders(userId, lat, lng, city, 6),
+      ]);
+      if (catWeights.length > 0) {
+        personalizedCategories = catWeights.map((cw) => ({
+          id: cw.categoryId,
+          name: cw.categoryName,
+          slug: cw.slug,
+          icon: cw.icon,
+          weight: cw.weight,
+          source: cw.source,
+        }));
+      }
+      if (forYou.length > 0) {
+        forYouProviders = forYou;
+      }
+    }
+
     // Cross-section deduplication: remove sponsored businesses from other lists
     const filterSponsored = <T extends { id: string }>(list: T[]): T[] =>
       list.filter((p) => !sponsoredIds.has(p.id));
@@ -131,6 +158,8 @@ export class HomeService {
         : null,
       promoBanners,
       trendingCategories,
+      personalizedCategories,
+      forYouProviders: forYouProviders ? filterSponsored(forYouProviders) : null,
       communityReviews,
       platformStats,
       topRatedProviders: filterSponsored(topRatedProviders),
@@ -200,6 +229,90 @@ export class HomeService {
     const raw = await qb.getRawMany();
 
     return raw.map((r) => ({
+      id: r.id,
+      name: r.name,
+      image: r.bannerImage || r.image || r.listingPhoto,
+      description: r.description,
+      city: r.city,
+      area: r.area,
+      location: [r.area, r.city].filter(Boolean).join(', '),
+      rating: parseFloat(r.rating) || 0,
+      reviewCount: parseInt(r.reviewCount, 10) || 0,
+      services: r.services || null,
+      verified: r.status === 'active',
+      isFeatured: r.isFeatured,
+      isAvailable: r.isAvailable,
+      distance: r.distance ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
+    }));
+  }
+
+  /**
+   * "For You" section — providers from user's top categories, nearby.
+   * Returns personalized results based on implicit/explicit category preferences.
+   */
+  private async getForYouProviders(
+    userId: string,
+    lat?: number,
+    lng?: number,
+    city?: string,
+    limit = 6,
+  ) {
+    const topCategoryIds = await this.categoryPersonalization.getTopCategoryIds(userId, 3);
+    if (topCategoryIds.length === 0) return [];
+
+    const hasLocation = lat != null && lng != null;
+    let distExpr = 'NULL::float';
+    const params: any[] = [topCategoryIds];
+    let pi = 2;
+
+    if (hasLocation) {
+      distExpr = `6371 * acos(LEAST(1.0, cos(radians($${pi})) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians($${pi + 1})) + sin(radians($${pi})) * sin(radians(p.latitude))))`;
+      params.push(lat, lng);
+      pi += 2;
+    }
+
+    const conditions: string[] = [
+      `p.status IN ('active', 'unverified')`,
+      `p.id IN (SELECT pc.provider_id FROM provider_categories pc WHERE pc.category_id = ANY($1))`,
+    ];
+
+    if (hasLocation) {
+      conditions.push(`p.latitude IS NOT NULL`, `p.longitude IS NOT NULL`);
+      conditions.push(`${distExpr} <= 25`); // 25km radius
+    }
+
+    if (city) {
+      conditions.push(`p.city ILIKE $${pi}`);
+      params.push(`%${city}%`);
+      pi++;
+    }
+
+    params.push(limit);
+
+    const sql = `
+      SELECT
+        p.id, p.brand_name AS name, p.profile_photo_url AS image,
+        p.banner_image_url AS "bannerImage", p.description, p.city, p.area,
+        p.status, p.is_featured AS "isFeatured", p.is_available AS "isAvailable",
+        ${distExpr} AS distance,
+        COALESCE(rs.avg_rating, 0) AS rating,
+        COALESCE(rs.review_count, 0) AS "reviewCount",
+        (SELECT string_agg(DISTINCT c.name, ', ') FROM provider_categories pc JOIN categories c ON c.id = pc.category_id WHERE pc.provider_id = p.id) AS services,
+        (SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1) AS "listingPhoto"
+      FROM providers p
+      LEFT JOIN provider_rating_stats rs ON rs.provider_id = p.id
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY
+        CASE WHEN p.status = 'active' THEN 0 ELSE 1 END ASC,
+        COALESCE(rs.avg_rating, 0) DESC,
+        ${hasLocation ? 'distance ASC NULLS LAST,' : ''}
+        p.created_at DESC
+      LIMIT $${pi}
+    `;
+
+    const rows: any[] = await this.dataSource.query(sql, params);
+
+    return rows.map((r) => ({
       id: r.id,
       name: r.name,
       image: r.bannerImage || r.image || r.listingPhoto,

@@ -676,26 +676,52 @@ export class ProvidersService {
       throw new BadRequestException('End date must be after start date');
     }
 
-    // ─── Deal limits ────────────────────────────────────────────
-    const totalOffers = await this.offerRepo.count({ where: { providerId: provider.id } });
-    if (totalOffers >= 5) {
-      throw new ForbiddenException(
-        'You have reached the maximum of 5 deals. Please upgrade your plan to create more.',
-      );
+    // ─── Deal limits (subscription-aware) ────────────────────────────
+    const subscription = await this.subscriptionRepo.findOne({
+      where: { providerId: provider.id, status: 'active' },
+      relations: ['plan'],
+    });
+
+    let maxTotalDeals = 5;
+    let maxActiveDeals = 3;
+
+    if (subscription?.plan) {
+      maxTotalDeals = subscription.plan.maxTotalDeals;
+      maxActiveDeals = subscription.plan.maxActiveDeals;
     }
 
-    const now = new Date();
-    const activeCount = await this.offerRepo
-      .createQueryBuilder('o')
-      .where('o.providerId = :pid', { pid: provider.id })
-      .andWhere('o.isActive = true')
-      .andWhere('o.endsAt > :now', { now })
-      .andWhere('o.startsAt <= :now', { now })
-      .getCount();
-    if (activeCount >= 3) {
-      throw new BadRequestException(
-        'You can have at most 3 active deals at a time. Deactivate or wait for one to expire.',
-      );
+    // Unlimited (-1) bypasses checks
+    if (maxTotalDeals !== -1) {
+      const totalOffers = await this.offerRepo.count({ where: { providerId: provider.id } });
+      if (totalOffers >= maxTotalDeals) {
+        throw new ForbiddenException(
+          `You have reached the maximum of ${maxTotalDeals} deals. Please upgrade your plan to create more.`,
+        );
+      }
+    }
+
+    if (maxActiveDeals !== -1) {
+      const now = new Date();
+      const activeCount = await this.offerRepo
+        .createQueryBuilder('o')
+        .where('o.providerId = :pid', { pid: provider.id })
+        .andWhere('o.isActive = true')
+        .andWhere('o.endsAt > :now', { now })
+        .andWhere('o.startsAt <= :now', { now })
+        .getCount();
+      if (activeCount >= maxActiveDeals) {
+        throw new BadRequestException(
+          `You can have at most ${maxActiveDeals} active deals at a time. Deactivate or wait for one to expire.`,
+        );
+      }
+    }
+
+    // Increment free deals counter if within free quota
+    const freeQuotaSetting = await this.settingRepo?.findOneBy({ key: 'free_deal_quota_lifetime' });
+    const freeQuota = freeQuotaSetting ? parseInt(freeQuotaSetting.value, 10) : 3;
+    if (provider.freeDealsCreated < freeQuota) {
+      provider.freeDealsCreated += 1;
+      await this.providerRepo.save(provider);
     }
 
     const offer = this.offerRepo.create({
@@ -936,6 +962,46 @@ export class ProvidersService {
 
   // ─── Provider Disable / Enable / Delete ────────────────────────────
 
+  /** Get the configured cooldown hours from system settings */
+  private async getDisableCooldownHours(): Promise<number> {
+    const setting = await this.settingRepo.findOneBy({ key: 'provider_disable_cooldown_hours' });
+    return setting ? parseInt(setting.value, 10) || 48 : 48;
+  }
+
+  /** Check if cooldown enforcement is enabled */
+  private async isCooldownEnabled(): Promise<boolean> {
+    const setting = await this.settingRepo.findOneBy({ key: 'provider_disable_cooldown_enabled' });
+    return setting ? setting.value === 'true' : true;
+  }
+
+  /** Get cooldown status for the authenticated user's provider */
+  async getCooldownStatus(userId: string) {
+    const provider = await this.providerRepo.findOneBy({ userId });
+    if (!provider) return { canReEnable: true, disableRemainingHours: null, disabledAt: null, cooldownHours: 48 };
+
+    const cooldownHours = await this.getDisableCooldownHours();
+    const cooldownEnabled = await this.isCooldownEnabled();
+
+    if (!provider.disabledAt || !cooldownEnabled) {
+      return { canReEnable: true, disableRemainingHours: null, disabledAt: provider.disabledAt?.toISOString() || null, cooldownHours };
+    }
+
+    const elapsed = Date.now() - provider.disabledAt.getTime();
+    const cooldownMs = cooldownHours * 60 * 60 * 1000;
+    const remaining = cooldownMs - elapsed;
+
+    if (remaining <= 0) {
+      return { canReEnable: true, disableRemainingHours: 0, disabledAt: provider.disabledAt.toISOString(), cooldownHours };
+    }
+
+    return {
+      canReEnable: false,
+      disableRemainingHours: Math.ceil(remaining / (60 * 60 * 1000)),
+      disabledAt: provider.disabledAt.toISOString(),
+      cooldownHours,
+    };
+  }
+
   /** Disable the provider — hides from all listings but preserves data */
   async disableMyProvider(userId: string) {
     const provider = await this.providerRepo.findOneBy({ userId });
@@ -943,12 +1009,14 @@ export class ProvidersService {
     if (provider.deletedAt) throw new BadRequestException('Provider has been deleted');
 
     provider.status = 'disabled';
+    provider.disabledAt = new Date();
     await this.providerRepo.save(provider);
 
     // Switch user back to customer mode
     await this.userRepo.update(userId, { preferredMode: 'customer' } as any);
 
-    return { message: 'Provider disabled successfully', status: 'disabled' };
+    const cooldownHours = await this.getDisableCooldownHours();
+    return { message: 'Provider disabled successfully', status: 'disabled', cooldownHours };
   }
 
   /** Re-enable a disabled provider — restores to active/unverified */
@@ -958,9 +1026,24 @@ export class ProvidersService {
     if (provider.deletedAt) throw new BadRequestException('Provider has been deleted');
     if (provider.status !== 'disabled') throw new BadRequestException('Provider is not disabled');
 
+    // Enforce cooldown
+    const cooldownEnabled = await this.isCooldownEnabled();
+    if (cooldownEnabled && provider.disabledAt) {
+      const cooldownHours = await this.getDisableCooldownHours();
+      const elapsed = Date.now() - provider.disabledAt.getTime();
+      const cooldownMs = cooldownHours * 60 * 60 * 1000;
+      if (elapsed < cooldownMs) {
+        const remainingHours = Math.ceil((cooldownMs - elapsed) / (60 * 60 * 1000));
+        throw new BadRequestException(
+          `Provider cannot be re-enabled yet. Please wait ${remainingHours} more hour${remainingHours === 1 ? '' : 's'}. Cooldown period: ${cooldownHours} hours.`,
+        );
+      }
+    }
+
     // Check if they had a verified status before — restore accordingly
     const verification = await this.verRepo.findOneBy({ userId });
     provider.status = verification?.status === 'approved' ? 'active' : 'unverified';
+    provider.disabledAt = null;
     await this.providerRepo.save(provider);
 
     return { message: 'Provider enabled successfully', status: provider.status };

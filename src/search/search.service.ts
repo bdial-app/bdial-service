@@ -10,6 +10,7 @@ import { SearchLog } from '../entities/search-log.entity';
 import { ProviderAnalyticsEvent } from '../entities/provider-analytics-event.entity';
 import { SponsoredListing } from '../entities/sponsored-listing.entity';
 import { SearchSynonym } from '../entities/search-synonym.entity';
+import { CategoryPersonalizationService } from '../users/category-personalization.service';
 import { SearchQueryDto } from './dto/search-query.dto';
 import { SuggestionsQueryDto } from './dto/suggestions-query.dto';
 
@@ -112,6 +113,7 @@ export class SearchService {
     @InjectRepository(SearchSynonym) private synonymRepo: Repository<SearchSynonym>,
     private dataSource: DataSource,
     @Inject(CACHE_MANAGER) private cacheManager: Cache,
+    private readonly categoryPersonalization: CategoryPersonalizationService,
   ) {}
 
   // ────────────────────────────────────────────────────────────
@@ -231,6 +233,11 @@ export class SearchService {
 
     // Log search (fire and forget)
     this.logSearch(q, userId, totalResults, lat, lng, city).catch(() => {});
+
+    // Log category interaction for personalization (fire and forget)
+    if (userId) {
+      this.logSearchCategoryInteraction(userId, q, categoryIds).catch(() => {});
+    }
 
     // Track search appearances for analytics (fire and forget)
     const allProviderIds = [...sponsored.map(s => s.id), ...deals.map(d => d.id), ...topRated.map(t => t.id), ...providers.data.map(p => p.id)];
@@ -369,12 +376,21 @@ export class SearchService {
     const radiusParam = opts.hasGeo ? opts.radius : 25;
 
     // OPTIMIZED: Uses materialized view instead of inline CTE for reviews
-    // IMPROVED: Better relevance scoring with review_count popularity signal + distance boost
+    // IMPROVED: Better relevance scoring with review_count popularity signal + distance boost + category match
     const sql = `
       WITH cat_names AS (
         SELECT pc.provider_id, string_agg(DISTINCT c.name, ', ') AS categories
         FROM provider_categories pc JOIN categories c ON c.id = pc.category_id
         GROUP BY pc.provider_id
+      ),
+      matched_categories AS (
+        SELECT id FROM categories
+        WHERE is_active = true AND (
+          ($2 <> '' AND search_vector @@ to_tsquery('english', $2))
+          OR similarity(name, $1) > 0.3
+          OR name ILIKE '%' || $1 || '%'
+          OR $1 = ANY(keywords)
+        )
       ),
       active_offers AS (
         SELECT DISTINCT ON (po.provider_id)
@@ -418,16 +434,20 @@ export class SearchService {
           ao.discount_type,
           asp.provider_id IS NOT NULL AS is_sponsored,
           (
-            CASE WHEN $2 <> '' THEN COALESCE(ts_rank_cd(p.search_vector, to_tsquery('english', $2)), 0) * 0.25 ELSE 0 END +
-            COALESCE(similarity(p.brand_name, $1), 0) * 0.10 +
-            CASE WHEN ao.provider_id IS NOT NULL THEN 0.15 ELSE 0 END +
+            CASE WHEN $2 <> '' THEN COALESCE(ts_rank_cd(p.search_vector, to_tsquery('english', $2)), 0) * 0.22 ELSE 0 END +
+            COALESCE(similarity(p.brand_name, $1), 0) * 0.08 +
+            CASE WHEN EXISTS (
+              SELECT 1 FROM provider_categories pc2
+              WHERE pc2.provider_id = p.id AND pc2.category_id IN (SELECT id FROM matched_categories)
+            ) THEN 0.12 ELSE 0 END +
+            CASE WHEN ao.provider_id IS NOT NULL THEN 0.13 ELSE 0 END +
             CASE WHEN asp.provider_id IS NOT NULL THEN 0.08 ELSE 0 END +
-            COALESCE(rs.avg_rating / 5.0, 0) * 0.15 +
-            LEAST(COALESCE(LOG(rs.review_count + 1) / LOG(50), 0), 1.0) * 0.08 +
+            COALESCE(rs.avg_rating / 5.0, 0) * 0.13 +
+            LEAST(COALESCE(LOG(rs.review_count + 1) / LOG(50), 0), 1.0) * 0.07 +
             CASE WHEN ${distExpr} IS NOT NULL THEN (1.0 - LEAST(${distExpr} / ${radiusParam}::float, 1.0)) * 0.10 ELSE 0 END +
-            CASE WHEN p.is_featured THEN 0.05 ELSE 0 END +
+            CASE WHEN p.is_featured THEN 0.04 ELSE 0 END +
             CASE WHEN p.status = 'active' THEN 0.02 ELSE 0 END +
-            CASE WHEN p.updated_at > NOW() - INTERVAL '30 days' THEN 0.02 ELSE 0 END
+            CASE WHEN p.updated_at > NOW() - INTERVAL '30 days' THEN 0.01 ELSE 0 END
           ) AS relevance_score,
           COUNT(*) OVER() AS total_count
         FROM providers p
@@ -1631,6 +1651,30 @@ export class SearchService {
         .execute();
     } catch (err) {
       this.logger.warn('Failed to log search appearances', err);
+    }
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // CATEGORY INTERACTION LOGGING (for personalization engine)
+  // ────────────────────────────────────────────────────────────
+
+  private async logSearchCategoryInteraction(
+    userId: string,
+    query: string,
+    explicitCategoryIds?: string[],
+  ): Promise<void> {
+    try {
+      let categoryIds: string[];
+      if (explicitCategoryIds?.length) {
+        categoryIds = explicitCategoryIds;
+      } else {
+        categoryIds = await this.categoryPersonalization.resolveCategoriesForQuery(query);
+      }
+      if (categoryIds.length > 0) {
+        await this.categoryPersonalization.recordInteractionBulk(userId, categoryIds, 'search');
+      }
+    } catch (err) {
+      this.logger.warn('Failed to log category interaction', err);
     }
   }
 }

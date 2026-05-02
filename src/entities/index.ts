@@ -33,3 +33,4 @@ export { SubscriptionPlan } from './subscription-plan.entity';
 export { Subscription } from './subscription.entity';
 export { Voucher } from './voucher.entity';
 export { VoucherRedemption } from './voucher-redemption.entity';
+export { UserCategoryInteraction } from './user-category-interaction.entity';

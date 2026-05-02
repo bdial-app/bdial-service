@@ -14,6 +14,7 @@ import {
   CreateSponsorshipCheckoutDto,
   CreateLeadUnlockCheckoutDto,
   CreateSubscriptionCheckoutDto,
+  CreateDealCreationCheckoutDto,
   ValidateVoucherDto,
 } from './dto/payment.dto';
 
@@ -39,6 +40,27 @@ export class PaymentController {
   @ApiResponse({ status: 201, description: 'Lead unlocked or checkout session created' })
   createLeadUnlockCheckout(@Request() req, @Body() dto: CreateLeadUnlockCheckoutDto) {
     return this.paymentService.createLeadUnlockCheckout(req.user.id, dto);
+  }
+
+  @Get('lead-unlock/info')
+  @ApiOperation({ summary: 'Get lead unlock pricing info and remaining credits' })
+  getLeadUnlockInfo(@Request() req) {
+    return this.paymentService.getLeadUnlockInfo(req.user.id);
+  }
+
+  // ─── Deal Creation ─────────────────────
+
+  @Post('deal-creation/checkout')
+  @ApiOperation({ summary: 'Check deal creation eligibility or create Stripe Checkout for paid deal' })
+  @ApiResponse({ status: 201, description: 'Deal creation allowed or checkout session created' })
+  createDealCreationCheckout(@Request() req, @Body() dto: CreateDealCreationCheckoutDto) {
+    return this.paymentService.createDealCreationCheckout(req.user.id, dto);
+  }
+
+  @Get('deal-creation/info')
+  @ApiOperation({ summary: 'Get deal creation pricing info and remaining quotas' })
+  getDealCreationInfo(@Request() req) {
+    return this.paymentService.getDealCreationInfo(req.user.id);
   }
 
   // ─── Subscriptions ─────────────────────

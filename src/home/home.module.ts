@@ -11,7 +11,10 @@ import {
   Photo,
   ProviderOffer,
   SponsoredListing,
+  UserCategoryInteraction,
+  User,
 } from '../entities';
+import { CategoryPersonalizationService } from '../users/category-personalization.service';
 
 @Module({
   imports: [
@@ -24,10 +27,12 @@ import {
       Photo,
       ProviderOffer,
       SponsoredListing,
+      UserCategoryInteraction,
+      User,
     ]),
   ],
   controllers: [HomeController],
-  providers: [HomeService],
+  providers: [HomeService, CategoryPersonalizationService],
   exports: [HomeService],
 })
 export class HomeModule {}

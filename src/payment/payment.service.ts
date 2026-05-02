@@ -19,10 +19,12 @@ import { SubscriptionPlan } from '../entities/subscription-plan.entity';
 import { Voucher } from '../entities/voucher.entity';
 import { VoucherRedemption } from '../entities/voucher-redemption.entity';
 import { SystemSetting } from '../entities/system-setting.entity';
+import { ProviderOffer } from '../entities/provider-offer.entity';
 import {
   CreateSponsorshipCheckoutDto,
   CreateLeadUnlockCheckoutDto,
   CreateSubscriptionCheckoutDto,
+  CreateDealCreationCheckoutDto,
 } from './dto/payment.dto';
 
 @Injectable()
@@ -40,6 +42,7 @@ export class PaymentService {
     @InjectRepository(Voucher) private readonly voucherRepo: Repository<Voucher>,
     @InjectRepository(VoucherRedemption) private readonly redemptionRepo: Repository<VoucherRedemption>,
     @InjectRepository(SystemSetting) private readonly settingsRepo: Repository<SystemSetting>,
+    @InjectRepository(ProviderOffer) private readonly offerRepo: Repository<ProviderOffer>,
     private readonly config: ConfigService,
   ) {}
 
@@ -171,27 +174,75 @@ export class PaymentService {
     if (!lead) throw new NotFoundException('Lead not found');
     if (lead.isUnlocked) throw new BadRequestException('Lead already unlocked');
 
+    // Check if monetization is disabled — free unlock for all
+    const monetizationEnabled = (await this.getSetting('leads_monetization_enabled', 'false')) === 'true';
+    if (!monetizationEnabled) {
+      lead.isUnlocked = true;
+      await this.leadRepo.save(lead);
+      return { unlocked: true, method: 'free', remainingCredits: -1 };
+    }
+
     // Check subscription credits first
     const subscription = await this.subscriptionRepo.findOne({
       where: { providerId: provider.id, status: 'active' },
       relations: ['plan'],
     });
 
+    // Pro plan (unlimited leads = -1) → always free
+    if (subscription?.plan && subscription.plan.monthlyLeadUnlocks === -1) {
+      lead.isUnlocked = true;
+      await this.leadRepo.save(lead);
+      return { unlocked: true, method: 'subscription_credit', remainingCredits: -1 };
+    }
+
+    // Subscription monthly credits
     if (subscription && subscription.plan) {
       const remaining = subscription.plan.monthlyLeadUnlocks - subscription.leadUnlocksUsed;
       if (remaining > 0) {
-        // Use subscription credit — free unlock
         lead.isUnlocked = true;
         await this.leadRepo.save(lead);
         subscription.leadUnlocksUsed += 1;
         await this.subscriptionRepo.save(subscription);
-
         return { unlocked: true, method: 'subscription_credit', remainingCredits: remaining - 1 };
       }
     }
 
-    // No credits — require payment
-    const priceStr = await this.getSetting('lead_unlock_price', '49');
+    // Check free monthly quota (resets monthly)
+    const freeQuotaStr = await this.getSetting('free_lead_quota_monthly', '5');
+    const freeQuota = parseInt(freeQuotaStr, 10);
+    const now = new Date();
+
+    // Reset monthly counter if needed
+    if (provider.freeLeadsResetAt) {
+      const resetDate = new Date(provider.freeLeadsResetAt);
+      if (now.getMonth() !== resetDate.getMonth() || now.getFullYear() !== resetDate.getFullYear()) {
+        provider.freeLeadsUsedThisMonth = 0;
+        provider.freeLeadsResetAt = now;
+        await this.providerRepo.save(provider);
+      }
+    } else {
+      provider.freeLeadsResetAt = now;
+      await this.providerRepo.save(provider);
+    }
+
+    if (provider.freeLeadsUsedThisMonth < freeQuota) {
+      lead.isUnlocked = true;
+      await this.leadRepo.save(lead);
+      provider.freeLeadsUsedThisMonth += 1;
+      await this.providerRepo.save(provider);
+      return {
+        unlocked: true,
+        method: 'free_quota',
+        remainingCredits: freeQuota - provider.freeLeadsUsedThisMonth,
+      };
+    }
+
+    // Determine tier-based price
+    const tier = lead.tier || 'cold';
+    const isGrowthSubscriber = subscription?.plan?.slug === 'growth';
+    const priceKey = isGrowthSubscriber ? `lead_price_${tier}_discounted` : `lead_price_${tier}`;
+    const defaultPrices = { hot: '99', warm: '69', soft: '49', cold: '29', hot_discounted: '49', warm_discounted: '35', soft_discounted: '25', cold_discounted: '15' };
+    const priceStr = await this.getSetting(priceKey, defaultPrices[isGrowthSubscriber ? `${tier}_discounted` : tier] || '49');
     let amount = parseFloat(priceStr);
     let discountAmount = 0;
     let voucherId: string | null = null;
@@ -211,13 +262,14 @@ export class PaymentService {
       currency: 'INR',
       status: 'pending',
       type: 'lead_unlock',
-      metadata: { leadId: dto.leadId },
+      metadata: { leadId: dto.leadId, tier, discounted: isGrowthSubscriber },
       voucherId,
       discountAmount,
     });
     await this.paymentRepo.save(payment);
 
     const amountInPaise = Math.round(amount * 100);
+    const tierLabel = tier.charAt(0).toUpperCase() + tier.slice(1);
     const session = await this.stripe.checkout.sessions.create({
       customer: customerId,
       mode: 'payment',
@@ -227,8 +279,8 @@ export class PaymentService {
           price_data: {
             currency: 'inr',
             product_data: {
-              name: 'Lead Unlock',
-              description: `Reveal visitor identity — Lead #${dto.leadId.substring(0, 8)}`,
+              name: `${tierLabel} Lead Unlock`,
+              description: `Reveal visitor identity — ${tierLabel} Lead #${dto.leadId.substring(0, 8)}`,
             },
             unit_amount: amountInPaise,
           },
@@ -249,7 +301,7 @@ export class PaymentService {
       status: 'processing',
     });
 
-    return { unlocked: false, method: 'payment_required', checkoutUrl: session.url, paymentId: payment.id };
+    return { unlocked: false, method: 'payment_required', checkoutUrl: session.url, paymentId: payment.id, price: amount, tier };
   }
 
   // ──────────────────────────────────────────
@@ -733,6 +785,215 @@ export class PaymentService {
 
     // Increment usage count
     await this.voucherRepo.increment({ id: payment.voucherId }, 'usedCount', 1);
+  }
+
+  // ──────────────────────────────────────────
+  // Deal Creation Checkout
+  // ──────────────────────────────────────────
+
+  async createDealCreationCheckout(userId: string, dto: CreateDealCreationCheckoutDto) {
+    const provider = await this.providerRepo.findOneBy({ userId });
+    if (!provider) throw new NotFoundException('Provider not found');
+
+    // Check if monetization is disabled — free creation for all
+    const monetizationEnabled = (await this.getSetting('deals_monetization_enabled', 'false')) === 'true';
+    if (!monetizationEnabled) {
+      return { requiresPayment: false, method: 'free' };
+    }
+
+    // Check subscription — Pro (unlimited = -1) → always free
+    const subscription = await this.subscriptionRepo.findOne({
+      where: { providerId: provider.id, status: 'active' },
+      relations: ['plan'],
+    });
+
+    if (subscription?.plan && subscription.plan.maxTotalDeals === -1) {
+      return { requiresPayment: false, method: 'subscription_unlimited' };
+    }
+
+    // Check subscription active deal limit
+    const now = new Date();
+    const activeCount = await this.offerRepo
+      .createQueryBuilder('o')
+      .where('o.providerId = :pid', { pid: provider.id })
+      .andWhere('o.isActive = true')
+      .andWhere('o.endsAt > :now', { now })
+      .andWhere('o.startsAt <= :now', { now })
+      .getCount();
+
+    if (subscription?.plan) {
+      const maxActive = subscription.plan.maxActiveDeals;
+      if (maxActive === -1 || activeCount < maxActive) {
+        return { requiresPayment: false, method: 'subscription_credit' };
+      }
+    }
+
+    // Check free lifetime quota
+    const freeQuotaStr = await this.getSetting('free_deal_quota_lifetime', '3');
+    const freeQuota = parseInt(freeQuotaStr, 10);
+
+    if (provider.freeDealsCreated < freeQuota) {
+      return { requiresPayment: false, method: 'free_quota', freeRemaining: freeQuota - provider.freeDealsCreated };
+    }
+
+    // Determine price — Growth gets discounted rate
+    const isGrowthSubscriber = subscription?.plan?.slug === 'growth';
+    const priceKey = isGrowthSubscriber ? 'deal_creation_price_discounted' : 'deal_creation_price';
+    const defaultPrice = isGrowthSubscriber ? '79' : '149';
+    const priceStr = await this.getSetting(priceKey, defaultPrice);
+    let amount = parseFloat(priceStr);
+    let discountAmount = 0;
+    let voucherId: string | null = null;
+
+    if (dto.voucherCode) {
+      const result = await this.applyVoucher(dto.voucherCode, 'deal_creation', amount, provider.id);
+      amount = result.finalAmount;
+      discountAmount = result.discountAmount;
+      voucherId = result.voucherId;
+    }
+
+    const customerId = await this.getOrCreateStripeCustomer(provider);
+
+    const payment = this.paymentRepo.create({
+      providerId: provider.id,
+      amount,
+      currency: 'INR',
+      status: 'pending',
+      type: 'deal_creation' as any,
+      metadata: { dealData: dto.dealData },
+      voucherId,
+      discountAmount,
+    });
+    await this.paymentRepo.save(payment);
+
+    const amountInPaise = Math.round(amount * 100);
+    const session = await this.stripe.checkout.sessions.create({
+      customer: customerId,
+      mode: 'payment',
+      payment_method_types: ['card'],
+      line_items: [
+        {
+          price_data: {
+            currency: 'inr',
+            product_data: {
+              name: 'Deal Creation',
+              description: `Create a new deal/offer for your business`,
+            },
+            unit_amount: amountInPaise,
+          },
+          quantity: 1,
+        },
+      ],
+      metadata: {
+        paymentId: payment.id,
+        type: 'deal_creation',
+      },
+      success_url: `${this.getAppUrl()}/provider/deals?payment=success&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${this.getAppUrl()}/provider/deals?payment=cancelled`,
+    });
+
+    await this.paymentRepo.update(payment.id, {
+      stripeCheckoutSessionId: session.id,
+      status: 'processing',
+    });
+
+    return {
+      requiresPayment: true,
+      method: 'payment_required',
+      checkoutUrl: session.url,
+      paymentId: payment.id,
+      price: amount,
+      discounted: isGrowthSubscriber,
+    };
+  }
+
+  // ──────────────────────────────────────────
+  // Get Lead Unlock Pricing Info
+  // ──────────────────────────────────────────
+
+  async getLeadUnlockInfo(userId: string) {
+    const provider = await this.providerRepo.findOneBy({ userId });
+    if (!provider) throw new NotFoundException('Provider not found');
+
+    const monetizationEnabled = (await this.getSetting('leads_monetization_enabled', 'false')) === 'true';
+
+    // Reset monthly counter if needed
+    const now = new Date();
+    if (provider.freeLeadsResetAt) {
+      const resetDate = new Date(provider.freeLeadsResetAt);
+      if (now.getMonth() !== resetDate.getMonth() || now.getFullYear() !== resetDate.getFullYear()) {
+        provider.freeLeadsUsedThisMonth = 0;
+        provider.freeLeadsResetAt = now;
+        await this.providerRepo.save(provider);
+      }
+    }
+
+    const freeQuota = parseInt(await this.getSetting('free_lead_quota_monthly', '5'), 10);
+
+    const subscription = await this.subscriptionRepo.findOne({
+      where: { providerId: provider.id, status: 'active' },
+      relations: ['plan'],
+    });
+
+    const isProSubscriber = subscription?.plan?.monthlyLeadUnlocks === -1;
+    const isGrowthSubscriber = subscription?.plan?.slug === 'growth';
+    const subscriptionCreditsRemaining = subscription?.plan
+      ? subscription.plan.monthlyLeadUnlocks - subscription.leadUnlocksUsed
+      : 0;
+
+    return {
+      monetizationEnabled,
+      freeQuota,
+      freeUsedThisMonth: provider.freeLeadsUsedThisMonth,
+      freeRemaining: Math.max(0, freeQuota - provider.freeLeadsUsedThisMonth),
+      subscriptionCreditsRemaining: isProSubscriber ? -1 : Math.max(0, subscriptionCreditsRemaining),
+      isProSubscriber,
+      isGrowthSubscriber,
+      currentPlan: subscription?.plan?.slug || 'free',
+    };
+  }
+
+  // ──────────────────────────────────────────
+  // Get Deal Creation Info
+  // ──────────────────────────────────────────
+
+  async getDealCreationInfo(userId: string) {
+    const provider = await this.providerRepo.findOneBy({ userId });
+    if (!provider) throw new NotFoundException('Provider not found');
+
+    const monetizationEnabled = (await this.getSetting('deals_monetization_enabled', 'false')) === 'true';
+    const freeQuota = parseInt(await this.getSetting('free_deal_quota_lifetime', '3'), 10);
+
+    const subscription = await this.subscriptionRepo.findOne({
+      where: { providerId: provider.id, status: 'active' },
+      relations: ['plan'],
+    });
+
+    const isProSubscriber = subscription?.plan?.maxTotalDeals === -1;
+    const isGrowthSubscriber = subscription?.plan?.slug === 'growth';
+
+    const now = new Date();
+    const activeCount = await this.offerRepo
+      .createQueryBuilder('o')
+      .where('o.providerId = :pid', { pid: provider.id })
+      .andWhere('o.isActive = true')
+      .andWhere('o.endsAt > :now', { now })
+      .andWhere('o.startsAt <= :now', { now })
+      .getCount();
+
+    const maxActiveDeals = subscription?.plan?.maxActiveDeals ?? 3;
+
+    return {
+      monetizationEnabled,
+      freeQuotaLifetime: freeQuota,
+      freeDealsCreated: provider.freeDealsCreated,
+      freeRemaining: Math.max(0, freeQuota - provider.freeDealsCreated),
+      activeDeals: activeCount,
+      maxActiveDeals: isProSubscriber ? -1 : maxActiveDeals,
+      isProSubscriber,
+      isGrowthSubscriber,
+      currentPlan: subscription?.plan?.slug || 'free',
+    };
   }
 
   // ──────────────────────────────────────────

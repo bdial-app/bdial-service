@@ -69,12 +69,23 @@ export class ValidateVoucherDto {
   @IsNotEmpty()
   code: string;
 
-  @ApiProperty({ enum: ['sponsorship', 'lead_unlock', 'badge', 'subscription', 'deal_unlock'] })
-  @IsEnum(['sponsorship', 'lead_unlock', 'badge', 'subscription', 'deal_unlock'])
+  @ApiProperty({ enum: ['sponsorship', 'lead_unlock', 'badge', 'subscription', 'deal_unlock', 'deal_creation'] })
+  @IsEnum(['sponsorship', 'lead_unlock', 'badge', 'subscription', 'deal_unlock', 'deal_creation'])
   purchaseType: string;
 
   @ApiProperty()
   @IsNumber()
   @Min(0)
   amount: number;
+}
+
+export class CreateDealCreationCheckoutDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  voucherCode?: string;
+
+  @ApiPropertyOptional({ description: 'Deal data to create after payment succeeds' })
+  @IsOptional()
+  dealData?: Record<string, any>;
 }

@@ -11,7 +11,7 @@ import {
 import { Provider } from './provider.entity';
 
 export type PaymentStatus = 'pending' | 'processing' | 'succeeded' | 'failed' | 'refunded';
-export type PaymentType = 'sponsorship' | 'lead_unlock' | 'badge' | 'subscription' | 'deal_unlock';
+export type PaymentType = 'sponsorship' | 'lead_unlock' | 'badge' | 'subscription' | 'deal_unlock' | 'deal_creation';
 
 @Entity('payments')
 @Index(['providerId', 'status'])
@@ -45,7 +45,7 @@ export class Payment {
 
   @Column({
     type: 'enum',
-    enum: ['sponsorship', 'lead_unlock', 'badge', 'subscription', 'deal_unlock'],
+    enum: ['sponsorship', 'lead_unlock', 'badge', 'subscription', 'deal_unlock', 'deal_creation'],
   })
   type: PaymentType;
 
