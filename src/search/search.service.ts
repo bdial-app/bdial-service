@@ -339,7 +339,7 @@ export class SearchService {
     }
 
     if (opts.womenLedOnly) {
-      conditions.push(`p.is_women_led = true`);
+      conditions.push(`p.women_led_status = 'approved'`);
     }
 
     // When filtering by category, don't require text match
@@ -422,6 +422,7 @@ export class SearchService {
           p.area,
           p.status,
           p.is_women_led,
+          p.women_led_status,
           p.is_featured,
           p.created_at,
           ${distExpr} AS distance,
@@ -447,7 +448,8 @@ export class SearchService {
             CASE WHEN ${distExpr} IS NOT NULL THEN (1.0 - LEAST(${distExpr} / ${radiusParam}::float, 1.0)) * 0.10 ELSE 0 END +
             CASE WHEN p.is_featured THEN 0.04 ELSE 0 END +
             CASE WHEN p.status = 'active' THEN 0.02 ELSE 0 END +
-            CASE WHEN p.updated_at > NOW() - INTERVAL '30 days' THEN 0.01 ELSE 0 END
+            CASE WHEN p.updated_at > NOW() - INTERVAL '30 days' THEN 0.01 ELSE 0 END +
+            CASE WHEN p.women_led_status = 'approved' THEN 0.05 ELSE 0 END
           ) AS relevance_score,
           COUNT(*) OVER() AS total_count
         FROM providers p
@@ -480,7 +482,7 @@ export class SearchService {
           city: r.city,
           area: r.area,
           status: r.status,
-          isWomenLed: r.is_women_led,
+          isWomenLed: r.women_led_status === 'approved',
           isFeatured: r.is_featured,
           distance: r.distance != null ? parseFloat(parseFloat(r.distance).toFixed(2)) : null,
           avgRating: r.avg_rating != null ? parseFloat(parseFloat(r.avg_rating).toFixed(1)) : null,

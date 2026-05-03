@@ -132,11 +132,13 @@ export class ProvidersService {
 
     return this.dataSource.transaction(async (manager) => {
       const { latitude, longitude, file: _file, bannerImage: _bi, profileImage: _pi, bannerImageUrl: _biu, profilePhotoUrl: _ppu, ...cleanData } = providerData as any;
+      const declaredWomenLed = providerData.isWomenLed != null ? providerData.isWomenLed : user.gender === 'female';
       const provider = manager.create(Provider, {
         ...cleanData,
         userId,
         status: 'unverified',
-        isWomenLed: providerData.isWomenLed != null ? providerData.isWomenLed : user.gender === 'female',
+        isWomenLed: declaredWomenLed,
+        womenLedStatus: declaredWomenLed ? 'pending' : 'none',
         latitude: latitude ? parseFloat(latitude) : null,
         longitude: longitude ? parseFloat(longitude) : null,
         bannerImageUrl: bannerUpload?.url || (providerData as any).bannerImageUrl || null,
@@ -514,7 +516,7 @@ export class ProvidersService {
       qb.andWhere(`${avgRatingSub} >= :minRating`, { minRating });
     }
     if (womenLedOnly) {
-      qb.andWhere('provider.isWomenLed = true');
+      qb.andWhere("provider.womenLedStatus = 'approved'");
     }
 
     // Sort - verified (active) providers always rank above unverified
@@ -590,6 +592,135 @@ export class ProvidersService {
     return {
       data,
       meta: { total, page, limit, totalPages: Math.ceil(total / limit), radius },
+    };
+  }
+
+  /**
+   * Women-Led Hub — paginated list of approved women-led providers with aggregate stats.
+   */
+  async getWomenLedHub(opts: {
+    page?: number;
+    limit?: number;
+    city?: string;
+    categoryIds?: string[];
+    sortBy?: 'rating' | 'newest' | 'reviews';
+    minRating?: number;
+    lat?: number;
+    lng?: number;
+  }) {
+    const { page = 1, limit = 12, city, categoryIds, sortBy = 'rating', minRating, lat, lng } = opts;
+    const offset = (page - 1) * limit;
+    const hasGeo = lat != null && lng != null;
+
+    const avgRatingSub = `(SELECT AVG(r.star_rating) FROM reviews r WHERE r.provider_id = p.id AND r.status = 'active')`;
+    const reviewCountSub = `(SELECT COUNT(r.id)::int FROM reviews r WHERE r.provider_id = p.id AND r.status = 'active')`;
+
+    const qb = this.providerRepo
+      .createQueryBuilder('p')
+      .select([
+        'p.id AS id',
+        'p.brand_name AS name',
+        'p.profile_photo_url AS image',
+        'p.banner_image_url AS "bannerImage"',
+        'p.description AS description',
+        'p.city AS city',
+        'p.area AS area',
+        'p.status AS status',
+        'p.is_featured AS "isFeatured"',
+        'p.is_available AS "isAvailable"',
+        'p.created_at AS "createdAt"',
+      ])
+      .addSelect(avgRatingSub, 'rating')
+      .addSelect(reviewCountSub, 'reviewCount')
+      .addSelect(
+        `(SELECT string_agg(DISTINCT c.name, ', ' ORDER BY c.name) FROM provider_categories pc JOIN categories c ON c.id = pc.category_id WHERE pc.provider_id = p.id)`,
+        'services',
+      )
+      .addSelect(
+        `(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`,
+        'listingPhoto',
+      )
+      .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
+      .andWhere("p.women_led_status = 'approved'");
+
+    if (city) qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
+    if (categoryIds?.length) {
+      qb.andWhere(
+        `p.id IN (SELECT pc.provider_id FROM provider_categories pc WHERE pc.category_id IN (:...categoryIds))`,
+        { categoryIds },
+      );
+    }
+    if (minRating != null && minRating > 0) {
+      qb.andWhere(`${avgRatingSub} >= :minRating`, { minRating });
+    }
+
+    if (hasGeo) {
+      const haversine = `6371 * acos(LEAST(1.0, cos(radians(:lat)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians(:lng)) + sin(radians(:lat)) * sin(radians(p.latitude))))`;
+      qb.addSelect(haversine, 'distance')
+        .setParameters({ lat, lng });
+    }
+
+    if (sortBy === 'newest') {
+      qb.orderBy('p.created_at', 'DESC');
+    } else if (sortBy === 'reviews') {
+      qb.orderBy(reviewCountSub, 'DESC').addOrderBy(avgRatingSub, 'DESC');
+    } else {
+      qb.orderBy(avgRatingSub, 'DESC', 'NULLS LAST').addOrderBy('p.created_at', 'DESC');
+    }
+
+    const totalQb = qb.clone();
+    qb.offset(offset).limit(limit);
+
+    const [raw, total] = await Promise.all([
+      qb.getRawMany(),
+      totalQb.getCount(),
+    ]);
+
+    // Aggregate stats — scoped to same filters (city/category) for accuracy
+    let statsWhere = `p.women_led_status = 'approved' AND p.status IN ('active', 'unverified')`;
+    const statsParams: any[] = [];
+    if (city) {
+      statsParams.push(`%${city}%`);
+      statsWhere += ` AND p.city ILIKE $${statsParams.length}`;
+    }
+    if (categoryIds?.length) {
+      statsParams.push(categoryIds);
+      statsWhere += ` AND p.id IN (SELECT pc2.provider_id FROM provider_categories pc2 WHERE pc2.category_id = ANY($${statsParams.length}))`;
+    }
+
+    const statsResult = await this.providerRepo.query(`
+      SELECT
+        COUNT(DISTINCT p.id)::int AS total,
+        COUNT(DISTINCT pc.category_id)::int AS "categoriesCovered",
+        COALESCE(AVG(rs.avg_rating)::numeric(2,1), 0) AS "avgRating"
+      FROM providers p
+      LEFT JOIN provider_rating_stats rs ON rs.provider_id = p.id
+      LEFT JOIN provider_categories pc ON pc.provider_id = p.id
+      WHERE ${statsWhere}
+    `, statsParams);
+
+    const providers = raw.map((r: any) => ({
+      id: r.id,
+      name: r.name,
+      image: r.bannerImage || r.image || r.listingPhoto,
+      description: r.description,
+      city: r.city,
+      area: r.area,
+      location: [r.area, r.city].filter(Boolean).join(', '),
+      rating: parseFloat(r.rating) || 0,
+      reviewCount: parseInt(r.reviewCount, 10) || 0,
+      services: r.services || null,
+      verified: r.status === 'active',
+      isFeatured: r.isFeatured,
+      isAvailable: r.isAvailable,
+      isWomenLed: true,
+      distance: r.distance ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
+    }));
+
+    return {
+      providers,
+      stats: statsResult[0] || { total: 0, categoriesCovered: 0, avgRating: 0 },
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
 

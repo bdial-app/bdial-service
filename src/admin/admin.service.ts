@@ -83,6 +83,42 @@ export class AdminService {
       this.offerRepo.count({ where: { approvalStatus: 'pending_approval' } }),
     ]);
 
+    // Extended stats via raw queries
+    const [
+      revenueStats, leadBreakdown, adStats, womenLedPending,
+      topCities, activeSubscriptions, totalMessages,
+    ] = await Promise.all([
+      this.dataSource.query(`
+        SELECT COALESCE(SUM(amount)::int, 0) AS "totalRevenue",
+               COALESCE(SUM(CASE WHEN created_at >= $1 THEN amount ELSE 0 END)::int, 0) AS "revenueThisMonth",
+               COUNT(*)::int AS "totalPayments"
+        FROM payments WHERE status = 'succeeded'
+      `, [oneMonthAgo]).then(r => r[0] || { totalRevenue: 0, revenueThisMonth: 0, totalPayments: 0 }),
+      this.dataSource.query(`
+        SELECT tier, COUNT(*)::int AS count FROM provider_leads GROUP BY tier
+      `).then(rows => {
+        const map: Record<string, number> = {};
+        for (const r of rows) map[r.tier] = r.count;
+        return { hot: map['hot'] || 0, warm: map['warm'] || 0, cold: map['cold'] || 0 };
+      }),
+      this.dataSource.query(`
+        SELECT
+          COALESCE(SUM(CASE WHEN event_type = 'impression' THEN 1 ELSE 0 END)::int, 0) AS impressions,
+          COALESCE(SUM(CASE WHEN event_type = 'click' THEN 1 ELSE 0 END)::int, 0) AS clicks
+        FROM ad_events
+      `).then(r => r[0] || { impressions: 0, clicks: 0 }),
+      this.providerRepo.count({ where: { womenLedStatus: 'pending' as any } }),
+      this.dataSource.query(`
+        SELECT city, COUNT(*)::int AS count FROM providers
+        WHERE city IS NOT NULL AND status IN ('active','unverified')
+        GROUP BY city ORDER BY count DESC LIMIT 8
+      `),
+      this.dataSource.query(`
+        SELECT COUNT(*)::int AS count FROM subscriptions WHERE status = 'active'
+      `).then(r => r[0]?.count || 0),
+      this.messageRepo.count(),
+    ]);
+
     return {
       pendingProviders, totalProviders, totalUsers, pendingVerifications,
       flaggedReviews, openReports, totalProducts, totalReviews,
@@ -90,6 +126,18 @@ export class AdminService {
       totalSearches, totalLeads, totalConversations, totalInvites,
       activeOffers, activeSponsorships, activeBanners,
       pendingSponsorships, pendingOffers,
+      // Extended
+      totalRevenue: revenueStats.totalRevenue,
+      revenueThisMonth: revenueStats.revenueThisMonth,
+      totalPayments: revenueStats.totalPayments,
+      activeSubscriptions,
+      leadBreakdown,
+      adImpressions: adStats.impressions,
+      adClicks: adStats.clicks,
+      adCtr: adStats.impressions > 0 ? Math.round((adStats.clicks / adStats.impressions) * 10000) / 100 : 0,
+      womenLedPending,
+      topCities,
+      totalMessages,
     };
   }
 
@@ -723,6 +771,8 @@ export class AdminService {
     if (city) qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
     if (isFeatured === 'true') qb.andWhere('p.is_featured = true');
     if (isWomenLed === 'true') qb.andWhere('p.is_women_led = true');
+    if (isWomenLed === 'pending') qb.andWhere("p.women_led_status = 'pending'");
+    if (isWomenLed === 'approved') qb.andWhere("p.women_led_status = 'approved'");
 
     qb.orderBy('p.createdAt', 'DESC').skip(skip).take(pageSize);
 
@@ -1516,6 +1566,24 @@ export class AdminService {
       .orderBy('date', 'ASC')
       .getRawMany();
 
+    const leadVolume = await this.leadRepo
+      .createQueryBuilder('l')
+      .select("DATE_TRUNC('day', l.created_at)", 'date')
+      .addSelect('COUNT(*)', 'count')
+      .where('l.created_at >= :startDate', { startDate })
+      .groupBy("DATE_TRUNC('day', l.created_at)")
+      .orderBy('date', 'ASC')
+      .getRawMany();
+
+    const conversationVolume = await this.conversationRepo
+      .createQueryBuilder('c')
+      .select("DATE_TRUNC('day', c.created_at)", 'date')
+      .addSelect('COUNT(*)', 'count')
+      .where('c.created_at >= :startDate', { startDate })
+      .groupBy("DATE_TRUNC('day', c.created_at)")
+      .orderBy('date', 'ASC')
+      .getRawMany();
+
     const fmt = (rows: any[]) => rows.map(r => ({ date: r.date, count: Number(r.count) }));
 
     return {
@@ -1523,6 +1591,8 @@ export class AdminService {
       providerGrowth: fmt(providerGrowth),
       searchVolume: fmt(searchVolume),
       reportVolume: fmt(reportVolume),
+      leadVolume: fmt(leadVolume),
+      conversationVolume: fmt(conversationVolume),
     };
   }
 
@@ -2048,6 +2118,7 @@ export class AdminService {
         openTime: dto.openTime || null,
         closeTime: dto.closeTime || null,
         isWomenLed: dto.isWomenLed ?? (dto.userGender === 'female'),
+        womenLedStatus: (dto.isWomenLed ?? (dto.userGender === 'female')) ? 'approved' : 'none',
         status: (dto.providerStatus as any) || 'active',
       });
       const savedProvider = await manager.save(Provider, provider);
@@ -2236,6 +2307,119 @@ export class AdminService {
     await this.createAuditLog(admin.id, 'toggle_featured', 'provider', providerId, { isFeatured: provider.isFeatured }, { isFeatured });
 
     return { ...provider, isFeatured };
+  }
+
+  // ============================================
+  // Women-Led Business Approval
+  // ============================================
+
+  async getWomenLedPending(admin: any, page?: number, limit?: number) {
+    this.assertAdmin(admin);
+    const currentPage = Math.max(1, page || 1);
+    const pageSize = Math.min(50, Math.max(1, limit || 10));
+    const skip = (currentPage - 1) * pageSize;
+
+    const qb = this.providerRepo.createQueryBuilder('p')
+      .leftJoinAndSelect('p.user', 'user')
+      .where("p.women_led_status = 'pending'")
+      .orderBy('p.createdAt', 'ASC')
+      .skip(skip)
+      .take(pageSize);
+
+    const [items, total] = await qb.getManyAndCount();
+    return {
+      items: items.map((p) => ({
+        id: p.id,
+        brandName: p.brandName,
+        city: p.city,
+        area: p.area,
+        status: p.status,
+        womenLedStatus: p.womenLedStatus,
+        createdAt: p.createdAt,
+        user: p.user ? { id: p.user.id, name: (p.user as any).name, gender: (p.user as any).gender } : null,
+      })),
+      meta: { total, page: currentPage, limit: pageSize, totalPages: Math.ceil(total / pageSize) },
+    };
+  }
+
+  async reviewWomenLedStatus(admin: any, providerId: string, decision: 'approved' | 'rejected') {
+    this.assertAdmin(admin);
+    const provider = await this.providerRepo.findOneBy({ id: providerId });
+    if (!provider) throw new NotFoundException('Provider not found');
+
+    const oldStatus = provider.womenLedStatus;
+
+    await this.providerRepo.update(providerId, {
+      womenLedStatus: decision,
+      isWomenLed: decision === 'approved',
+      womenLedReviewedAt: new Date(),
+      womenLedReviewedBy: admin.id,
+    });
+
+    await this.createAuditLog(
+      admin.id,
+      `women_led_${decision}`,
+      'provider',
+      providerId,
+      { womenLedStatus: oldStatus },
+      { womenLedStatus: decision },
+    );
+
+    return { id: providerId, womenLedStatus: decision, isWomenLed: decision === 'approved' };
+  }
+
+  async getWomenLedAnalytics(admin: any) {
+    this.assertAdmin(admin);
+
+    const [totalApproved, totalPending, totalRejected] = await Promise.all([
+      this.providerRepo.count({ where: { womenLedStatus: 'approved' as any } }),
+      this.providerRepo.count({ where: { womenLedStatus: 'pending' as any } }),
+      this.providerRepo.count({ where: { womenLedStatus: 'rejected' as any } }),
+    ]);
+
+    const totalProviders = await this.providerRepo.count();
+
+    // Category distribution of approved women-led providers
+    const categoryDistribution = await this.providerRepo.query(`
+      SELECT c.name, COUNT(DISTINCT p.id)::int AS count
+      FROM providers p
+      JOIN provider_categories pc ON pc.provider_id = p.id
+      JOIN categories c ON c.id = pc.category_id
+      WHERE p.women_led_status = 'approved'
+      GROUP BY c.name
+      ORDER BY count DESC
+      LIMIT 10
+    `);
+
+    // Avg rating comparison
+    const ratingComparison = await this.providerRepo.query(`
+      SELECT
+        COALESCE(AVG(CASE WHEN p.women_led_status = 'approved' THEN rs.avg_rating END)::numeric(2,1), 0) AS "womenLedAvgRating",
+        COALESCE(AVG(CASE WHEN p.women_led_status != 'approved' THEN rs.avg_rating END)::numeric(2,1), 0) AS "platformAvgRating"
+      FROM providers p
+      LEFT JOIN provider_rating_stats rs ON rs.provider_id = p.id
+      WHERE p.status IN ('active', 'unverified')
+    `);
+
+    // Growth this month
+    const startOfMonth = new Date();
+    startOfMonth.setDate(1);
+    startOfMonth.setHours(0, 0, 0, 0);
+    const newThisMonth = await this.providerRepo.createQueryBuilder('p')
+      .where("p.women_led_status = 'approved'")
+      .andWhere('p.women_led_reviewed_at >= :startOfMonth', { startOfMonth })
+      .getCount();
+
+    return {
+      totalApproved,
+      totalPending,
+      totalRejected,
+      totalProviders,
+      percentageOfPlatform: totalProviders > 0 ? parseFloat(((totalApproved / totalProviders) * 100).toFixed(1)) : 0,
+      newApprovedThisMonth: newThisMonth,
+      categoryDistribution,
+      ratingComparison: ratingComparison[0] || { womenLedAvgRating: 0, platformAvgRating: 0 },
+    };
   }
 
   // ============================================

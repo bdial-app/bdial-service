@@ -74,6 +74,15 @@ export class Provider {
   @Column({ name: 'is_women_led', type: 'boolean', default: false })
   isWomenLed: boolean;
 
+  @Column({ name: 'women_led_status', type: 'varchar', length: 20, default: 'none' })
+  womenLedStatus: 'none' | 'pending' | 'approved' | 'rejected';
+
+  @Column({ name: 'women_led_reviewed_at', type: 'timestamptz', nullable: true })
+  womenLedReviewedAt: Date | null;
+
+  @Column({ name: 'women_led_reviewed_by', type: 'uuid', nullable: true })
+  womenLedReviewedBy: string | null;
+
   @Column({ name: 'community_verified', type: 'boolean', default: false })
   communityVerified: boolean;
 

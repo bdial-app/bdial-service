@@ -122,6 +122,39 @@ export class ProvidersController {
     return this.providersService.findNearby(dto);
   }
 
+  @Get('women-led')
+  @Public()
+  @ApiOperation({ summary: 'Get approved women-led providers with stats (Women-Led Hub)' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'city', required: false, type: String })
+  @ApiQuery({ name: 'categoryIds', required: false, type: String, description: 'Comma-separated category IDs' })
+  @ApiQuery({ name: 'sortBy', required: false, type: String, enum: ['rating', 'newest', 'reviews'] })
+  @ApiQuery({ name: 'minRating', required: false, type: Number })
+  @ApiQuery({ name: 'lat', required: false, type: Number })
+  @ApiQuery({ name: 'lng', required: false, type: Number })
+  getWomenLedProviders(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('city') city?: string,
+    @Query('categoryIds') categoryIds?: string,
+    @Query('sortBy') sortBy?: string,
+    @Query('minRating') minRating?: string,
+    @Query('lat') lat?: string,
+    @Query('lng') lng?: string,
+  ) {
+    return this.providersService.getWomenLedHub({
+      page: page ? parseInt(page, 10) : 1,
+      limit: limit ? parseInt(limit, 10) : 12,
+      city,
+      categoryIds: categoryIds ? categoryIds.split(',') : undefined,
+      sortBy: sortBy as any,
+      minRating: minRating ? parseFloat(minRating) : undefined,
+      lat: lat ? parseFloat(lat) : undefined,
+      lng: lng ? parseFloat(lng) : undefined,
+    });
+  }
+
   @Get('featured')
   @Public()
   @ApiOperation({ summary: 'Get featured/top providers near a location (Flow 1-b)' })

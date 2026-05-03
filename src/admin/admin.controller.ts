@@ -922,6 +922,42 @@ export class AdminController {
   }
 
   // ============================================
+  // Women-Led Business Approval
+  // ============================================
+
+  @Get('providers/women-led/pending')
+  @ApiOperation({ summary: 'Get providers with pending women-led approval' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  getWomenLedPending(
+    @Request() req,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.adminService.getWomenLedPending(req.user, page, limit);
+  }
+
+  @Patch('providers/:id/women-led/approve')
+  @ApiOperation({ summary: 'Approve women-led status for a provider' })
+  @ApiParam({ name: 'id', description: 'Provider ID' })
+  approveWomenLed(@Param('id') id: string, @Request() req) {
+    return this.adminService.reviewWomenLedStatus(req.user, id, 'approved');
+  }
+
+  @Patch('providers/:id/women-led/reject')
+  @ApiOperation({ summary: 'Reject women-led status for a provider' })
+  @ApiParam({ name: 'id', description: 'Provider ID' })
+  rejectWomenLed(@Param('id') id: string, @Request() req) {
+    return this.adminService.reviewWomenLedStatus(req.user, id, 'rejected');
+  }
+
+  @Get('analytics/women-led')
+  @ApiOperation({ summary: 'Get women-led business analytics and stats' })
+  getWomenLedAnalytics(@Request() req) {
+    return this.adminService.getWomenLedAnalytics(req.user);
+  }
+
+  // ============================================
   // User Lifecycle (Unsuspend / Delete)
   // ============================================
 

@@ -208,7 +208,10 @@ export class PaymentService {
     }
 
     // Check free monthly quota (resets monthly)
-    const freeQuotaStr = await this.getSetting('free_lead_quota_monthly', '5');
+    const isWomenLedApproved = provider.womenLedStatus === 'approved';
+    const freeQuotaKey = isWomenLedApproved ? 'women_led_free_leads_per_month' : 'free_lead_quota_monthly';
+    const freeQuotaDefault = isWomenLedApproved ? '8' : '5';
+    const freeQuotaStr = await this.getSetting(freeQuotaKey, freeQuotaDefault);
     const freeQuota = parseInt(freeQuotaStr, 10);
     const now = new Date();
 
@@ -829,7 +832,10 @@ export class PaymentService {
     }
 
     // Check free lifetime quota
-    const freeQuotaStr = await this.getSetting('free_deal_quota_lifetime', '3');
+    const isWomenLedApprovedDeal = provider.womenLedStatus === 'approved';
+    const dealQuotaKey = isWomenLedApprovedDeal ? 'women_led_free_deals_lifetime' : 'free_deal_quota_lifetime';
+    const dealQuotaDefault = isWomenLedApprovedDeal ? '5' : '3';
+    const freeQuotaStr = await this.getSetting(dealQuotaKey, dealQuotaDefault);
     const freeQuota = parseInt(freeQuotaStr, 10);
 
     if (provider.freeDealsCreated < freeQuota) {

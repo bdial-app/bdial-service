@@ -108,6 +108,7 @@ export class HomeService {
       cityProviders,
       newArrivals,
       dealsAroundYou,
+      womenLedProviders,
     ] = await Promise.all([
       this.getNearbyProviders(lat, lng, city, 10),
       this.getRandomFeaturedCategory(lat, lng, city, 6),
@@ -115,6 +116,7 @@ export class HomeService {
       this.getCityProviders(city, lat, lng, 6),
       this.getNewArrivals(lat, lng, city, 6),
       this.getDealsAroundYou(lat, lng, city, 8, sponsoredIds),
+      this.getWomenLedProviders(lat, lng, city, 8),
     ]);
 
     // Phase 3: Personalization (if user is logged in)
@@ -169,6 +171,7 @@ export class HomeService {
       newArrivals: filterSponsored(newArrivals),
       dealsAroundYou,
       sponsoredProviders,
+      womenLedProviders: filterSponsored(womenLedProviders),
       searchPrompts,
     };
   }
@@ -699,6 +702,82 @@ export class HomeService {
       offerEndsAt: r.offerEndsAt,
       hasActiveOffer: true,
       totalOffers: parseInt(r.totalOffers, 10) || 1,
+    }));
+  }
+
+  /**
+   * Women-Led businesses section.
+   * Shows providers with approved women-led status, sorted by rating then newest.
+   * Only shows if there are approved women-led providers available.
+   */
+  private async getWomenLedProviders(
+    lat?: number,
+    lng?: number,
+    city?: string,
+    limit = 8,
+  ) {
+    const hasLocation = lat != null && lng != null;
+
+    const qb = this.providerRepo
+      .createQueryBuilder('p')
+      .select([
+        'p.id AS id',
+        'p.brand_name AS name',
+        'p.profile_photo_url AS image',
+        'p.banner_image_url AS "bannerImage"',
+        'p.description AS description',
+        'p.city AS city',
+        'p.area AS area',
+        'p.status AS status',
+        'p.is_featured AS "isFeatured"',
+        'p.is_available AS "isAvailable"',
+        'p.latitude AS latitude',
+        'p.longitude AS longitude',
+      ])
+      .addSelect(
+        `(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`,
+        'listingPhoto',
+      )
+      .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
+      .andWhere("p.women_led_status = 'approved'");
+
+    this.withReviewStats(qb);
+    this.withCategoryServices(qb);
+
+    if (hasLocation) {
+      this.withGeo(qb, lat!, lng!, 25);
+      qb.orderBy('COALESCE(rs.avg_rating, 0)', 'DESC')
+        .addOrderBy('distance', 'ASC')
+        .addOrderBy('p.created_at', 'DESC');
+    } else if (city) {
+      qb.andWhere('p.city ILIKE :city', { city: `%${city}%` })
+        .orderBy('COALESCE(rs.avg_rating, 0)', 'DESC')
+        .addOrderBy('p.created_at', 'DESC');
+    } else {
+      qb.orderBy('COALESCE(rs.avg_rating, 0)', 'DESC')
+        .addOrderBy('p.created_at', 'DESC');
+    }
+
+    qb.limit(limit);
+
+    const raw = await qb.getRawMany();
+
+    return raw.map((r) => ({
+      id: r.id,
+      name: r.name,
+      image: r.bannerImage || r.image || r.listingPhoto,
+      description: r.description,
+      city: r.city,
+      area: r.area,
+      location: [r.area, r.city].filter(Boolean).join(', '),
+      rating: parseFloat(r.rating) || 0,
+      reviewCount: parseInt(r.reviewCount, 10) || 0,
+      services: r.services || null,
+      verified: r.status === 'active',
+      isFeatured: r.isFeatured,
+      isAvailable: r.isAvailable,
+      isWomenLed: true,
+      distance: r.distance ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
     }));
   }
 
