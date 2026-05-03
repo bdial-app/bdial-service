@@ -20,6 +20,7 @@ import { CreateOfferDto } from './dto/create-offer.dto';
 import { UpdateOfferDto } from './dto/update-offer.dto';
 import { CreateSponsorshipDto, UpdateSponsorshipDto } from './dto/sponsorship.dto';
 import { ContentSanitizerService } from '../common/content-sanitizer';
+import { compressImage, compressImages } from '../common/image-processor';
 
 @Injectable()
 export class ProvidersService {
@@ -101,16 +102,18 @@ export class ProvidersService {
     // Content moderation: check brand name and description
     this.checkProviderContent(providerData.brandName, providerData.description);
 
-    // Upload files in parallel (outside transaction)
+    // Upload files in parallel (outside transaction) — compress images before storage
     const [aadhaarUpload, bannerUpload, profileUpload] = await Promise.all([
       file ? this.storage.upload('verifications', file) : Promise.resolve(null),
-      bannerImage ? this.storage.upload('providers', bannerImage) : Promise.resolve(null),
-      profileImage ? this.storage.upload('providers', profileImage) : Promise.resolve(null),
+      bannerImage ? compressImage(bannerImage, 'banner').then((c) => this.storage.upload('providers', c)) : Promise.resolve(null),
+      profileImage ? compressImage(profileImage, 'avatar').then((c) => this.storage.upload('providers', c)) : Promise.resolve(null),
     ]);
 
-    // Upload product images in parallel
+    // Upload product images in parallel — compress to standard preset
     const productImageUploads = productImages?.length
-      ? await Promise.all(productImages.map((img) => this.storage.upload('products', img)))
+      ? await compressImages(productImages, 'full').then((compressed) =>
+          Promise.all(compressed.map((img) => this.storage.upload('products', img)))
+        )
       : [];
 
     // Parse products JSON (each product may have imageCount for multi-image)

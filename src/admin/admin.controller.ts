@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards, Request, Query, UseInterceptors, UploadedFile, UploadedFiles } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards, Request, Query, UseInterceptors, UploadedFile, UploadedFiles, ParseFilePipe, MaxFileSizeValidator, FileTypeValidator } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiBody, ApiQuery, ApiParam, ApiConsumes } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
@@ -321,10 +321,10 @@ export class AdminController {
   }
 
   @Post('products/:id/images')
-  @ApiOperation({ summary: 'Upload images for a product (max 5 files, 5MB each)' })
+  @ApiOperation({ summary: 'Upload images for a product (max 5 files, 10MB each)' })
   @ApiParam({ name: 'id', description: 'Product ID' })
   @ApiConsumes('multipart/form-data')
-  @UseInterceptors(FilesInterceptor('images', 5, { storage: memoryStorage() }))
+  @UseInterceptors(FilesInterceptor('images', 5, { storage: memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }))
   uploadProductImages(
     @Param('id') id: string,
     @Request() req,

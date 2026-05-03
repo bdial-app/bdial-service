@@ -19,6 +19,7 @@ import { SupabaseRealtimeService } from '../supabase/supabase-realtime.service';
 import { StorageService } from '../storage/storage.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { ContentSanitizerService } from '../common/content-sanitizer';
+import { compressImage } from '../common/image-processor';
 import {
   CreateConversationDto,
   GetConversationsQueryDto,
@@ -646,7 +647,12 @@ export class ChatService {
       throw new BadRequestException('File size exceeds 5MB limit');
     }
 
-    const { url, storageKey } = await this.storage.upload('chat-media', file);
+    // Compress images before upload (skip PDFs and GIFs)
+    const processedFile = file.mimetype.startsWith('image/')
+      ? await compressImage(file, 'standard')
+      : file;
+
+    const { url, storageKey } = await this.storage.upload('chat-media', processedFile);
 
     return { url, storageKey };
   }

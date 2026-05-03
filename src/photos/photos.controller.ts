@@ -53,7 +53,7 @@ export class PhotosController {
     @UploadedFiles(
       new ParseFilePipe({
         validators: [
-          new MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 }), // 5 MB
+          new MaxFileSizeValidator({ maxSize: 10 * 1024 * 1024 }), // 10 MB — we compress server-side
           new FileTypeValidator({ fileType: /^image\/(jpeg|jpg|png|webp)$/ }),
         ],
       }),
@@ -105,7 +105,7 @@ export class PhotosController {
     @UploadedFile(
       new ParseFilePipe({
         validators: [
-          new MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 }),
+          new MaxFileSizeValidator({ maxSize: 10 * 1024 * 1024 }), // 10 MB — compressed server-side
           new FileTypeValidator({ fileType: /^image\/(jpeg|jpg|png|webp)$/ }),
         ],
       }),
@@ -135,7 +135,7 @@ export class PhotosController {
     @UploadedFiles(
       new ParseFilePipe({
         validators: [
-          new MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 }),
+          new MaxFileSizeValidator({ maxSize: 10 * 1024 * 1024 }), // 10 MB — compressed server-side
           new FileTypeValidator({ fileType: /^image\/(jpeg|jpg|png|webp)$/ }),
         ],
       }),

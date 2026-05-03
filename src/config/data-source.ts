@@ -33,6 +33,7 @@ import { DeviceToken } from '../entities/device-token.entity';
 import { Notification } from '../entities/notification.entity';
 import { NotificationPreference } from '../entities/notification-preference.entity';
 import { NotificationBatch } from '../entities/notification-batch.entity';
+import { NotificationTemplate } from '../entities/notification-template.entity';
 import { BugReport } from '../bug-reports/bug-report.entity';
 import { Payment } from '../entities/payment.entity';
 import { SubscriptionPlan } from '../entities/subscription-plan.entity';
@@ -75,6 +76,7 @@ export const ALL_ENTITIES = [
   Notification,
   NotificationPreference,
   NotificationBatch,
+  NotificationTemplate,
   BugReport,
   Payment,
   SubscriptionPlan,

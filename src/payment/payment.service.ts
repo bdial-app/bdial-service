@@ -20,6 +20,7 @@ import { Voucher } from '../entities/voucher.entity';
 import { VoucherRedemption } from '../entities/voucher-redemption.entity';
 import { SystemSetting } from '../entities/system-setting.entity';
 import { ProviderOffer } from '../entities/provider-offer.entity';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import {
   CreateSponsorshipCheckoutDto,
   CreateLeadUnlockCheckoutDto,
@@ -44,6 +45,7 @@ export class PaymentService {
     @InjectRepository(SystemSetting) private readonly settingsRepo: Repository<SystemSetting>,
     @InjectRepository(ProviderOffer) private readonly offerRepo: Repository<ProviderOffer>,
     private readonly config: ConfigService,
+    private readonly notificationDispatch: NotificationDispatchService,
   ) {}
 
   // ──────────────────────────────────────────
@@ -561,6 +563,15 @@ export class PaymentService {
     }
 
     this.logger.log(`Sponsorship payment fulfilled: ${paymentId}`);
+
+    // Notify provider: payment success + sponsorship approved
+    const provider = await this.providerRepo.findOneBy({ id: payment.providerId });
+    if (provider) {
+      this.notificationDispatch.sendTemplated(provider.userId, 'payment_success', {
+        amount: `₹${payment.amount}`,
+        description: 'Sponsorship',
+      }).catch(() => {});
+    }
   }
 
   private async fulfillLeadUnlockPayment(session: any) {
@@ -584,6 +595,14 @@ export class PaymentService {
     }
 
     this.logger.log(`Lead unlock payment fulfilled: ${paymentId}, lead: ${leadId}`);
+
+    // Notify provider: lead unlocked
+    const provider = await this.providerRepo.findOneBy({ id: payment.providerId });
+    if (provider) {
+      this.notificationDispatch.sendTemplated(provider.userId, 'lead_unlocked', {
+        customerName: 'a customer',
+      }).catch(() => {});
+    }
   }
 
   private async fulfillSubscriptionPayment(session: any) {
@@ -626,6 +645,15 @@ export class PaymentService {
     await this.paymentRepo.save(payment);
 
     this.logger.log(`Subscription created: ${subscription.id} for provider: ${providerId}`);
+
+    // Notify provider: subscription activated
+    const provider = await this.providerRepo.findOneBy({ id: providerId });
+    if (provider) {
+      const plan = await this.planRepo.findOneBy({ id: planId });
+      this.notificationDispatch.sendTemplated(provider.userId, 'subscription_activated', {
+        planName: plan?.name || 'Premium',
+      }).catch(() => {});
+    }
   }
 
   private async handleInvoicePaid(invoice: any) {
@@ -649,6 +677,15 @@ export class PaymentService {
 
     await this.subscriptionRepo.save(subscription);
     this.logger.log(`Subscription renewed: ${subscription.id}`);
+
+    // Notify provider: renewal success
+    const provider = await this.providerRepo.findOneBy({ id: subscription.providerId });
+    if (provider) {
+      const plan = await this.planRepo.findOneBy({ id: subscription.planId });
+      this.notificationDispatch.sendTemplated(provider.userId, 'subscription_renewal_success', {
+        planName: plan?.name || 'Premium',
+      }).catch(() => {});
+    }
   }
 
   private async handleInvoicePaymentFailed(invoice: any) {
@@ -664,6 +701,14 @@ export class PaymentService {
     subscription.status = 'past_due';
     await this.subscriptionRepo.save(subscription);
     this.logger.warn(`Subscription payment failed: ${subscription.id}`);
+
+    // Notify provider: payment failed
+    const provider = await this.providerRepo.findOneBy({ id: subscription.providerId });
+    if (provider) {
+      this.notificationDispatch.sendTemplated(provider.userId, 'payment_failed', {
+        amount: '',
+      }).catch(() => {});
+    }
   }
 
   private async handleSubscriptionUpdated(stripeSub: any) {
@@ -696,6 +741,15 @@ export class PaymentService {
     subscription.status = 'canceled';
     await this.subscriptionRepo.save(subscription);
     this.logger.log(`Subscription canceled: ${subscription.id}`);
+
+    // Notify provider: subscription cancelled
+    const provider = await this.providerRepo.findOneBy({ id: subscription.providerId });
+    if (provider) {
+      const plan = await this.planRepo.findOneBy({ id: subscription.planId });
+      this.notificationDispatch.sendTemplated(provider.userId, 'subscription_cancelled', {
+        planName: plan?.name || 'Premium',
+      }).catch(() => {});
+    }
   }
 
   // ──────────────────────────────────────────

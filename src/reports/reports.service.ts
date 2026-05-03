@@ -10,6 +10,7 @@ import { Repository, In, MoreThan } from 'typeorm';
 import { Report } from '../entities/report.entity';
 import { Provider, Product, Message, User } from '../entities';
 import { CreateReportDto, REASONS_BY_ENTITY_TYPE } from './dto/create-report.dto';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 
 const MAX_REPORTS_PER_DAY = 5;
 const DISMISSAL_COOLDOWN_DAYS = 30;
@@ -23,6 +24,7 @@ export class ReportsService {
     @InjectRepository(Product) private productRepo: Repository<Product>,
     @InjectRepository(Message) private messageRepo: Repository<Message>,
     @InjectRepository(User) private userRepo: Repository<User>,
+    private readonly notificationDispatch: NotificationDispatchService,
   ) {}
 
   async createReport(reporterUser: any, dto: CreateReportDto) {
@@ -104,6 +106,9 @@ export class ReportsService {
       status: 'pending',
     });
     await this.reportRepo.save(report);
+
+    // Notify reporter: report received confirmation
+    this.notificationDispatch.sendTemplated(reporter.id, 'report_submitted', {}).catch(() => {});
 
     return { message: 'Report received. Our team will review it shortly.' };
   }

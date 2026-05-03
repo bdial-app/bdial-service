@@ -1,11 +1,11 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Not, Repository } from 'typeorm';
-import sharp = require('sharp');
 import { Product, Provider, Review, Photo, ProviderCategory } from '../entities';
 import { CreateProductDto, UpdateProductDto } from './dto/product.dto';
 import { StorageService } from '../storage/storage.service';
 import { ContentSanitizerService } from '../common/content-sanitizer';
+import { compressImage } from '../common/image-processor';
 
 @Injectable()
 export class ProductsService {
@@ -28,21 +28,8 @@ export class ProductsService {
   }
 
   async uploadImage(userId: string, file: Express.Multer.File) {
-    // Compress to max 1200px wide, 80% quality WebP
-    const compressed = await sharp(file.buffer)
-      .resize({ width: 1200, withoutEnlargement: true })
-      .webp({ quality: 80 })
-      .toBuffer();
-
-    const compressedFile: Express.Multer.File = {
-      ...file,
-      buffer: compressed,
-      mimetype: 'image/webp',
-      originalname: file.originalname.replace(/\.[^.]+$/, '.webp'),
-      size: compressed.length,
-    };
-
-    return this.storageService.upload('products', compressedFile);
+    const compressed = await compressImage(file, 'full');
+    return this.storageService.upload('products', compressed);
   }
 
   async create(userId: string, dto: CreateProductDto) {

@@ -15,6 +15,7 @@ import { Voucher } from '../entities/voucher.entity';
 import { VoucherRedemption } from '../entities/voucher-redemption.entity';
 import { SystemSetting } from '../entities/system-setting.entity';
 import { ProviderOffer } from '../entities/provider-offer.entity';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { ProviderOffer } from '../entities/provider-offer.entity';
       SystemSetting,
       ProviderOffer,
     ]),
+    NotificationsModule,
   ],
   controllers: [PaymentController, AdminPaymentController, PaymentWebhookController],
   providers: [StripeProvider, PaymentService],

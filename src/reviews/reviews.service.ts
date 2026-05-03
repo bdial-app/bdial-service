@@ -12,6 +12,7 @@ import { CreateReviewDto, ReportReviewDto } from './dto/review.dto';
 import { StorageService } from '../storage/storage.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { ContentSanitizerService } from '../common/content-sanitizer';
+import { compressImage } from '../common/image-processor';
 
 @Injectable()
 export class ReviewsService {
@@ -120,7 +121,8 @@ export class ReviewsService {
     const review = await this.reviewRepo.findOneBy({ id: reviewId });
     if (!review) throw new NotFoundException('Review not found');
 
-    const { url, storageKey } = await this.storageService.upload('reviews', file);
+    const compressed = await compressImage(file, 'standard');
+    const { url, storageKey } = await this.storageService.upload('reviews', compressed);
     const photo = this.reviewPhotoRepo.create({ reviewId, imageUrl: url, storageKey });
     const saved = await this.reviewPhotoRepo.save(photo);
 

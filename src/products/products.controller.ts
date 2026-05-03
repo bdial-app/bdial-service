@@ -44,7 +44,7 @@ export class ProductsController {
   @Post('upload-image')
   @ApiBearerAuth()
   @UseGuards(AuthGuard('jwt'))
-  @ApiOperation({ summary: 'Upload a product image (max 5 MB, auto-compressed)' })
+  @ApiOperation({ summary: 'Upload a product image (max 10 MB, auto-compressed to WebP)' })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {
@@ -60,7 +60,7 @@ export class ProductsController {
     @UploadedFile(
       new ParseFilePipe({
         validators: [
-          new MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 }),
+          new MaxFileSizeValidator({ maxSize: 10 * 1024 * 1024 }), // 10 MB — we compress server-side
           new FileTypeValidator({ fileType: /^image\/(jpeg|jpg|png|webp)$/ }),
         ],
       }),

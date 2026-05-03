@@ -4,6 +4,7 @@ import { Repository, IsNull } from 'typeorm';
 import { Category } from '../entities';
 import { StorageService } from '../storage/storage.service';
 import { PaginationDto } from './dto/pagination.dto';
+import { compressImage } from '../common/image-processor';
 
 function slugify(name: string) {
   return name.toLowerCase().replace(/\s+/g, '-').replace(/[^\w-]+/g, '');
@@ -206,7 +207,8 @@ export class CategoriesService {
       try { await this.storageService.delete(category.iconStorageKey); } catch (e) { console.error('Failed to delete old icon:', e); }
     }
 
-    const { url, storageKey } = await this.storageService.upload('categories', file);
+    const compressed = await compressImage(file, 'icon');
+    const { url, storageKey } = await this.storageService.upload('categories', compressed);
     category.icon = url;
     category.iconStorageKey = storageKey;
     return this.categoryRepo.save(category);
@@ -236,7 +238,8 @@ export class CategoriesService {
       throw new BadRequestException(`File size exceeds 10MB limit.`);
     }
 
-    const { url } = await this.storageService.upload('categories/images', file);
+    const compressed = await compressImage(file, 'banner');
+    const { url } = await this.storageService.upload('categories/images', compressed);
     category.imageUrl = url;
     return this.categoryRepo.save(category);
   }

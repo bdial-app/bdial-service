@@ -19,7 +19,11 @@ export type NotificationType =
   | 'promotional'
   | 'system_announcement'
   | 'report_update'
-  | 'new_enquiry';
+  | 'new_enquiry'
+  | 'payment_update'
+  | 'voucher_update'
+  | 'subscription_update'
+  | 'invite_update';
 
 export type NotificationSource = 'system' | 'admin';
 
@@ -46,6 +50,10 @@ export class Notification {
       'system_announcement',
       'report_update',
       'new_enquiry',
+      'payment_update',
+      'voucher_update',
+      'subscription_update',
+      'invite_update',
     ],
   })
   type: NotificationType;

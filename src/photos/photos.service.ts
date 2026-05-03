@@ -8,6 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Photo, Provider, Review, ReviewPhoto } from '../entities';
 import { StorageService } from '../storage/storage.service';
+import { compressImage, compressImages } from '../common/image-processor';
 
 @Injectable()
 export class PhotosService {
@@ -29,8 +30,9 @@ export class PhotosService {
       throw new BadRequestException(`Max 10 photos per provider. You have ${existing}, uploading ${files.length} would exceed the limit.`);
     }
 
+    const compressed = await compressImages(files, 'standard');
     const uploaded = await Promise.all(
-      files.map(async (file, i) => {
+      compressed.map(async (file, i) => {
         const { url, storageKey } = await this.storage.upload('providers', file);
         const photo = this.photoRepo.create({ providerId, imageUrl: url, storageKey, displayOrder: existing + i });
         return this.photoRepo.save(photo);
@@ -70,7 +72,9 @@ export class PhotosService {
     if (!provider) throw new NotFoundException('Provider not found');
     if (provider.userId !== userId) throw new ForbiddenException();
 
-    const { url } = await this.storage.upload('providers', file);
+    const preset = field === 'bannerImageUrl' ? 'banner' : 'avatar';
+    const compressed = await compressImage(file, preset);
+    const { url } = await this.storage.upload('providers', compressed);
     await this.providerRepo.update(providerId, { [field]: url });
     return { url, field };
   }
@@ -87,7 +91,8 @@ export class PhotosService {
 
     return Promise.all(
       files.map(async (file) => {
-        const { url, storageKey } = await this.storage.upload('reviews', file);
+        const compressed = await compressImage(file, 'standard');
+        const { url, storageKey } = await this.storage.upload('reviews', compressed);
         const p = this.reviewPhotoRepo.create({ reviewId, imageUrl: url, storageKey });
         return this.reviewPhotoRepo.save(p);
       }),

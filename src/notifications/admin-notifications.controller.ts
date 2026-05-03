@@ -2,6 +2,9 @@ import {
   Controller,
   Get,
   Post,
+  Put,
+  Patch,
+  Delete,
   Param,
   Body,
   Query,
@@ -13,6 +16,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth, ApiParam } from '@nestjs/swagger'
 import { AuthGuard } from '@nestjs/passport';
 import { NotificationsService } from './notifications.service';
 import { NotificationDispatchService } from './notification-dispatch.service';
+import { NotificationTemplateService } from './notification-template.service';
 import { SendNotificationDto, GetBatchesQueryDto } from './dto/notification.dto';
 import { NotificationType } from '../entities/notification.entity';
 
@@ -24,6 +28,7 @@ export class AdminNotificationsController {
   constructor(
     private readonly notificationsService: NotificationsService,
     private readonly dispatchService: NotificationDispatchService,
+    private readonly templateService: NotificationTemplateService,
   ) {}
 
   @Post('send')
@@ -69,6 +74,56 @@ export class AdminNotificationsController {
   getStats(@Request() req) {
     this.assertAdmin(req.user);
     return this.notificationsService.getStats();
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Notification Templates (Admin Controls)
+  // ──────────────────────────────────────────────────────────
+
+  @Get('templates')
+  @ApiOperation({ summary: 'List all notification templates' })
+  getTemplates(@Request() req, @Query('category') category?: string) {
+    this.assertAdmin(req.user);
+    return this.templateService.findAll(category);
+  }
+
+  @Get('templates/:id')
+  @ApiOperation({ summary: 'Get a notification template by ID' })
+  getTemplate(@Request() req, @Param('id') id: string) {
+    this.assertAdmin(req.user);
+    return this.templateService.findById(id);
+  }
+
+  @Post('templates')
+  @ApiOperation({ summary: 'Create a new notification template' })
+  createTemplate(@Request() req, @Body() body: any) {
+    this.assertAdmin(req.user);
+    return this.templateService.create(body);
+  }
+
+  @Put('templates/:id')
+  @ApiOperation({ summary: 'Update a notification template' })
+  updateTemplate(@Request() req, @Param('id') id: string, @Body() body: any) {
+    this.assertAdmin(req.user);
+    return this.templateService.update(id, body);
+  }
+
+  @Patch('templates/:id/toggle')
+  @ApiOperation({ summary: 'Toggle a notification template active/inactive' })
+  toggleTemplate(
+    @Request() req,
+    @Param('id') id: string,
+    @Body() body: { isActive: boolean },
+  ) {
+    this.assertAdmin(req.user);
+    return this.templateService.toggleActive(id, body.isActive);
+  }
+
+  @Delete('templates/:id')
+  @ApiOperation({ summary: 'Delete a notification template' })
+  deleteTemplate(@Request() req, @Param('id') id: string) {
+    this.assertAdmin(req.user);
+    return this.templateService.delete(id);
   }
 
   private assertAdmin(user: any): void {

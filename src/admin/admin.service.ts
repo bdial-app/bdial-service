@@ -7,6 +7,7 @@ import { BugReport } from '../bug-reports/bug-report.entity';
 import { AdminCreateUserDto, AdminCreateProviderWithUserDto } from './dto/admin-create-user.dto';
 import { StorageService } from '../storage/storage.service';
 import { OtpService } from '../otp/otp.service';
+import { compressImage, compressImages } from '../common/image-processor';
 
 @Injectable()
 export class AdminService {
@@ -561,6 +562,13 @@ export class AdminService {
       }
     }
 
+    // Notify reporter that their report was resolved
+    if (report.reporterId) {
+      this.notificationDispatch.sendTemplated(report.reporterId, 'report_resolved', {
+        outcome: action === 'dismiss' ? 'dismissed' : 'action taken',
+      }).catch(() => {});
+    }
+
     return this.entityReportRepo.findOne({
       where: { id: reportId },
       relations: ['reporter', 'reviewer'],
@@ -636,6 +644,15 @@ export class AdminService {
       issuedBy,
     });
     await this.warningRepo.save(warning);
+
+    // Notify provider about warning
+    const provider = await this.providerRepo.findOneBy({ id: providerId });
+    if (provider) {
+      this.notificationDispatch.sendTemplated(provider.userId, 'warning_issued', {
+        reason: reasonLabel,
+      }).catch(() => {});
+    }
+
     return warning;
   }
 
@@ -901,8 +918,9 @@ export class AdminService {
     if (!product) throw new NotFoundException('Product not found');
     if (!files.length) throw new BadRequestException('No images provided');
 
+    const compressed = await compressImages(files, 'full');
     const uploaded: string[] = [];
-    for (const file of files) {
+    for (const file of compressed) {
       const result = await this.storageService.upload('products', file);
       uploaded.push(result.url);
     }
@@ -1241,7 +1259,8 @@ export class AdminService {
       .getRawOne();
 
     if (file) {
-      const result = await this.storageService.upload('banners', file);
+      const compressed = await compressImage(file, 'banner');
+      const result = await this.storageService.upload('banners', compressed);
       body.imageUrl = result.url;
     }
 
@@ -1263,7 +1282,8 @@ export class AdminService {
         const oldKey = this.storageService.extractKeyFromUrl(banner.imageUrl);
         if (oldKey) await this.storageService.delete(oldKey).catch(() => {});
       }
-      const result = await this.storageService.upload('banners', file);
+      const compressed = await compressImage(file, 'banner');
+      const result = await this.storageService.upload('banners', compressed);
       body.imageUrl = result.url;
     }
 
@@ -2252,10 +2272,8 @@ export class AdminService {
     await this.providerRepo.update(providerId, { status: 'disabled' });
     await this.createAuditLog(admin.id, 'disable_provider', 'provider', providerId, { status: prevStatus }, { status: 'disabled' });
 
-    this.notificationDispatch.sendToUser(
-      provider.userId, 'provider_status', 'Provider Profile Disabled',
-      'Your provider profile has been disabled by admin. Contact support for details.',
-      { route: '/provider-details', params: { id: providerId } },
+    this.notificationDispatch.sendTemplated(
+      provider.userId, 'provider_disabled', {},
     ).catch(() => {});
 
     return { ...provider, status: 'disabled' };
@@ -2270,10 +2288,8 @@ export class AdminService {
     await this.providerRepo.update(providerId, { status: 'active' });
     await this.createAuditLog(admin.id, 'enable_provider', 'provider', providerId, { status: 'disabled' }, { status: 'active' });
 
-    this.notificationDispatch.sendToUser(
-      provider.userId, 'provider_status', 'Provider Profile Re-enabled',
-      'Your provider profile has been re-enabled and is now active.',
-      { route: '/provider-details', params: { id: providerId } },
+    this.notificationDispatch.sendTemplated(
+      provider.userId, 'provider_enabled', {},
     ).catch(() => {});
 
     return { ...provider, status: 'active' };
@@ -2639,7 +2655,7 @@ export class AdminService {
     await this.createAuditLog(admin.id, 'approve_sponsorship', 'sponsored_listing', id, { approvalStatus: 'pending_approval' }, { approvalStatus: 'approved' });
 
     if (listing.provider) {
-      this.notificationDispatch.sendToUser(listing.provider.userId, 'provider_status', 'Sponsorship Approved!', 'Your sponsored listing has been approved and is now active.', { route: '/' }).catch(() => {});
+      this.notificationDispatch.sendTemplated(listing.provider.userId, 'sponsorship_approved', {}).catch(() => {});
     }
 
     return { ...listing, approvalStatus: 'approved' };
@@ -2691,7 +2707,7 @@ export class AdminService {
     await this.createAuditLog(admin.id, 'approve_offer', 'provider_offer', id, { approvalStatus: 'pending_approval' }, { approvalStatus: 'approved' });
 
     if (offer.provider) {
-      this.notificationDispatch.sendToUser(offer.provider.userId, 'provider_status', 'Offer Approved!', `Your offer "${offer.title}" has been approved and is now visible.`, { route: '/' }).catch(() => {});
+      this.notificationDispatch.sendTemplated(offer.provider.userId, 'offer_approved', {}).catch(() => {});
     }
 
     return { ...offer, approvalStatus: 'approved' };

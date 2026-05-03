@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { FirebaseService, PushPayload } from './firebase.service';
 import { NotificationsService } from './notifications.service';
+import { NotificationTemplateService } from './notification-template.service';
 import { NotificationPreference } from '../entities/notification-preference.entity';
 import { NotificationType } from '../entities/notification.entity';
 import { User } from '../entities/user.entity';
@@ -18,6 +19,10 @@ const TYPE_TO_PREFERENCE: Record<NotificationType, keyof NotificationPreference 
   system_announcement: 'systemAnnouncements',
   report_update: null, // Always sent
   new_enquiry: 'chatMessages', // Uses chat preference
+  payment_update: 'systemAnnouncements', // Transactional — uses system pref
+  voucher_update: 'promotional', // Marketing — uses promotional pref
+  subscription_update: 'systemAnnouncements', // Transactional
+  invite_update: 'promotional', // Engagement
 };
 
 @Injectable()
@@ -27,9 +32,46 @@ export class NotificationDispatchService {
   constructor(
     private readonly firebaseService: FirebaseService,
     private readonly notificationsService: NotificationsService,
+    private readonly templateService: NotificationTemplateService,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
   ) {}
+
+  /**
+   * Send a templated notification to a user.
+   * Checks admin control (template.isActive) before sending.
+   * This is the preferred method for all automated notifications.
+   */
+  async sendTemplated(
+    userId: string,
+    slug: string,
+    variables: Record<string, string> = {},
+    data?: Record<string, any>,
+  ): Promise<boolean> {
+    // 1. Resolve template — returns null if admin disabled it
+    const resolved = await this.templateService.resolve(slug, variables);
+    if (!resolved) {
+      this.logger.debug(`Notification "${slug}" is disabled by admin — skipping`);
+      return false;
+    }
+
+    // 2. Get template to determine type
+    const template = await this.templateService.getBySlug(slug);
+    if (!template) return false;
+
+    // Merge route into data payload
+    const payload = { ...data };
+    if (resolved.route) payload.route = resolved.route;
+
+    return this.sendToUser(
+      userId,
+      template.type as NotificationType,
+      resolved.title,
+      resolved.body,
+      payload,
+      resolved.imageUrl,
+    );
+  }
 
   /**
    * Send a push notification to a specific user.
