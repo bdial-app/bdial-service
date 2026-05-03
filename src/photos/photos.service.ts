@@ -56,6 +56,25 @@ export class PhotosService {
     return { message: 'Order updated' };
   }
 
+  async uploadProviderProfileImage(
+    providerId: string,
+    userId: string,
+    field: string,
+    file: Express.Multer.File,
+  ) {
+    const allowedFields = ['bannerImageUrl', 'profilePhotoUrl'];
+    if (!allowedFields.includes(field)) {
+      throw new BadRequestException(`Field must be one of: ${allowedFields.join(', ')}`);
+    }
+    const provider = await this.providerRepo.findOneBy({ id: providerId });
+    if (!provider) throw new NotFoundException('Provider not found');
+    if (provider.userId !== userId) throw new ForbiddenException();
+
+    const { url } = await this.storage.upload('providers', file);
+    await this.providerRepo.update(providerId, { [field]: url });
+    return { url, field };
+  }
+
   async uploadReviewPhotos(reviewId: string, userId: string, files: Express.Multer.File[]) {
     const review = await this.reviewRepo.findOneBy({ id: reviewId });
     if (!review) throw new NotFoundException('Review not found');

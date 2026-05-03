@@ -420,6 +420,35 @@ export class ProvidersService {
     return this.providerRepo.findOne({ where: { id }, relations: ['user'] });
   }
 
+  async updateCategories(providerId: string, userId: string, categoryIds: string[]) {
+    const provider = await this.providerRepo.findOneBy({ id: providerId });
+    if (!provider) throw new NotFoundException(`Provider with ID '${providerId}' not found`);
+    if (provider.userId !== userId) throw new ForbiddenException('You can only update your own provider categories');
+    if (categoryIds.length > 2) throw new BadRequestException('Maximum 2 categories allowed');
+
+    // Remove existing categories
+    await this.providerCatRepo.delete({ providerId });
+
+    // Insert new ones
+    if (categoryIds.length > 0) {
+      const entities = categoryIds.map((categoryId) =>
+        this.providerCatRepo.create({ providerId, categoryId }),
+      );
+      await this.providerCatRepo.save(entities);
+    }
+
+    // Return updated categories
+    const updated = await this.providerCatRepo.find({
+      where: { providerId },
+      relations: ['category'],
+    });
+    return updated.map((pc) => ({
+      id: pc.category?.id,
+      name: pc.category?.name,
+      slug: pc.category?.slug,
+    }));
+  }
+
   /**
    * Find providers near a lat/lng using the Haversine formula.
    * Optionally enriches with Google Distance Matrix (road distance + travel time).

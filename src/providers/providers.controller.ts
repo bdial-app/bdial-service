@@ -330,6 +330,24 @@ export class ProvidersController {
     return this.providersService.update(id, updateProviderDto);
   }
 
+  @Patch(':id/categories')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @ApiOperation({ summary: 'Update provider categories (max 2)' })
+  @ApiResponse({ status: 200, description: 'Categories updated successfully' })
+  @ApiResponse({ status: 400, description: 'Max 2 categories allowed' })
+  @ApiParam({ name: 'id', description: 'Provider ID (UUID)' })
+  updateProviderCategories(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Request() req,
+    @Body() body: { categoryIds: string[] },
+  ) {
+    if (!body.categoryIds || !Array.isArray(body.categoryIds) || body.categoryIds.length > 2) {
+      throw new BadRequestException('You can select up to 2 categories');
+    }
+    return this.providersService.updateCategories(id, req.user.id, body.categoryIds);
+  }
+
   @Get('my-warnings')
   @ApiOperation({ summary: 'Get warnings for the authenticated provider' })
   getMyWarnings(@Request() req) {

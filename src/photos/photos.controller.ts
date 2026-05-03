@@ -9,11 +9,12 @@ import {
   Request,
   UseInterceptors,
   UploadedFiles,
+  UploadedFile,
   ParseFilePipe,
   MaxFileSizeValidator,
   FileTypeValidator,
 } from '@nestjs/common';
-import { FilesInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import {
   ApiTags,
   ApiOperation,
@@ -82,6 +83,36 @@ export class PhotosController {
     @Body('orderedIds') orderedIds: string[],
   ) {
     return this.photosService.reorderPhotos(providerId, req.user.id, orderedIds);
+  }
+
+  @Post('provider/:providerId/profile-image')
+  @ApiOperation({ summary: 'Upload or replace provider banner or profile image' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary' },
+        field: { type: 'string', enum: ['bannerImageUrl', 'profilePhotoUrl'] },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
+  uploadProviderProfileImage(
+    @Param('providerId') providerId: string,
+    @Request() req,
+    @Body('field') field: string,
+    @UploadedFile(
+      new ParseFilePipe({
+        validators: [
+          new MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 }),
+          new FileTypeValidator({ fileType: /^image\/(jpeg|jpg|png|webp)$/ }),
+        ],
+      }),
+    )
+    file: Express.Multer.File,
+  ) {
+    return this.photosService.uploadProviderProfileImage(providerId, req.user.id, field, file);
   }
 
   // ─── Review Photos ────────────────────────────────
