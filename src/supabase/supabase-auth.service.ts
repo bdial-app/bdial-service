@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import WebSocket from 'ws';
 
 @Injectable()
 export class SupabaseAuthService {
@@ -27,6 +28,9 @@ export class SupabaseAuthService {
         persistSession: false,
         detectSessionInUrl: false,
       },
+      realtime: {
+        transport: WebSocket as any,
+      },
     });
 
     // Admin client for admin operations (user creation, metadata updates, etc.)
@@ -35,6 +39,9 @@ export class SupabaseAuthService {
         autoRefreshToken: false,
         persistSession: false,
         detectSessionInUrl: false,
+      },
+      realtime: {
+        transport: WebSocket as any,
       },
     });
 

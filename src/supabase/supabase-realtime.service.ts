@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import WebSocket from 'ws';
 
 /**
  * Handles Supabase Realtime Broadcast for chat events.
@@ -22,6 +23,9 @@ export class SupabaseRealtimeService {
 
     this.supabase = createClient(url, serviceKey, {
       auth: { autoRefreshToken: false, persistSession: false },
+      realtime: {
+        transport: WebSocket as any,
+      },
     });
   }
 
