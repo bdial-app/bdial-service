@@ -117,12 +117,48 @@ export class SearchService {
   ) {}
 
   // ────────────────────────────────────────────────────────────
+  // CONSTANTS
+  // ────────────────────────────────────────────────────────────
+
+  private readonly SEARCH_TIMEOUT_MS = 4000; // Hard cap per search request
+
+  // ────────────────────────────────────────────────────────────
   // CACHE HELPERS
   // ────────────────────────────────────────────────────────────
 
   private buildCacheKey(prefix: string, params: Record<string, any>): string {
     const sorted = Object.keys(params).sort().map(k => `${k}=${params[k] ?? ''}`).join('&');
     return `search:${prefix}:${sorted}`;
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // TIMEOUT HELPER — prevents runaway queries from blocking response
+  // ────────────────────────────────────────────────────────────
+
+  private withTimeout<T>(promise: Promise<T>, fallback: T, label: string, timeoutMs = this.SEARCH_TIMEOUT_MS): Promise<T> {
+    let timer: NodeJS.Timeout;
+    const timeout = new Promise<T>((resolve) => {
+      timer = setTimeout(() => {
+        this.logger.warn(`Search timeout (${timeoutMs}ms) hit for: ${label}`);
+        resolve(fallback);
+      }, timeoutMs);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // GEO HELPERS — bounding-box pre-filter for fast lat/lng elimination
+  // ────────────────────────────────────────────────────────────
+
+  private getBoundingBox(lat: number, lng: number, radiusKm: number): { latMin: number; latMax: number; lngMin: number; lngMax: number } {
+    const latDelta = radiusKm / 111.32;
+    const lngDelta = radiusKm / (111.32 * Math.cos((lat * Math.PI) / 180));
+    return {
+      latMin: lat - latDelta,
+      latMax: lat + latDelta,
+      lngMin: lng - lngDelta,
+      lngMax: lng + lngDelta,
+    };
   }
 
   // ────────────────────────────────────────────────────────────
@@ -185,23 +221,47 @@ export class SearchService {
 
     const [providers, products, categories, sponsored, deals, topRated] = await Promise.all([
       isAllOrProviders
-        ? this.searchProviders(expandedQ, prefixTsQuery, { lat, lng, radius, offset, limit, categoryIds, sortBy, minRating, city, hasGeo, verifiedOnly, womenLedOnly })
+        ? this.withTimeout(
+            this.searchProviders(expandedQ, prefixTsQuery, { lat, lng, radius, offset, limit, categoryIds, sortBy, minRating, city, hasGeo, verifiedOnly, womenLedOnly }),
+            { data: [], total: 0 },
+            'searchProviders',
+          )
         : Promise.resolve({ data: [], total: 0 }),
       searchProducts
-        ? this.searchProducts(expandedQ, prefixTsQuery, { lat, lng, radius, offset, limit: type === 'all' ? 5 : limit, hasGeo, productType: productTypeFilter })
+        ? this.withTimeout(
+            this.searchProducts(expandedQ, prefixTsQuery, { lat, lng, radius, offset, limit: type === 'all' ? 5 : limit, hasGeo, productType: productTypeFilter }),
+            { data: [], total: 0 },
+            'searchProducts',
+          )
         : Promise.resolve({ data: [], total: 0 }),
       type === 'all' || type === 'categories'
-        ? this.searchCategories(expandedQ, prefixTsQuery, { offset, limit: type === 'all' ? 5 : limit })
+        ? this.withTimeout(
+            this.searchCategories(expandedQ, prefixTsQuery, { offset, limit: type === 'all' ? 5 : limit }),
+            { data: [], total: 0 },
+            'searchCategories',
+          )
         : Promise.resolve({ data: [], total: 0 }),
       // Prioritized sections — only on page 1 of all/providers
       isAllOrProviders && isFirstPage
-        ? this.getMatchingSponsoredProviders(expandedQ, prefixTsQuery, lat, lng, city, categoryIds)
+        ? this.withTimeout(
+            this.getMatchingSponsoredProviders(expandedQ, prefixTsQuery, lat, lng, city, categoryIds),
+            [],
+            'sponsoredProviders',
+          )
         : Promise.resolve([]),
       isAllOrProviders && isFirstPage
-        ? this.getDealsProviders(expandedQ, prefixTsQuery, { lat, lng, radius, city, hasGeo, categoryIds })
+        ? this.withTimeout(
+            this.getDealsProviders(expandedQ, prefixTsQuery, { lat, lng, radius, city, hasGeo, categoryIds }),
+            [],
+            'dealsProviders',
+          )
         : Promise.resolve([]),
       isAllOrProviders && isFirstPage
-        ? this.getTopRatedProviders(expandedQ, prefixTsQuery, { lat, lng, radius, city, hasGeo, categoryIds })
+        ? this.withTimeout(
+            this.getTopRatedProviders(expandedQ, prefixTsQuery, { lat, lng, radius, city, hasGeo, categoryIds }),
+            [],
+            'topRatedProviders',
+          )
         : Promise.resolve([]),
     ]);
 
@@ -307,6 +367,12 @@ export class SearchService {
     if (opts.hasGeo) {
       conditions.push(`p.latitude IS NOT NULL`);
       conditions.push(`p.longitude IS NOT NULL`);
+      // Bounding-box pre-filter: eliminates rows cheaply before Haversine
+      const bbox = this.getBoundingBox(opts.lat!, opts.lng!, opts.radius);
+      conditions.push(`p.latitude BETWEEN $${pi} AND $${pi + 1}`);
+      conditions.push(`p.longitude BETWEEN $${pi + 2} AND $${pi + 3}`);
+      allParams.push(bbox.latMin, bbox.latMax, bbox.lngMin, bbox.lngMax);
+      pi += 4;
       conditions.push(`${distExpr} <= $${pi}`);
       allParams.push(opts.radius);
       pi++;
@@ -532,6 +598,12 @@ export class SearchService {
 
       if (opts.hasGeo) {
         conditions.push(`p.latitude IS NOT NULL`, `p.longitude IS NOT NULL`);
+        // Bounding-box pre-filter
+        const bbox = this.getBoundingBox(opts.lat!, opts.lng!, opts.radius);
+        conditions.push(`p.latitude BETWEEN $${pi} AND $${pi + 1}`);
+        conditions.push(`p.longitude BETWEEN $${pi + 2} AND $${pi + 3}`);
+        allParams.push(bbox.latMin, bbox.latMax, bbox.lngMin, bbox.lngMax);
+        pi += 4;
         conditions.push(`${distExpr} <= $${pi}`);
         allParams.push(opts.radius);
         pi++;
@@ -639,6 +711,12 @@ export class SearchService {
 
       if (opts.hasGeo) {
         conditions.push(`p.latitude IS NOT NULL`, `p.longitude IS NOT NULL`);
+        // Bounding-box pre-filter
+        const bbox = this.getBoundingBox(opts.lat!, opts.lng!, opts.radius);
+        conditions.push(`p.latitude BETWEEN $${pi} AND $${pi + 1}`);
+        conditions.push(`p.longitude BETWEEN $${pi + 2} AND $${pi + 3}`);
+        allParams.push(bbox.latMin, bbox.latMax, bbox.lngMin, bbox.lngMax);
+        pi += 4;
         conditions.push(`${distExpr} <= $${pi}`);
         allParams.push(opts.radius);
         pi++;
@@ -858,6 +936,12 @@ export class SearchService {
     if (opts.hasGeo) {
       conditions.push(`prov.latitude IS NOT NULL`);
       conditions.push(`prov.longitude IS NOT NULL`);
+      // Bounding-box pre-filter
+      const bbox = this.getBoundingBox(opts.lat!, opts.lng!, opts.radius);
+      conditions.push(`prov.latitude BETWEEN $${pi} AND $${pi + 1}`);
+      conditions.push(`prov.longitude BETWEEN $${pi + 2} AND $${pi + 3}`);
+      allParams.push(bbox.latMin, bbox.latMax, bbox.lngMin, bbox.lngMax);
+      pi += 4;
       conditions.push(`${distExpr} <= $${pi}`);
       allParams.push(opts.radius);
       pi++;

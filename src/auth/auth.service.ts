@@ -168,6 +168,22 @@ export class AuthService {
     };
   }
 
+  /**
+   * Refresh an existing valid JWT — issues a new token with fresh expiry.
+   * The caller must already be authenticated (JWT guard protects the route).
+   */
+  async refreshToken(userId: string) {
+    const user = await this.userRepo.findOneBy({ id: userId });
+    if (!user) {
+      throw new BadRequestException('User not found');
+    }
+    if (user.status === 'deleted' || user.status === 'suspended') {
+      throw new ForbiddenException('Account is inactive');
+    }
+    const token = this.jwtService.sign({ sub: user.id, mobile: user.mobileNumber, email: user.email });
+    return { accessToken: token, user };
+  }
+
   async handleSupabaseOAuthSession(supabaseToken: string) {
     const { user: supabaseUser, error } = await this.supabaseAuth.verifySupabaseToken(supabaseToken);
     if (error || !supabaseUser) throw new BadRequestException(`Invalid Supabase token: ${error}`);

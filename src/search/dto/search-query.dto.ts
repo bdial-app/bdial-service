@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsString,
   MinLength,
+  MaxLength,
   IsOptional,
   IsLatitude,
   IsLongitude,
@@ -19,6 +20,7 @@ export class SearchQueryDto {
   @ApiProperty({ example: 'beauty', description: 'Search query' })
   @IsString()
   @MinLength(1)
+  @MaxLength(200)
   q: string;
 
   @ApiPropertyOptional({ example: 18.5204 })
