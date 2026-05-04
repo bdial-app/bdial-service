@@ -351,6 +351,8 @@ export class ProvidersController {
   }
 
   @Patch(':id')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
   @ApiOperation({ summary: 'Update provider by ID' })
   @ApiResponse({ status: 200, description: 'Provider updated successfully' })
   @ApiResponse({ status: 404, description: 'Provider not found' })
