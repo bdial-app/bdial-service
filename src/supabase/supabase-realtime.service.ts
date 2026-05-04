@@ -106,7 +106,13 @@ export class SupabaseRealtimeService {
   /** Broadcast conversation list update (new convo, unread count change) */
   async broadcastConversationUpdate(
     userId: string,
-    payload: { conversationId: string; lastMessagePreview: string; lastMessageAt: string; unreadCount: number },
+    payload: {
+      conversationId: string;
+      lastMessagePreview: string;
+      lastMessageAt: string;
+      unreadCount: number;
+      role?: 'customer' | 'provider';
+    },
   ) {
     try {
       const channel = this.supabase?.channel(`user:${userId}:conversations`);

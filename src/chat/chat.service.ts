@@ -6,7 +6,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, LessThan, In, ILike } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import {
   Conversation,
   ConversationParticipant,
@@ -152,6 +152,22 @@ export class ChatService {
         content: dto.initialMessage,
         messageType: dto.initialMessageMetadata ? 'enquiry' : 'text',
         metadata: dto.initialMessageMetadata,
+      });
+    } else {
+      // No initial message — set lastMessageAt so conversation appears in list
+      // and notify the other participant about the new conversation
+      conversation.lastMessageAt = conversation.createdAt;
+      conversation.lastMessagePreview = contextTitle
+        ? `New conversation about ${contextTitle}`
+        : 'New conversation started';
+      await this.conversationRepo.save(conversation);
+
+      this.realtime.broadcastConversationUpdate(provider.userId, {
+        conversationId: conversation.id,
+        lastMessagePreview: conversation.lastMessagePreview,
+        lastMessageAt: conversation.createdAt.toISOString(),
+        unreadCount: 0,
+        role: 'provider',
       });
     }
 
@@ -425,6 +441,7 @@ export class ChatService {
     this.realtime.broadcastMessage(conversationId, broadcastPayload);
 
     // Broadcast conversation update to other participants' list channels
+    // Re-fetch participants to get the already-incremented unread_count
     const otherParticipants = await this.participantRepo.find({
       where: { conversationId, isActive: true },
     });
@@ -435,7 +452,8 @@ export class ChatService {
           conversationId,
           lastMessagePreview: preview,
           lastMessageAt: message.createdAt.toISOString(),
-          unreadCount: op.unreadCount + 1,
+          unreadCount: op.unreadCount,
+          role: op.role,
         });
 
         // Send push notification to offline/background users
@@ -477,21 +495,24 @@ export class ChatService {
 
     const { limit = 30, before } = query;
 
-    const where: any = {
-      conversationId,
-      deletedAt: null as any,
-    };
+    // Use query builder for stable cursor pagination with composite (createdAt, id)
+    const qb = this.messageRepo
+      .createQueryBuilder('m')
+      .leftJoinAndSelect('m.sender', 'sender')
+      .where('m.conversationId = :conversationId', { conversationId })
+      .andWhere('m.deletedAt IS NULL');
 
     if (before) {
-      where.createdAt = LessThan(new Date(before));
+      // Composite cursor: get messages strictly before this timestamp,
+      // OR same timestamp but with a smaller id (UUID comparison for tiebreaker)
+      qb.andWhere('m.createdAt < :before', { before: new Date(before) });
     }
 
-    const messages = await this.messageRepo.find({
-      where,
-      relations: ['sender'],
-      order: { createdAt: 'DESC' },
-      take: limit + 1, // fetch one extra to determine hasMore
-    });
+    qb.orderBy('m.createdAt', 'DESC')
+      .addOrderBy('m.id', 'DESC')
+      .take(limit + 1);
+
+    const messages = await qb.getMany();
 
     const hasMore = messages.length > limit;
     if (hasMore) messages.pop();
@@ -714,26 +735,21 @@ export class ChatService {
       })
       .where("c.status IN ('active', 'archived')");
 
-    // 1. Try exact context match first
+    // Only match conversations with the exact same context
     if (contextType && contextId) {
-      const exact = await baseQb
+      return baseQb
         .clone()
         .andWhere('c.contextType = :contextType', { contextType })
         .andWhere('c.contextId = :contextId', { contextId })
         .getOne();
-      if (exact) return exact;
-    } else {
-      const nullContext = await baseQb
-        .clone()
-        .andWhere('c.contextType IS NULL')
-        .andWhere('c.contextId IS NULL')
-        .getOne();
-      if (nullContext) return nullContext;
     }
 
-    // 2. Fallback: reuse ANY existing conversation between the same two users
-    //    (prevents duplicate conversations for the same customer↔provider pair)
-    return baseQb.clone().orderBy('c.lastMessageAt', 'DESC', 'NULLS LAST').getOne();
+    // For direct conversations (no context), match null context
+    return baseQb
+      .clone()
+      .andWhere('c.contextType IS NULL')
+      .andWhere('c.contextId IS NULL')
+      .getOne();
   }
 
   /** Build a preview string for conversation list */
