@@ -16,6 +16,10 @@ export class BecomeProviderDto extends CreateProviderDto {
   @IsOptional()
   profileImage?: any;
 
+  @ApiPropertyOptional({ type: 'array', items: { type: 'string', format: 'binary' }, description: 'Product image files' })
+  @IsOptional()
+  productImages?: any;
+
   @ApiPropertyOptional({ description: 'iJamat card number (optional)' })
   @IsOptional()
   @IsString()

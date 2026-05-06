@@ -168,6 +168,7 @@ export class ProvidersService {
           const productPhotos = productImageUploads.slice(imgOffset, imgOffset + count);
           imgOffset += count;
           const photoUrl = productPhotos[0]?.url || null;
+          const photoUrls = productPhotos.map((ph) => ph.url);
           const product = manager.create(Product, {
             providerId: savedProvider.id,
             name: p.name,
@@ -175,6 +176,7 @@ export class ProvidersService {
             price: p.price != null ? p.price : null,
             currency: p.currency || 'INR',
             photoUrl,
+            photoUrls,
             productType: p.productType || 'product',
             isActive: true,
             displayOrder: i,
