@@ -27,6 +27,8 @@ export type NotificationType =
 
 export type NotificationSource = 'system' | 'admin';
 
+export type NotificationTargetMode = 'customer' | 'provider';
+
 @Entity('notifications')
 @Index(['userId', 'isRead', 'createdAt'])
 @Index(['userId', 'createdAt'])
@@ -85,6 +87,14 @@ export class Notification {
     default: 'system',
   })
   source: NotificationSource;
+
+  @Column({
+    name: 'target_mode',
+    type: 'varchar',
+    length: 20,
+    nullable: true,
+  })
+  targetMode: NotificationTargetMode | null;
 
   @Column({ name: 'batch_id', type: 'uuid', nullable: true })
   batchId: string | null;

@@ -6,6 +6,7 @@ import { NotificationsService } from './notifications.service';
 import { NotificationTemplateService } from './notification-template.service';
 import { NotificationPreference } from '../entities/notification-preference.entity';
 import { NotificationType } from '../entities/notification.entity';
+import { NotificationTargetMode } from '../entities/notification.entity';
 import { User } from '../entities/user.entity';
 
 /** Maps notification type → preference field name */
@@ -47,6 +48,7 @@ export class NotificationDispatchService {
     slug: string,
     variables: Record<string, string> = {},
     data?: Record<string, any>,
+    targetMode?: NotificationTargetMode,
   ): Promise<boolean> {
     // 1. Resolve template — returns null if admin disabled it
     const resolved = await this.templateService.resolve(slug, variables);
@@ -70,6 +72,8 @@ export class NotificationDispatchService {
       resolved.body,
       payload,
       resolved.imageUrl,
+      undefined,
+      targetMode,
     );
   }
 
@@ -85,6 +89,7 @@ export class NotificationDispatchService {
     data?: Record<string, any>,
     imageUrl?: string,
     batchId?: string,
+    targetMode?: NotificationTargetMode,
   ): Promise<boolean> {
     try {
       // 1. Check user preferences
@@ -92,7 +97,7 @@ export class NotificationDispatchService {
 
       if (!prefs.pushEnabled) {
         this.logger.debug(`Push disabled for user ${userId} — saving to inbox only`);
-        await this.saveNotification(userId, type, title, body, data, imageUrl, batchId);
+        await this.saveNotification(userId, type, title, body, data, imageUrl, batchId, targetMode);
         return false;
       }
 
@@ -100,19 +105,19 @@ export class NotificationDispatchService {
       const prefField = TYPE_TO_PREFERENCE[type];
       if (prefField && !prefs[prefField]) {
         this.logger.debug(`${type} notifications disabled for user ${userId} — saving to inbox only`);
-        await this.saveNotification(userId, type, title, body, data, imageUrl, batchId);
+        await this.saveNotification(userId, type, title, body, data, imageUrl, batchId, targetMode);
         return false;
       }
 
       // Check quiet hours
       if (this.isQuietHours(prefs)) {
         this.logger.debug(`Quiet hours active for user ${userId} — saving to inbox only`);
-        await this.saveNotification(userId, type, title, body, data, imageUrl, batchId);
+        await this.saveNotification(userId, type, title, body, data, imageUrl, batchId, targetMode);
         return false;
       }
 
       // 2. Save notification to inbox
-      await this.saveNotification(userId, type, title, body, data, imageUrl, batchId);
+      await this.saveNotification(userId, type, title, body, data, imageUrl, batchId, targetMode);
 
       // 3. Get device tokens and send push
       const tokens = await this.notificationsService.getActiveTokens(userId);
@@ -125,7 +130,7 @@ export class NotificationDispatchService {
         title,
         body,
         imageUrl,
-        data: this.serializeData(type, data),
+        data: this.serializeData(type, data, targetMode),
       };
 
       const tokenStrings = tokens.map((t) => t.token);
@@ -237,6 +242,7 @@ export class NotificationDispatchService {
     data?: Record<string, any>,
     imageUrl?: string,
     batchId?: string,
+    targetMode?: NotificationTargetMode,
   ) {
     return this.notificationsService.createNotification({
       userId,
@@ -247,6 +253,7 @@ export class NotificationDispatchService {
       data: data || null,
       batchId: batchId || null,
       source: batchId ? 'admin' : 'system',
+      targetMode: targetMode || null,
     });
   }
 
@@ -301,9 +308,11 @@ export class NotificationDispatchService {
   private serializeData(
     type: NotificationType,
     data?: Record<string, any>,
+    targetMode?: NotificationTargetMode,
   ): Record<string, string> {
     const serialized: Record<string, string> = { type };
 
+    if (targetMode) serialized.targetMode = targetMode;
     if (data) {
       if (data.route) serialized.route = String(data.route);
       if (data.params) serialized.params = JSON.stringify(data.params);

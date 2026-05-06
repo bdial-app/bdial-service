@@ -8,12 +8,16 @@ import { Repository } from 'typeorm';
 import { Voucher } from '../entities/voucher.entity';
 import { VoucherRedemption } from '../entities/voucher-redemption.entity';
 import { CreateVoucherDto, UpdateVoucherDto } from './dto/voucher.dto';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { Provider } from '../entities';
 
 @Injectable()
 export class VoucherService {
   constructor(
     @InjectRepository(Voucher) private readonly voucherRepo: Repository<Voucher>,
     @InjectRepository(VoucherRedemption) private readonly redemptionRepo: Repository<VoucherRedemption>,
+    @InjectRepository(Provider) private readonly providerRepo: Repository<Provider>,
+    private readonly notificationDispatch: NotificationDispatchService,
   ) {}
 
   async create(dto: CreateVoucherDto, adminUserId: string) {
@@ -37,7 +41,12 @@ export class VoucherService {
       createdBy: adminUserId,
     });
 
-    return this.voucherRepo.save(voucher);
+    const saved = await this.voucherRepo.save(voucher);
+
+    // Notify all active providers about the new voucher
+    this.notifyProvidersOfNewVoucher(saved).catch(() => {});
+
+    return saved;
   }
 
   async findAll(filters: { page?: number; limit?: number; isActive?: boolean }) {
@@ -111,5 +120,28 @@ export class VoucherService {
       totalRedemptions,
       totalDiscountGiven: Number(totalDiscountGiven?.total ?? 0),
     };
+  }
+
+  private async notifyProvidersOfNewVoucher(voucher: Voucher) {
+    const discountLabel = voucher.discountType === 'percentage'
+      ? `${voucher.discountValue}%`
+      : `₹${voucher.discountValue}`;
+    const expiryDate = voucher.validUntil.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+
+    // Get all active providers
+    const providers = await this.providerRepo.find({
+      where: { status: 'active' },
+      select: ['userId'],
+    });
+
+    for (const provider of providers) {
+      this.notificationDispatch.sendTemplated(
+        provider.userId,
+        'voucher_available',
+        { voucherCode: voucher.code, discount: discountLabel, expiryDate },
+        undefined,
+        'provider',
+      ).catch(() => {});
+    }
   }
 }

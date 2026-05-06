@@ -11,6 +11,7 @@ import { JwtService } from '@nestjs/jwt';
 import { User } from '../entities';
 import { SupabaseAuthService } from '../supabase/supabase-auth.service';
 import { OtpService } from '../otp/otp.service';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import {
   SendOtpDto,
   VerifyOtpDto,
@@ -34,6 +35,7 @@ export class AuthService {
     private jwtService: JwtService,
     private supabaseAuth: SupabaseAuthService,
     private otpService: OtpService,
+    private notificationDispatch: NotificationDispatchService,
   ) {}
 
   async sendOtp(dto: SendOtpDto) {
@@ -156,6 +158,9 @@ export class AuthService {
         googleEmail: dto.email, googleName: dto.name, ssoProvider: 'google', gender: 'other',
       });
       user = await this.userRepo.save(user);
+
+      // Send welcome notification for new users
+      this.notificationDispatch.sendTemplated(user.id, 'welcome', { userName: user.name || 'there' }, undefined, 'customer').catch(() => {});
     }
     return this.generateAuthResponse(user);
   }
@@ -315,6 +320,9 @@ export class AuthService {
       throw new BadRequestException({ statusCode: 400, message: 'Failed to create user account in database', error_code: 'DATABASE_ERROR' });
     }
 
+    // Send welcome notification
+    this.notificationDispatch.sendTemplated(user.id, 'welcome', { userName: user.name || 'there' }, undefined, 'customer').catch(() => {});
+
     const token = this.jwtService.sign({ sub: user.id, mobile: user.mobileNumber });
     return {
       step: 'profile_completion', message: 'Phone verified! Complete your profile.', accessToken: token,
@@ -395,6 +403,9 @@ export class AuthService {
     } catch (error) {
       throw new BadRequestException({ statusCode: 400, message: 'Failed to create user in database', error_code: 'DATABASE_ERROR' });
     }
+
+    // Send welcome notification
+    this.notificationDispatch.sendTemplated(user.id, 'welcome', { userName: user.name || 'there' }, undefined, 'customer').catch(() => {});
 
     const token = this.jwtService.sign({ sub: user.id, email: user.email });
     return {

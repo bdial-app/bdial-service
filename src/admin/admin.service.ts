@@ -8,6 +8,7 @@ import { AdminCreateUserDto, AdminCreateProviderWithUserDto } from './dto/admin-
 import { StorageService } from '../storage/storage.service';
 import { OtpService } from '../otp/otp.service';
 import { compressImage, compressImages } from '../common/image-processor';
+import { SupabaseAuthService } from '../supabase/supabase-auth.service';
 
 @Injectable()
 export class AdminService {
@@ -42,6 +43,7 @@ export class AdminService {
     private notificationDispatch: NotificationDispatchService,
     private storageService: StorageService,
     private otpService: OtpService,
+    private supabaseAuthService: SupabaseAuthService,
   ) {}
 
   private assertAdmin(user: any) {
@@ -164,6 +166,9 @@ export class AdminService {
         'Provider Approved!',
         'Congratulations! Your provider profile has been approved and is now live.',
         { route: '/provider-details', params: { id: providerId } },
+        undefined,
+        undefined,
+        'provider',
       ).catch(() => {});
     }
 
@@ -183,6 +188,9 @@ export class AdminService {
         'Provider Profile Suspended',
         'Your provider profile has been suspended. Please contact support for details.',
         { route: '/provider-details', params: { id: providerId } },
+        undefined,
+        undefined,
+        'provider',
       ).catch(() => {});
     }
 
@@ -206,6 +214,9 @@ export class AdminService {
         'Suspension Revoked',
         'Your provider profile suspension has been revoked. Your profile is now active again.',
         { route: '/provider-details', params: { id: providerId } },
+        undefined,
+        undefined,
+        'provider',
       ).catch(() => {});
     }
 
@@ -314,6 +325,9 @@ export class AdminService {
         title,
         body,
         { route: '/provider-onboarding/verify' },
+        undefined,
+        undefined,
+        'provider',
       ).catch(() => {});
     }
 
@@ -338,10 +352,53 @@ export class AdminService {
     });
   }
 
-  async suspendUser(admin: any, userId: string) {
+  async pauseUser(admin: any, userId: string) {
     this.assertAdmin(admin);
-    await this.userRepo.update(userId, { status: 'suspended' });
-    return this.userRepo.findOneBy({ id: userId });
+    const user = await this.userRepo.findOne({ where: { id: userId }, relations: ['provider'] });
+    if (!user) throw new NotFoundException('User not found');
+    if (user.role === 'admin') throw new BadRequestException('Cannot pause admin users');
+    if (user.status === 'paused') throw new BadRequestException('User is already paused');
+    if (user.status === 'deleted') throw new BadRequestException('Cannot pause a deleted user');
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      // 1. Set status to paused
+      await queryRunner.manager.update(User, userId, {
+        status: 'paused',
+        pausedAt: new Date(),
+      });
+
+      // 2. Ban Supabase user (blocks all SSO re-login)
+      if (user.supabaseId) {
+        await this.supabaseAuthService.banUser(user.supabaseId);
+      }
+
+      // 3. Hide provider if exists
+      if (user.provider) {
+        await queryRunner.manager.update(Provider, user.provider.id, {
+          isAvailable: false,
+        });
+      }
+
+      // 4. Deactivate chat participations
+      await queryRunner.manager.update(
+        ConversationParticipant,
+        { userId },
+        { isActive: false },
+      );
+
+      await queryRunner.commitTransaction();
+      await this.createAuditLog(admin.id, 'pause_user', 'user', userId, { status: user.status }, { status: 'paused' }, 'Admin paused user');
+      return { ...user, status: 'paused', pausedAt: new Date() };
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
   }
 
   async updateVerificationStatus(
@@ -547,6 +604,13 @@ export class AdminService {
             await this.providerRepo.update(report.entityId, { status: 'suspended' });
             await this.userRepo.update(provider.userId, { status: 'suspended' });
             await this.createProviderWarning(report.entityId, reportId, admin.id, report.reason, adminNotes, true);
+            // Notify the user about account suspension
+            this.notificationDispatch.sendToUser(
+              provider.userId, 'system_announcement',
+              'Account Suspended',
+              'Your account has been suspended due to a policy violation. Contact support for details.',
+              { route: '/' }, undefined, undefined, 'customer',
+            ).catch(() => {});
           }
         } else if (report.entityType === 'product') {
           const product = await this.providerRepo.manager
@@ -556,6 +620,13 @@ export class AdminService {
             await this.providerRepo.update(product.provider.id, { status: 'suspended' });
             await this.userRepo.update(product.provider.userId, { status: 'suspended' });
             await this.createProviderWarning(product.provider.id, reportId, admin.id, report.reason, adminNotes, true);
+            // Notify the user about account suspension
+            this.notificationDispatch.sendToUser(
+              product.provider.userId, 'system_announcement',
+              'Account Suspended',
+              'Your account has been suspended due to a policy violation. Contact support for details.',
+              { route: '/' }, undefined, undefined, 'customer',
+            ).catch(() => {});
           }
         }
         break;
@@ -2309,6 +2380,9 @@ export class AdminService {
       provider.userId, 'provider_status', 'Provider Profile Removed',
       'Your provider profile has been removed. Contact support if you believe this is an error.',
       { route: '/' },
+      undefined,
+      undefined,
+      'provider',
     ).catch(() => {});
 
     return { message: 'Provider soft-deleted', id: providerId };
@@ -2442,16 +2516,51 @@ export class AdminService {
   // User Lifecycle (Unsuspend / Delete)
   // ============================================
 
-  async unsuspendUser(admin: any, userId: string) {
+  async unpauseUser(admin: any, userId: string) {
     this.assertAdmin(admin);
-    const user = await this.userRepo.findOneBy({ id: userId });
+    const user = await this.userRepo.findOne({ where: { id: userId }, relations: ['provider'] });
     if (!user) throw new NotFoundException('User not found');
-    if (user.status !== 'suspended') throw new BadRequestException('User is not suspended');
+    if (user.status !== 'paused') throw new BadRequestException('User is not paused');
 
-    await this.userRepo.update(userId, { status: 'active' });
-    await this.createAuditLog(admin.id, 'unsuspend_user', 'user', userId, { status: 'suspended' }, { status: 'active' });
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
 
-    return { ...user, status: 'active' };
+    try {
+      // 1. Restore status to active
+      await queryRunner.manager.update(User, userId, {
+        status: 'active',
+        pausedAt: null,
+      });
+
+      // 2. Unban Supabase user
+      if (user.supabaseId) {
+        await this.supabaseAuthService.unbanUser(user.supabaseId);
+      }
+
+      // 3. Restore provider visibility if exists
+      if (user.provider) {
+        await queryRunner.manager.update(Provider, user.provider.id, {
+          isAvailable: true,
+        });
+      }
+
+      // 4. Reactivate chat participations
+      await queryRunner.manager.update(
+        ConversationParticipant,
+        { userId },
+        { isActive: true },
+      );
+
+      await queryRunner.commitTransaction();
+      await this.createAuditLog(admin.id, 'unpause_user', 'user', userId, { status: 'paused' }, { status: 'active' }, 'Admin unpaused user');
+      return { ...user, status: 'active', pausedAt: null };
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
   }
 
   async softDeleteUser(admin: any, userId: string) {
@@ -2587,7 +2696,7 @@ export class AdminService {
         const body = action === 'approve'
           ? 'Your provider profile has been approved and is now live.'
           : 'Your provider profile has been suspended. Contact support for details.';
-        this.notificationDispatch.sendToUser(provider.userId, 'provider_status', title, body, { route: '/provider-details', params: { id: provider.id } }).catch(() => {});
+        this.notificationDispatch.sendToUser(provider.userId, 'provider_status', title, body, { route: '/provider-details', params: { id: provider.id } }, undefined, undefined, 'provider').catch(() => {});
       }
     }
 
@@ -2602,6 +2711,25 @@ export class AdminService {
     const newStatus = action === 'suspend' ? 'suspended' : 'active';
     const result = await this.userRepo.update(ids.map(id => id), { status: newStatus });
     await this.createAuditLog(admin.id, `bulk_${action}_users`, 'user', null, { ids }, { status: newStatus, count: result.affected }, `Bulk ${action} on ${ids.length} users`);
+
+    // Notify affected users
+    for (const userId of ids) {
+      if (action === 'suspend') {
+        this.notificationDispatch.sendToUser(
+          userId, 'system_announcement',
+          'Account Suspended',
+          'Your account has been suspended. Please contact support for details.',
+          { route: '/' }, undefined, undefined, 'customer',
+        ).catch(() => {});
+      } else {
+        this.notificationDispatch.sendToUser(
+          userId, 'system_announcement',
+          'Account Restored',
+          'Your account has been restored. You can now use all features again.',
+          { route: '/' }, undefined, undefined, 'customer',
+        ).catch(() => {});
+      }
+    }
 
     return { message: `Bulk ${action} completed`, affected: result.affected };
   }
@@ -2670,7 +2798,7 @@ export class AdminService {
     await this.createAuditLog(admin.id, 'reject_sponsorship', 'sponsored_listing', id, { approvalStatus: listing.approvalStatus }, { approvalStatus: 'rejected', adminNotes });
 
     if (listing.provider) {
-      this.notificationDispatch.sendToUser(listing.provider.userId, 'provider_status', 'Sponsorship Not Approved', adminNotes || 'Your sponsorship request was not approved. Please review and resubmit.', { route: '/' }).catch(() => {});
+      this.notificationDispatch.sendToUser(listing.provider.userId, 'provider_status', 'Sponsorship Not Approved', adminNotes || 'Your sponsorship request was not approved. Please review and resubmit.', { route: '/' }, undefined, undefined, 'provider').catch(() => {});
     }
 
     return { ...listing, approvalStatus: 'rejected', isActive: false };
@@ -2722,7 +2850,7 @@ export class AdminService {
     await this.createAuditLog(admin.id, 'reject_offer', 'provider_offer', id, { approvalStatus: offer.approvalStatus }, { approvalStatus: 'rejected', adminNotes });
 
     if (offer.provider) {
-      this.notificationDispatch.sendToUser(offer.provider.userId, 'provider_status', 'Offer Not Approved', adminNotes || `Your offer "${offer.title}" was not approved.`, { route: '/' }).catch(() => {});
+      this.notificationDispatch.sendToUser(offer.provider.userId, 'provider_status', 'Offer Not Approved', adminNotes || `Your offer "${offer.title}" was not approved.`, { route: '/' }, undefined, undefined, 'provider').catch(() => {});
     }
 
     return { ...offer, approvalStatus: 'rejected', isActive: false };

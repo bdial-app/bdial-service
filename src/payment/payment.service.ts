@@ -842,6 +842,20 @@ export class PaymentService {
 
     // Increment usage count
     await this.voucherRepo.increment({ id: payment.voucherId }, 'usedCount', 1);
+
+    // Send voucher_redeemed notification to the provider
+    const voucher = await this.voucherRepo.findOneBy({ id: payment.voucherId });
+    const provider = await this.providerRepo.findOneBy({ id: payment.providerId });
+    if (voucher && provider) {
+      const discount = payment.discountAmount ? `₹${payment.discountAmount}` : 'a discount';
+      this.notificationDispatch.sendTemplated(
+        provider.userId,
+        'voucher_redeemed',
+        { voucherCode: voucher.code, discount },
+        undefined,
+        'provider',
+      ).catch(() => {});
+    }
   }
 
   // ──────────────────────────────────────────

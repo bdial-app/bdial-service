@@ -67,6 +67,9 @@ export class ReviewsService {
         'New Review Received',
         `You received a ${dto.starRating}-star review${dto.reviewText ? ': ' + dto.reviewText.substring(0, 80) : ''}`,
         { route: '/provider-details', params: { id: dto.providerId, tab: 'reviews' } },
+        undefined,
+        undefined,
+        'provider',
       ).catch(() => {}); // Fire-and-forget
     }
 

@@ -130,10 +130,10 @@ export class AdminController {
     return this.adminService.removeReview(req.user, id);
   }
 
-  @Patch('users/:id/suspend')
-  @ApiOperation({ summary: 'Suspend a user' })
-  suspendUser(@Param('id') id: string, @Request() req) {
-    return this.adminService.suspendUser(req.user, id);
+  @Patch('users/:id/pause')
+  @ApiOperation({ summary: 'Pause a user (blocks login, hides provider, deactivates chats)' })
+  pauseUser(@Param('id') id: string, @Request() req) {
+    return this.adminService.pauseUser(req.user, id);
   }
 
   // ============================================
@@ -961,11 +961,11 @@ export class AdminController {
   // User Lifecycle (Unsuspend / Delete)
   // ============================================
 
-  @Patch('users/:id/unsuspend')
-  @ApiOperation({ summary: 'Unsuspend a user' })
+  @Patch('users/:id/unpause')
+  @ApiOperation({ summary: 'Unpause a user (restores login, provider, chats)' })
   @ApiParam({ name: 'id', description: 'User ID' })
-  unsuspendUser(@Param('id') id: string, @Request() req) {
-    return this.adminService.unsuspendUser(req.user, id);
+  unpauseUser(@Param('id') id: string, @Request() req) {
+    return this.adminService.unpauseUser(req.user, id);
   }
 
   @Delete('users/:id')

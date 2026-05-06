@@ -100,7 +100,7 @@ export class NotificationsService {
   // ──────────────────────────────────────────────
 
   async getNotifications(userId: string, query: GetNotificationsQueryDto) {
-    const { page = 1, limit = 20, type, status = 'all' } = query;
+    const { page = 1, limit = 20, type, status = 'all', targetMode } = query;
     const qb = this.notificationRepo
       .createQueryBuilder('n')
       .where('n.user_id = :userId', { userId })
@@ -113,6 +113,9 @@ export class NotificationsService {
       qb.andWhere('n.is_read = true');
     } else if (status === 'unread') {
       qb.andWhere('n.is_read = false');
+    }
+    if (targetMode) {
+      qb.andWhere('n.target_mode = :targetMode', { targetMode });
     }
 
     const total = await qb.getCount();
@@ -132,10 +135,17 @@ export class NotificationsService {
     };
   }
 
-  async getUnreadCount(userId: string): Promise<{ count: number }> {
-    const count = await this.notificationRepo.count({
-      where: { userId, isRead: false },
-    });
+  async getUnreadCount(userId: string, targetMode?: 'customer' | 'provider'): Promise<{ count: number }> {
+    const qb = this.notificationRepo
+      .createQueryBuilder('n')
+      .where('n.user_id = :userId', { userId })
+      .andWhere('n.is_read = false');
+
+    if (targetMode) {
+      qb.andWhere('n.target_mode = :targetMode', { targetMode });
+    }
+
+    const count = await qb.getCount();
     return { count };
   }
 

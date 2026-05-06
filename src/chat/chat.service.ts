@@ -464,6 +464,9 @@ export class ChatService {
           sender.name,
           preview,
           { route: '/chat', params: { conversationId } },
+          undefined,
+          undefined,
+          op.role as 'customer' | 'provider',
         ).catch((err) => this.logger.warn(`Push notification failed for user ${op.userId}: ${err.message}`));
       }
     }
