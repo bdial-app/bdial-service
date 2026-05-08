@@ -20,7 +20,7 @@ import { User } from '../entities';
     JwtModule.registerAsync({
       useFactory: (configService: ConfigService) => ({
         secret: configService.get<string>('JWT_SECRET') || 'bohri-connect-secret',
-        signOptions: { expiresIn: '30d' },
+        signOptions: { expiresIn: '365d' },
       }),
       inject: [ConfigService],
     }),
