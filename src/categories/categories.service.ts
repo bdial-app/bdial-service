@@ -1,6 +1,7 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Inject } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
+import { CACHE_MANAGER, Cache } from '@nestjs/cache-manager';
 import { Category } from '../entities';
 import { StorageService } from '../storage/storage.service';
 import { PaginationDto } from './dto/pagination.dto';
@@ -19,9 +20,13 @@ const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
 
 @Injectable()
 export class CategoriesService {
+  private static readonly TOP_LEVEL_CACHE_KEY = 'categories:top-level';
+  private static readonly TOP_LEVEL_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
   constructor(
     @InjectRepository(Category) private categoryRepo: Repository<Category>,
     private storageService: StorageService,
+    @Inject(CACHE_MANAGER) private cacheManager: Cache,
   ) {}
 
   async findAll(paginationDto: PaginationDto) {
@@ -61,47 +66,38 @@ export class CategoriesService {
   }
 
   async findTopLevel() {
-    // Only return categories that have at least 1 active provider, sorted by provider count
-    const raw = await this.categoryRepo
-      .createQueryBuilder('c')
-      .select([
-        'c.id AS id',
-        'c.name AS name',
-        'c.slug AS slug',
-        'c.description AS description',
-        'c.icon AS icon',
-        'c.image_url AS "imageUrl"',
-        'c.is_active AS "isActive"',
-        'c.display_order AS "displayOrder"',
-        'c.parent_id AS "parentId"',
-      ])
-      .addSelect(
-        `COALESCE((
-          SELECT COUNT(DISTINCT pc.provider_id)::int
-          FROM provider_categories pc
-          JOIN providers p ON p.id = pc.provider_id AND p.status IN ('active', 'unverified')
-          WHERE pc.category_id = c.id
-             OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id = c.id)
-        ), 0)`,
-        'providerCount',
-      )
-      .where('c.parent_id IS NULL')
-      .andWhere('c.is_active = true')
-      .having(
-        `COALESCE((
-          SELECT COUNT(DISTINCT pc.provider_id)::int
-          FROM provider_categories pc
-          JOIN providers p ON p.id = pc.provider_id AND p.status IN ('active', 'unverified')
-          WHERE pc.category_id = c.id
-             OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id = c.id)
-        ), 0) > 0`,
-      )
-      .groupBy('c.id')
-      .orderBy('"providerCount"', 'DESC')
-      .addOrderBy('c.display_order', 'ASC')
-      .getRawMany();
+    // Check cache first
+    const cached = await this.cacheManager.get<any[]>(CategoriesService.TOP_LEVEL_CACHE_KEY);
+    if (cached) return cached;
 
-    return raw.map((r: any) => ({
+    // Single raw SQL — avoids the duplicate correlated subquery
+    const raw: any[] = await this.categoryRepo.query(`
+      SELECT
+        c.id,
+        c.name,
+        c.slug,
+        c.description,
+        c.icon,
+        c.image_url   AS "imageUrl",
+        c.is_active    AS "isActive",
+        c.display_order AS "displayOrder",
+        c.parent_id    AS "parentId",
+        COALESCE(cnt.provider_count, 0)::int AS "providerCount"
+      FROM categories c
+      LEFT JOIN LATERAL (
+        SELECT COUNT(DISTINCT pc.provider_id) AS provider_count
+        FROM provider_categories pc
+        JOIN providers p ON p.id = pc.provider_id AND p.status IN ('active', 'unverified')
+        WHERE pc.category_id = c.id
+           OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id = c.id)
+      ) cnt ON true
+      WHERE c.parent_id IS NULL
+        AND c.is_active = true
+        AND COALESCE(cnt.provider_count, 0) > 0
+      ORDER BY cnt.provider_count DESC, c.display_order ASC
+    `);
+
+    const result = raw.map((r) => ({
       id: r.id,
       name: r.name,
       slug: r.slug,
@@ -113,6 +109,14 @@ export class CategoriesService {
       parentId: r.parentId,
       providerCount: parseInt(r.providerCount, 10) || 0,
     }));
+
+    await this.cacheManager.set(
+      CategoriesService.TOP_LEVEL_CACHE_KEY,
+      result,
+      CategoriesService.TOP_LEVEL_CACHE_TTL,
+    );
+
+    return result;
   }
 
   async findTree(): Promise<any[]> {
@@ -151,9 +155,11 @@ export class CategoriesService {
     return roots;
   }
 
-  create(data: any) {
+  async create(data: any) {
     const entity = this.categoryRepo.create({ ...data, slug: slugify(data.name) });
-    return this.categoryRepo.save(entity);
+    const saved = await this.categoryRepo.save(entity);
+    await this.cacheManager.del(CategoriesService.TOP_LEVEL_CACHE_KEY);
+    return saved;
   }
 
   async update(id: string, data: any) {
@@ -162,6 +168,7 @@ export class CategoriesService {
     }
     if (data.name) data.slug = slugify(data.name);
     await this.categoryRepo.update(id, data);
+    await this.cacheManager.del(CategoriesService.TOP_LEVEL_CACHE_KEY);
     return this.categoryRepo.findOneBy({ id });
   }
 
