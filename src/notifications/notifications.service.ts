@@ -171,13 +171,18 @@ export class NotificationsService {
     }
   }
 
-  async markAllAsRead(userId: string): Promise<{ updated: number }> {
-    const result = await this.notificationRepo
+  async markAllAsRead(userId: string, targetMode?: 'customer' | 'provider'): Promise<{ updated: number }> {
+    const qb = this.notificationRepo
       .createQueryBuilder()
       .update()
       .set({ isRead: true, readAt: new Date() })
-      .where('user_id = :userId AND is_read = false', { userId })
-      .execute();
+      .where('user_id = :userId AND is_read = false', { userId });
+
+    if (targetMode) {
+      qb.andWhere('target_mode = :targetMode', { targetMode });
+    }
+
+    const result = await qb.execute();
     return { updated: result.affected || 0 };
   }
 
