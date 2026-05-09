@@ -35,7 +35,7 @@ async function bootstrap() {
   app.use(compression());
 
   // Body parsers — only for JSON/urlencoded; multipart is handled by Multer
-  // The verify callback stores rawBody for Stripe webhook signature verification
+  // The verify callback stores rawBody for Razorpay webhook signature verification
   app.use(json({
     limit: '5mb',
     verify: (req: any, _res, buf) => { req.rawBody = buf; },

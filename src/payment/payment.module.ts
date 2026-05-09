@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { StripeProvider } from './stripe.provider';
+import { RazorpayProvider } from './razorpay.provider';
 import { PaymentService } from './payment.service';
 import { PaymentController } from './payment.controller';
 import { AdminPaymentController } from './admin-payment.controller';
@@ -34,7 +34,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     NotificationsModule,
   ],
   controllers: [PaymentController, AdminPaymentController, PaymentWebhookController],
-  providers: [StripeProvider, PaymentService],
+  providers: [RazorpayProvider, PaymentService],
   exports: [PaymentService],
 })
 export class PaymentModule {}

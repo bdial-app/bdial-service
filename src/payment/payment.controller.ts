@@ -27,8 +27,8 @@ export class PaymentController {
   // ─── Sponsorship ────────────────────────
 
   @Post('sponsorship/checkout')
-  @ApiOperation({ summary: 'Create a Stripe Checkout session for sponsorship purchase' })
-  @ApiResponse({ status: 201, description: 'Checkout session created' })
+  @ApiOperation({ summary: 'Create a Razorpay Order for sponsorship purchase' })
+  @ApiResponse({ status: 201, description: 'Order created' })
   createSponsorshipCheckout(@Request() req, @Body() dto: CreateSponsorshipCheckoutDto) {
     return this.paymentService.createSponsorshipCheckout(req.user.id, dto);
   }
@@ -36,8 +36,8 @@ export class PaymentController {
   // ─── Lead Unlock ────────────────────────
 
   @Post('lead-unlock/checkout')
-  @ApiOperation({ summary: 'Unlock a lead — uses subscription credits or creates Stripe Checkout' })
-  @ApiResponse({ status: 201, description: 'Lead unlocked or checkout session created' })
+  @ApiOperation({ summary: 'Unlock a lead — uses subscription credits or creates Razorpay Order' })
+  @ApiResponse({ status: 201, description: 'Lead unlocked or order created' })
   createLeadUnlockCheckout(@Request() req, @Body() dto: CreateLeadUnlockCheckoutDto) {
     return this.paymentService.createLeadUnlockCheckout(req.user.id, dto);
   }
@@ -51,8 +51,8 @@ export class PaymentController {
   // ─── Deal Creation ─────────────────────
 
   @Post('deal-creation/checkout')
-  @ApiOperation({ summary: 'Check deal creation eligibility or create Stripe Checkout for paid deal' })
-  @ApiResponse({ status: 201, description: 'Deal creation allowed or checkout session created' })
+  @ApiOperation({ summary: 'Check deal creation eligibility or create Razorpay Order for paid deal' })
+  @ApiResponse({ status: 201, description: 'Deal creation allowed or order created' })
   createDealCreationCheckout(@Request() req, @Body() dto: CreateDealCreationCheckoutDto) {
     return this.paymentService.createDealCreationCheckout(req.user.id, dto);
   }
@@ -72,7 +72,7 @@ export class PaymentController {
   }
 
   @Post('subscriptions/checkout')
-  @ApiOperation({ summary: 'Create a Stripe Checkout session for subscription' })
+  @ApiOperation({ summary: 'Create a Razorpay Subscription for a plan' })
   createSubscriptionCheckout(@Request() req, @Body() dto: CreateSubscriptionCheckoutDto) {
     return this.paymentService.createSubscriptionCheckout(req.user.id, dto);
   }
@@ -95,10 +95,39 @@ export class PaymentController {
     return this.paymentService.resumeSubscription(req.user.id);
   }
 
-  @Get('subscriptions/portal')
-  @ApiOperation({ summary: 'Get Stripe Customer Portal URL for billing management' })
-  getCustomerPortal(@Request() req) {
-    return this.paymentService.getCustomerPortalUrl(req.user.id);
+  // ─── Payment Verification ──────────────
+
+  @Post('verify/razorpay')
+  @ApiOperation({ summary: 'Verify Razorpay payment signature and fulfill the order' })
+  verifyRazorpayPayment(@Body() body: {
+    razorpay_order_id: string;
+    razorpay_payment_id: string;
+    razorpay_signature: string;
+  }) {
+    return this.paymentService.verifyRazorpayPayment(body);
+  }
+
+  @Post('verify/razorpay-subscription')
+  @ApiOperation({ summary: 'Verify Razorpay subscription signature and activate subscription' })
+  verifyRazorpaySubscription(@Body() body: {
+    razorpay_subscription_id: string;
+    razorpay_payment_id: string;
+    razorpay_signature: string;
+    planId: string;
+    providerId: string;
+    billingInterval: 'monthly' | 'yearly';
+  }) {
+    return this.paymentService.verifyRazorpaySubscription(body);
+  }
+
+  @Post('verify/apple')
+  @ApiOperation({ summary: 'Verify Apple IAP receipt and activate subscription' })
+  verifyAppleReceipt(@Request() req, @Body() body: {
+    transactionId: string;
+    originalTransactionId: string;
+    productId: string;
+  }) {
+    return this.paymentService.verifyAppleReceipt(req.user.id, body);
   }
 
   // ─── Voucher Validation ─────────────────
@@ -121,14 +150,5 @@ export class PaymentController {
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
   ) {
     return this.paymentService.getPaymentHistory(req.user.id, page, limit);
-  }
-
-  // ─── Payment Confirmation ──────────────
-
-  @Get('confirm')
-  @ApiOperation({ summary: 'Confirm a checkout session and fulfill if paid (handles redirect-before-webhook race)' })
-  @ApiQuery({ name: 'session_id', required: true })
-  confirmPayment(@Request() req, @Query('session_id') sessionId: string) {
-    return this.paymentService.confirmCheckoutSession(req.user.id, sessionId);
   }
 }

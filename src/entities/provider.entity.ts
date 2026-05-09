@@ -95,8 +95,8 @@ export class Provider {
   @Column({ type: 'text', array: true, nullable: true, default: null })
   keywords: string[] | null;
 
-  @Column({ name: 'stripe_customer_id', type: 'varchar', length: 255, nullable: true })
-  stripeCustomerId: string | null;
+  @Column({ name: 'gateway_customer_id', type: 'varchar', length: 255, nullable: true })
+  gatewayCustomerId: string | null;
 
   @Column({ name: 'free_leads_used_this_month', type: 'int', default: 0 })
   freeLeadsUsedThisMonth: number;

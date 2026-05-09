@@ -3,9 +3,10 @@ import {
   Post,
   Headers,
   Req,
+  Body,
   HttpCode,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiExcludeEndpoint } from '@nestjs/swagger';
+import { ApiTags, ApiExcludeEndpoint } from '@nestjs/swagger';
 import { Public } from '../common/decorators/public.decorator';
 import { PaymentService } from './payment.service';
 
@@ -14,14 +15,22 @@ import { PaymentService } from './payment.service';
 export class PaymentWebhookController {
   constructor(private readonly paymentService: PaymentService) {}
 
-  @Post('webhook')
+  @Post('webhook/razorpay')
   @Public()
   @HttpCode(200)
   @ApiExcludeEndpoint()
-  async handleStripeWebhook(
-    @Headers('stripe-signature') signature: string,
+  async handleRazorpayWebhook(
+    @Headers('x-razorpay-signature') signature: string,
     @Req() req: any,
   ) {
-    return this.paymentService.handleWebhook(signature, req.rawBody);
+    return this.paymentService.handleRazorpayWebhook(signature, req.rawBody);
+  }
+
+  @Post('webhook/apple')
+  @Public()
+  @HttpCode(200)
+  @ApiExcludeEndpoint()
+  async handleAppleWebhook(@Body() body: any) {
+    return this.paymentService.handleAppleWebhook(body);
   }
 }

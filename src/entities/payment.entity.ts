@@ -12,11 +12,12 @@ import { Provider } from './provider.entity';
 
 export type PaymentStatus = 'pending' | 'processing' | 'succeeded' | 'failed' | 'refunded';
 export type PaymentType = 'sponsorship' | 'lead_unlock' | 'badge' | 'subscription' | 'deal_unlock' | 'deal_creation';
+export type PaymentGateway = 'razorpay' | 'apple';
 
 @Entity('payments')
 @Index(['providerId', 'status'])
-@Index(['stripePaymentIntentId'])
-@Index(['stripeCheckoutSessionId'])
+@Index(['gatewayPaymentId'])
+@Index(['gatewayOrderId'])
 export class Payment {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -24,11 +25,19 @@ export class Payment {
   @Column({ name: 'provider_id', type: 'uuid' })
   providerId: string;
 
-  @Column({ name: 'stripe_payment_intent_id', type: 'varchar', length: 255, nullable: true, unique: true })
-  stripePaymentIntentId: string | null;
+  @Column({
+    name: 'payment_gateway',
+    type: 'varchar',
+    length: 20,
+    default: 'razorpay',
+  })
+  paymentGateway: PaymentGateway;
 
-  @Column({ name: 'stripe_checkout_session_id', type: 'varchar', length: 255, nullable: true, unique: true })
-  stripeCheckoutSessionId: string | null;
+  @Column({ name: 'gateway_order_id', type: 'varchar', length: 255, nullable: true })
+  gatewayOrderId: string | null;
+
+  @Column({ name: 'gateway_payment_id', type: 'varchar', length: 255, nullable: true })
+  gatewayPaymentId: string | null;
 
   @Column({ type: 'decimal', precision: 10, scale: 2 })
   amount: number;
@@ -58,8 +67,8 @@ export class Payment {
   @Column({ name: 'discount_amount', type: 'decimal', precision: 10, scale: 2, default: 0 })
   discountAmount: number;
 
-  @Column({ name: 'stripe_receipt_url', type: 'text', nullable: true })
-  stripeReceiptUrl: string | null;
+  @Column({ name: 'receipt_url', type: 'text', nullable: true })
+  receiptUrl: string | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

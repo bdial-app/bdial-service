@@ -12,10 +12,11 @@ import { Provider } from './provider.entity';
 import { SubscriptionPlan } from './subscription-plan.entity';
 
 export type SubscriptionStatus = 'active' | 'past_due' | 'canceled' | 'trialing' | 'paused';
+export type SubscriptionGateway = 'razorpay' | 'apple';
 
 @Entity('subscriptions')
 @Index(['providerId'], { unique: true })
-@Index(['stripeSubscriptionId'])
+@Index(['gatewaySubscriptionId'])
 export class Subscription {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -26,11 +27,19 @@ export class Subscription {
   @Column({ name: 'plan_id', type: 'uuid' })
   planId: string;
 
-  @Column({ name: 'stripe_subscription_id', type: 'varchar', length: 255, unique: true })
-  stripeSubscriptionId: string;
+  @Column({
+    name: 'payment_gateway',
+    type: 'varchar',
+    length: 20,
+    default: 'razorpay',
+  })
+  paymentGateway: SubscriptionGateway;
 
-  @Column({ name: 'stripe_customer_id', type: 'varchar', length: 255 })
-  stripeCustomerId: string;
+  @Column({ name: 'gateway_subscription_id', type: 'varchar', length: 255, unique: true })
+  gatewaySubscriptionId: string;
+
+  @Column({ name: 'gateway_customer_id', type: 'varchar', length: 255, nullable: true })
+  gatewayCustomerId: string | null;
 
   @Column({
     type: 'enum',
