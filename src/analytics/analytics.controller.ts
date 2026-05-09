@@ -68,7 +68,20 @@ export class AnalyticsController {
   @ApiOperation({ summary: 'Get leads list for the authenticated provider' })
   @ApiResponse({ status: 200, description: 'Leads retrieved' })
   getLeads(@Request() req, @Query() dto: LeadsQueryDto) {
-    return this.analyticsService.getLeads(req.user.id, dto.tier, dto.page, dto.limit);
+    return this.analyticsService.getLeads(req.user.id, {
+      tier: dto.tier,
+      page: dto.page,
+      limit: dto.limit,
+      status: dto.status,
+      source: dto.source,
+      dateFrom: dto.dateFrom,
+      dateTo: dto.dateTo,
+      minScore: dto.minScore,
+      maxScore: dto.maxScore,
+      sortBy: dto.sortBy,
+      sortOrder: dto.sortOrder,
+      search: dto.search,
+    });
   }
 
   @Get('leads/:id')
@@ -88,6 +101,17 @@ export class AnalyticsController {
   @ApiResponse({ status: 200, description: 'Lead unlocked' })
   unlockLead(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
     return this.analyticsService.unlockLead(req.user.id, id);
+  }
+
+  // ─── Visitor Insights ─────────────────────────────────────────────
+
+  @Get('visitor-insights')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @ApiOperation({ summary: 'Get aggregate visitor insights (anonymous + registered)' })
+  @ApiResponse({ status: 200, description: 'Visitor insights retrieved' })
+  getVisitorInsights(@Request() req, @Query() dto: AnalyticsSummaryDto) {
+    return this.analyticsService.getVisitorInsights(req.user.id, dto.period);
   }
 
   // ─── Product Performance ──────────────────────────────────────────

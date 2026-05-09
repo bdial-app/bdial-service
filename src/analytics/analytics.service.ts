@@ -339,7 +339,25 @@ export class AnalyticsService {
 
   // ─── Leads List ───────────────────────────────────────────────────
 
-  async getLeads(userId: string, tier?: string, page = 1, limit = 20) {
+  async getLeads(
+    userId: string,
+    filters: {
+      tier?: string;
+      page?: number;
+      limit?: number;
+      status?: 'unlocked' | 'locked';
+      source?: string;
+      dateFrom?: string;
+      dateTo?: string;
+      minScore?: number;
+      maxScore?: number;
+      sortBy?: 'score' | 'lastSeen' | 'firstSeen' | 'duration';
+      sortOrder?: 'ASC' | 'DESC';
+      search?: string;
+    } = {},
+  ) {
+    const { tier, page = 1, limit = 20, status, source, dateFrom, dateTo, minScore, maxScore, sortBy = 'score', sortOrder = 'DESC', search } = filters;
+
     const provider = await this.providerRepo.findOneBy({ userId });
     if (!provider) throw new NotFoundException('Provider not found');
 
@@ -350,12 +368,24 @@ export class AnalyticsService {
       .createQueryBuilder('l')
       .leftJoinAndSelect('l.user', 'u')
       .where('l.providerId = :pid', { pid: provider.id })
-      .orderBy('l.score', 'DESC')
-      .addOrderBy('l.lastSeenAt', 'DESC')
-      .skip((page - 1) * limit)
-      .take(limit);
+      .andWhere('l.userId IS NOT NULL');
 
     if (tier) qb.andWhere('l.tier = :tier', { tier });
+    if (status === 'unlocked') qb.andWhere('l.isUnlocked = true');
+    if (status === 'locked') qb.andWhere('l.isUnlocked = false');
+    if (source) qb.andWhere('l.source = :source', { source });
+    if (dateFrom) qb.andWhere('l.lastSeenAt >= :dateFrom', { dateFrom: new Date(dateFrom) });
+    if (dateTo) qb.andWhere('l.lastSeenAt <= :dateTo', { dateTo: new Date(dateTo) });
+    if (minScore !== undefined) qb.andWhere('l.score >= :minScore', { minScore });
+    if (maxScore !== undefined) qb.andWhere('l.score <= :maxScore', { maxScore });
+    if (search) qb.andWhere('u.name ILIKE :search', { search: `%${search}%` });
+
+    // Sorting
+    const sortColumn = sortBy === 'lastSeen' ? 'l.lastSeenAt' : sortBy === 'firstSeen' ? 'l.firstSeenAt' : sortBy === 'duration' ? 'l.totalDuration' : 'l.score';
+    qb.orderBy(sortColumn, sortOrder);
+    if (sortBy !== 'lastSeen') qb.addOrderBy('l.lastSeenAt', 'DESC');
+
+    qb.skip((page - 1) * limit).take(limit);
 
     const [leads, total] = await qb.getManyAndCount();
 
@@ -411,6 +441,142 @@ export class AnalyticsService {
         createdAt: e.createdAt,
       })),
       products: productIds.map((id) => ({ id, name: productNames[id] || 'Unknown' })),
+    };
+  }
+
+  // ─── Visitor Insights (aggregate anon + registered) ───────────────
+
+  async getVisitorInsights(userId: string, period: '7d' | '30d' | '90d' = '30d') {
+    const provider = await this.providerRepo.findOneBy({ userId });
+    if (!provider) throw new NotFoundException('Provider not found');
+
+    const days = period === '7d' ? 7 : period === '30d' ? 30 : 90;
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+
+    // Total visitors: anon vs registered
+    const visitorBreakdown = await this.leadRepo
+      .createQueryBuilder('l')
+      .select("CASE WHEN l.user_id IS NULL THEN 'anonymous' ELSE 'registered' END", 'type')
+      .addSelect('COUNT(*)::int', 'count')
+      .where('l.provider_id = :pid AND l.last_seen_at >= :since', { pid: provider.id, since })
+      .groupBy("CASE WHEN l.user_id IS NULL THEN 'anonymous' ELSE 'registered' END")
+      .getRawMany();
+
+    const anonymousCount = parseInt(visitorBreakdown.find((v) => v.type === 'anonymous')?.count || '0', 10);
+    const registeredCount = parseInt(visitorBreakdown.find((v) => v.type === 'registered')?.count || '0', 10);
+    const totalVisitors = anonymousCount + registeredCount;
+
+    // Avg engagement: score & duration by type
+    const avgEngagement = await this.leadRepo
+      .createQueryBuilder('l')
+      .select("CASE WHEN l.user_id IS NULL THEN 'anonymous' ELSE 'registered' END", 'type')
+      .addSelect('ROUND(AVG(l.score))::int', 'avgScore')
+      .addSelect('ROUND(AVG(l.total_duration))::int', 'avgDuration')
+      .addSelect('ROUND(AVG(array_length(l.products_viewed, 1)))::int', 'avgProducts')
+      .where('l.provider_id = :pid AND l.last_seen_at >= :since', { pid: provider.id, since })
+      .groupBy("CASE WHEN l.user_id IS NULL THEN 'anonymous' ELSE 'registered' END")
+      .getRawMany();
+
+    const anonStats = avgEngagement.find((v) => v.type === 'anonymous');
+    const regStats = avgEngagement.find((v) => v.type === 'registered');
+
+    // Top search queries from all visitors
+    const topSearches = await this.leadRepo
+      .createQueryBuilder('l')
+      .select('l.search_query', 'query')
+      .addSelect('COUNT(*)::int', 'count')
+      .where('l.provider_id = :pid AND l.last_seen_at >= :since AND l.search_query IS NOT NULL', {
+        pid: provider.id,
+        since,
+      })
+      .groupBy('l.search_query')
+      .orderBy('count', 'DESC')
+      .limit(8)
+      .getRawMany();
+
+    // Top sources
+    const topSources = await this.leadRepo
+      .createQueryBuilder('l')
+      .select('l.source', 'source')
+      .addSelect('COUNT(*)::int', 'count')
+      .where('l.provider_id = :pid AND l.last_seen_at >= :since AND l.source IS NOT NULL', {
+        pid: provider.id,
+        since,
+      })
+      .groupBy('l.source')
+      .orderBy('count', 'DESC')
+      .limit(6)
+      .getRawMany();
+
+    // Most viewed products across all visitors
+    const topViewedProducts = await this.eventRepo
+      .createQueryBuilder('e')
+      .select('e.entity_id', 'productId')
+      .addSelect('COUNT(*)::int', 'views')
+      .addSelect('COUNT(DISTINCT COALESCE(e.user_id::text, e.session_id))::int', 'uniqueVisitors')
+      .where(
+        "e.provider_id = :pid AND e.created_at >= :since AND e.event_type = 'product_view' AND e.entity_id IS NOT NULL",
+        { pid: provider.id, since },
+      )
+      .groupBy('e.entity_id')
+      .orderBy('views', 'DESC')
+      .limit(5)
+      .getRawMany();
+
+    // Enrich product names
+    const productIds = topViewedProducts.map((p) => p.productId).filter(Boolean);
+    let productNames: Record<string, string> = {};
+    if (productIds.length > 0) {
+      const products = await this.productRepo
+        .createQueryBuilder('p')
+        .select(['p.id', 'p.name'])
+        .where('p.id IN (:...ids)', { ids: productIds })
+        .getMany();
+      products.forEach((p) => (productNames[p.id] = p.name));
+    }
+
+    // Tier distribution for anonymous visitors
+    const anonTiers = await this.leadRepo
+      .createQueryBuilder('l')
+      .select('l.tier', 'tier')
+      .addSelect('COUNT(*)::int', 'count')
+      .where('l.provider_id = :pid AND l.last_seen_at >= :since AND l.user_id IS NULL', {
+        pid: provider.id,
+        since,
+      })
+      .groupBy('l.tier')
+      .getRawMany();
+
+    const anonTierMap: Record<string, number> = { hot: 0, warm: 0, soft: 0, cold: 0 };
+    anonTiers.forEach((r) => (anonTierMap[r.tier] = parseInt(r.count, 10)));
+
+    return {
+      period,
+      totalVisitors,
+      anonymous: {
+        count: anonymousCount,
+        percentage: totalVisitors > 0 ? Math.round((anonymousCount / totalVisitors) * 100) : 0,
+        avgScore: parseInt(anonStats?.avgScore || '0', 10),
+        avgDurationSec: parseInt(anonStats?.avgDuration || '0', 10),
+        avgProductsViewed: parseInt(anonStats?.avgProducts || '0', 10),
+        tiers: anonTierMap,
+      },
+      registered: {
+        count: registeredCount,
+        percentage: totalVisitors > 0 ? Math.round((registeredCount / totalVisitors) * 100) : 0,
+        avgScore: parseInt(regStats?.avgScore || '0', 10),
+        avgDurationSec: parseInt(regStats?.avgDuration || '0', 10),
+        avgProductsViewed: parseInt(regStats?.avgProducts || '0', 10),
+      },
+      topSearchQueries: topSearches.map((r) => ({ query: r.query, count: parseInt(r.count, 10) })),
+      topSources: topSources.map((r) => ({ source: r.source, count: parseInt(r.count, 10) })),
+      topProducts: topViewedProducts.map((p) => ({
+        productId: p.productId,
+        name: productNames[p.productId] || 'Unknown',
+        views: parseInt(p.views, 10),
+        uniqueVisitors: parseInt(p.uniqueVisitors, 10),
+      })),
     };
   }
 
