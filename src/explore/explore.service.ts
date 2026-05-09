@@ -1,6 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Inject } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, MoreThan } from 'typeorm';
+import { Repository, In, MoreThan, DataSource } from 'typeorm';
+import { CACHE_MANAGER, Cache } from '@nestjs/cache-manager';
 import {
   Provider,
   Category,
@@ -20,6 +21,13 @@ import { TrackAdEventDto } from './dto/track-ad-event.dto';
 export class ExploreService {
   private readonly logger = new Logger(ExploreService.name);
 
+  // Cache keys & TTLs
+  private static readonly CACHE_PLATFORM_STATS = 'explore:platform-stats';
+  private static readonly CACHE_TRENDING_CATS = 'explore:trending-categories';
+  private static readonly CACHE_BANNERS = 'explore:banners';
+  private static readonly TTL_5MIN = 5 * 60 * 1000;
+  private static readonly TTL_2MIN = 2 * 60 * 1000;
+
   constructor(
     @InjectRepository(Provider) private providerRepo: Repository<Provider>,
     @InjectRepository(Category) private categoryRepo: Repository<Category>,
@@ -31,6 +39,8 @@ export class ExploreService {
     @InjectRepository(ProviderBadge) private badgeRepo: Repository<ProviderBadge>,
     @InjectRepository(ProviderOffer) private offerRepo: Repository<ProviderOffer>,
     @InjectRepository(AdEvent) private adEventRepo: Repository<AdEvent>,
+    @Inject(CACHE_MANAGER) private cacheManager: Cache,
+    private readonly dataSource: DataSource,
   ) {}
 
   // ─── Performance Helpers ─────────────────────────────────────
@@ -397,12 +407,9 @@ export class ExploreService {
       qb.andWhere("p.status = 'active'");
     }
 
-    // Minimum rating filter
+    // Minimum rating filter — use the already-JOINed review stats alias
     if (dto.minRating != null && dto.minRating > 0) {
-      qb.andWhere(
-        `(SELECT COALESCE(AVG(rv.star_rating), 0) FROM reviews rv WHERE rv.provider_id = p.id AND rv.status = 'active') >= :minRating`,
-        { minRating: dto.minRating },
-      );
+      qb.andWhere('COALESCE(rs.avg_rating, 0) >= :minRating', { minRating: dto.minRating });
     }
 
     // Ending soon filter (within 7 days)
@@ -418,17 +425,7 @@ export class ExploreService {
     }
 
     // Add category services for display
-    qb.leftJoin(
-      (sub) => sub
-        .select('pcs.provider_id', 'provider_id')
-        .addSelect("string_agg(DISTINCT cats.name, ', ' ORDER BY cats.name)", 'services')
-        .from('provider_categories', 'pcs')
-        .innerJoin('categories', 'cats', 'cats.id = pcs.category_id')
-        .groupBy('pcs.provider_id'),
-      'cs',
-      'cs.provider_id = p.id',
-    );
-    qb.addSelect('cs.services', 'services');
+    this.withCategoryServices(qb);
 
     // Sorting
     switch (dto.sort) {
@@ -578,39 +575,12 @@ export class ExploreService {
   // ─── Category Spotlight ──────────────────────────────────────
 
   private async getCategorySpotlight(lat?: number, lng?: number, city?: string) {
-    // Pick a random category that has at least 1 active provider
-    const categories = await this.categoryRepo
-      .createQueryBuilder('c')
-      .select(['c.id AS id', 'c.name AS name', 'c.slug AS slug', 'c.icon AS icon'])
-      .addSelect(
-        `COALESCE((
-          SELECT COUNT(DISTINCT pc.provider_id)::int
-          FROM provider_categories pc
-          JOIN providers p ON p.id = pc.provider_id AND p.status IN ('active', 'unverified')
-          WHERE pc.category_id = c.id
-             OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id = c.id)
-        ), 0)`,
-        'providerCount',
-      )
-      .where('c.parentId IS NULL')
-      .andWhere('c.isActive = :active', { active: true })
-      .having(
-        `COALESCE((
-          SELECT COUNT(DISTINCT pc.provider_id)::int
-          FROM provider_categories pc
-          JOIN providers p ON p.id = pc.provider_id AND p.status IN ('active', 'unverified')
-          WHERE pc.category_id = c.id
-             OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id = c.id)
-        ), 0) > 0`,
-      )
-      .groupBy('c.id')
-      .orderBy('RANDOM()')
-      .limit(1)
-      .getRawMany();
+    // Reuse cached trending categories instead of running a duplicate heavy query
+    const allCategories = await this.getTrendingCategories(20);
+    if (allCategories.length === 0) return null;
 
-    if (categories.length === 0) return null;
-
-    const cat = categories[0];
+    // Pick a random category
+    const cat = allCategories[Math.floor(Math.random() * allCategories.length)];
 
     const subcategories = await this.categoryRepo.find({
       where: { parentId: cat.id, isActive: true },
@@ -709,54 +679,53 @@ export class ExploreService {
 
   // ─── Trending Categories ─────────────────────────────────────
 
+  /**
+   * Trending categories — cached 5 min, uses LATERAL JOIN instead of duplicate subqueries.
+   */
   private async getTrendingCategories(limit = 8) {
-    const raw = await this.categoryRepo
-      .createQueryBuilder('c')
-      .select([
-        'c.id AS id',
-        'c.name AS name',
-        'c.slug AS slug',
-        'c.icon AS icon',
-      ])
-      .addSelect(
-        `COALESCE((
-          SELECT COUNT(DISTINCT pc.provider_id)::int
-          FROM provider_categories pc
-          JOIN providers p ON p.id = pc.provider_id AND p.status IN ('active', 'unverified')
-          WHERE pc.category_id = c.id
-             OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id = c.id)
-        ), 0)`,
-        'providerCount',
-      )
-      .where('c.parentId IS NULL')
-      .andWhere('c.isActive = :active', { active: true })
-      .having(
-        `COALESCE((
-          SELECT COUNT(DISTINCT pc.provider_id)::int
-          FROM provider_categories pc
-          JOIN providers p ON p.id = pc.provider_id AND p.status IN ('active', 'unverified')
-          WHERE pc.category_id = c.id
-             OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id = c.id)
-        ), 0) > 0`,
-      )
-      .groupBy('c.id')
-      .orderBy('"providerCount"', 'DESC')
-      .addOrderBy('c.displayOrder', 'ASC')
-      .limit(limit)
-      .getRawMany();
+    const cached = await this.cacheManager.get<any[]>(ExploreService.CACHE_TRENDING_CATS);
+    if (cached) return cached;
 
-    return raw.map((r) => ({
+    const raw: any[] = await this.dataSource.query(`
+      SELECT
+        c.id, c.name, c.slug, c.icon,
+        COALESCE(pc_stats.provider_count, 0)::int AS "providerCount"
+      FROM categories c
+      LEFT JOIN LATERAL (
+        SELECT COUNT(DISTINCT pc.provider_id) AS provider_count
+        FROM provider_categories pc
+        JOIN providers p ON p.id = pc.provider_id AND p.status IN ('active', 'unverified')
+        WHERE pc.category_id = c.id
+           OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id = c.id)
+      ) pc_stats ON true
+      WHERE c.parent_id IS NULL
+        AND c.is_active = true
+        AND COALESCE(pc_stats.provider_count, 0) > 0
+      ORDER BY pc_stats.provider_count DESC, c.display_order ASC
+      LIMIT $1
+    `, [limit]);
+
+    const result = raw.map((r) => ({
       id: r.id,
       name: r.name,
       slug: r.slug,
       icon: r.icon,
       providerCount: parseInt(r.providerCount, 10) || 0,
     }));
+
+    await this.cacheManager.set(ExploreService.CACHE_TRENDING_CATS, result, ExploreService.TTL_5MIN);
+    return result;
   }
 
   // ─── Interstitial Banner ─────────────────────────────────────
 
+  /**
+   * Interstitial banners — cached 2 min.
+   */
   private async getInterstitialBanner() {
+    const cached = await this.cacheManager.get<any[]>(ExploreService.CACHE_BANNERS);
+    if (cached) return cached;
+
     const now = new Date();
     const banners = await this.bannerRepo
       .createQueryBuilder('b')
@@ -766,12 +735,19 @@ export class ExploreService {
       .orderBy('b.displayOrder', 'ASC')
       .getMany();
 
+    await this.cacheManager.set(ExploreService.CACHE_BANNERS, banners, ExploreService.TTL_2MIN);
     return banners;
   }
 
   // ─── Platform Stats ──────────────────────────────────────────
 
+  /**
+   * Platform stats — cached 5 min.
+   */
   private async getPlatformStats() {
+    const cached = await this.cacheManager.get<any>(ExploreService.CACHE_PLATFORM_STATS);
+    if (cached) return cached;
+
     const [providerCount, reviewStats, bookingCount] = await Promise.all([
       this.providerRepo.count({
         where: { status: In(['active', 'unverified']) },
@@ -787,12 +763,15 @@ export class ExploreService {
       }),
     ]);
 
-    return {
+    const result = {
       verifiedProviders: providerCount,
       totalReviews: parseInt(reviewStats?.totalReviews || '0', 10),
       avgRating: parseFloat(reviewStats?.avgRating || '0'),
       totalBookings: bookingCount,
     };
+
+    await this.cacheManager.set(ExploreService.CACHE_PLATFORM_STATS, result, ExploreService.TTL_5MIN);
+    return result;
   }
 
   // ─── Badge Enrichment ────────────────────────────────────────
@@ -940,20 +919,27 @@ export class ExploreService {
       .getRawMany();
 
     const upsert = async (providers: { id: string }[], type: string) => {
-      for (const { id } of providers) {
-        const exists = await this.badgeRepo.findOne({
-          where: { providerId: id, type: type as any, isActive: true },
-        });
-        if (!exists) {
-          await this.badgeRepo.save(
-            this.badgeRepo.create({
-              providerId: id,
-              type: type as any,
-              source: 'earned',
-              isActive: true,
-            }),
-          );
-        }
+      if (providers.length === 0) return;
+      const providerIds = providers.map((p) => p.id);
+      // Batch-fetch existing badges for all providers at once
+      const existing = await this.badgeRepo.find({
+        where: { providerId: In(providerIds), type: type as any, isActive: true },
+        select: ['providerId'],
+      });
+      const existingIds = new Set(existing.map((b) => b.providerId));
+      // Only create badges for providers that don't already have one
+      const newBadges = providerIds
+        .filter((id) => !existingIds.has(id))
+        .map((id) =>
+          this.badgeRepo.create({
+            providerId: id,
+            type: type as any,
+            source: 'earned',
+            isActive: true,
+          }),
+        );
+      if (newBadges.length > 0) {
+        await this.badgeRepo.save(newBadges);
       }
     };
 

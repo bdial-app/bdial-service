@@ -122,6 +122,18 @@ export class ChatController {
     return this.chatService.archiveConversation(req.user.id, id);
   }
 
+  // ─── Block Conversation ──────────────────────
+
+  @Patch('conversations/:id/block')
+  @ApiOperation({ summary: 'Block a conversation (hide and prevent re-activation)' })
+  @ApiResponse({ status: 200 })
+  blockConversation(
+    @Request() req,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.chatService.blockConversation(req.user.id, id);
+  }
+
   // ─── Media Upload ────────────────────────────
 
   @Post('conversations/:id/media')

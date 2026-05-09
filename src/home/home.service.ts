@@ -1,6 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, IsNull, Not, MoreThan, LessThan, DataSource } from 'typeorm';
+import { CACHE_MANAGER, Cache } from '@nestjs/cache-manager';
 import {
   Provider,
   Category,
@@ -16,6 +17,14 @@ import { HomeFeedDto } from './dto/home-feed.dto';
 
 @Injectable()
 export class HomeService {
+  // Cache keys & TTLs
+  private static readonly CACHE_PLATFORM_STATS = 'home:platform-stats';
+  private static readonly CACHE_TRENDING_CATS = 'home:trending-categories';
+  private static readonly CACHE_COMMUNITY_REVIEWS = 'home:community-reviews';
+  private static readonly CACHE_PROMO_BANNERS = 'home:promo-banners';
+  private static readonly TTL_5MIN = 5 * 60 * 1000;
+  private static readonly TTL_2MIN = 2 * 60 * 1000;
+
   constructor(
     @InjectRepository(Provider) private providerRepo: Repository<Provider>,
     @InjectRepository(Category) private categoryRepo: Repository<Category>,
@@ -27,6 +36,7 @@ export class HomeService {
     @InjectRepository(SponsoredListing) private sponsoredRepo: Repository<SponsoredListing>,
     private readonly categoryPersonalization: CategoryPersonalizationService,
     private readonly dataSource: DataSource,
+    @Inject(CACHE_MANAGER) private cacheManager: Cache,
   ) {}
 
   // ─── Performance Helpers ─────────────────────────────────────
@@ -76,6 +86,26 @@ export class HomeService {
       qb.andWhere('p.latitude BETWEEN :minLat AND :maxLat', { minLat: lat - dLat, maxLat: lat + dLat })
         .andWhere('p.longitude BETWEEN :minLng AND :maxLng', { minLng: lng - dLng, maxLng: lng + dLng });
     }
+  }
+
+  /** Shared mapper — converts raw query rows into the standard provider card shape. */
+  private mapProviders(rows: any[]): any[] {
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      image: r.bannerImage || r.image || r.listingPhoto,
+      description: r.description,
+      city: r.city,
+      area: r.area,
+      location: [r.area, r.city].filter(Boolean).join(', '),
+      rating: parseFloat(r.rating) || 0,
+      reviewCount: parseInt(r.reviewCount, 10) || 0,
+      services: r.services || null,
+      verified: r.status === 'active',
+      isFeatured: r.isFeatured,
+      isAvailable: r.isAvailable,
+      distance: r.distance ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
+    }));
   }
 
   /**
@@ -230,23 +260,7 @@ export class HomeService {
     qb.limit(limit);
 
     const raw = await qb.getRawMany();
-
-    return raw.map((r) => ({
-      id: r.id,
-      name: r.name,
-      image: r.bannerImage || r.image || r.listingPhoto,
-      description: r.description,
-      city: r.city,
-      area: r.area,
-      location: [r.area, r.city].filter(Boolean).join(', '),
-      rating: parseFloat(r.rating) || 0,
-      reviewCount: parseInt(r.reviewCount, 10) || 0,
-      services: r.services || null,
-      verified: r.status === 'active',
-      isFeatured: r.isFeatured,
-      isAvailable: r.isAvailable,
-      distance: r.distance ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
-    }));
+    return this.mapProviders(raw);
   }
 
   /**
@@ -315,27 +329,12 @@ export class HomeService {
 
     const rows: any[] = await this.dataSource.query(sql, params);
 
-    return rows.map((r) => ({
-      id: r.id,
-      name: r.name,
-      image: r.bannerImage || r.image || r.listingPhoto,
-      description: r.description,
-      city: r.city,
-      area: r.area,
-      location: [r.area, r.city].filter(Boolean).join(', '),
-      rating: parseFloat(r.rating) || 0,
-      reviewCount: parseInt(r.reviewCount, 10) || 0,
-      services: r.services || null,
-      verified: r.status === 'active',
-      isFeatured: r.isFeatured,
-      isAvailable: r.isAvailable,
-      distance: r.distance ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
-    }));
+    return this.mapProviders(rows);
   }
 
   /**
    * Pick a random top-level category that has at least 1 active provider.
-   * Returns the category info + its providers.
+   * Reuses cached trending categories to avoid a duplicate heavy query.
    */
   private async getRandomFeaturedCategory(
     lat?: number,
@@ -343,29 +342,8 @@ export class HomeService {
     city?: string,
     limit = 4,
   ) {
-    // Get all top-level categories with at least 1 active provider
-    const categoriesWithProviders = await this.categoryRepo
-      .createQueryBuilder('c')
-      .select(['c.id AS id', 'c.name AS name', 'c.slug AS slug', 'c.icon AS icon'])
-      .addSelect(
-        `(SELECT COUNT(DISTINCT pc.provider_id)::int
-         FROM provider_categories pc
-         JOIN providers p ON p.id = pc.provider_id AND p.status IN ('active', 'unverified')
-         WHERE pc.category_id = c.id
-            OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id = c.id))`,
-        'providerCount',
-      )
-      .where('c.parent_id IS NULL')
-      .andWhere('c.is_active = :active', { active: true })
-      .having(
-        `(SELECT COUNT(DISTINCT pc.provider_id)::int
-         FROM provider_categories pc
-         JOIN providers p ON p.id = pc.provider_id AND p.status IN ('active', 'unverified')
-         WHERE pc.category_id = c.id
-            OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id = c.id)) > 0`,
-      )
-      .groupBy('c.id')
-      .getRawMany();
+    // Reuse trending categories (already cached) — they are top-level with provider count > 0
+    const categoriesWithProviders = await this.getTrendingCategories(20);
 
     if (categoriesWithProviders.length === 0) return null;
 
@@ -379,7 +357,7 @@ export class HomeService {
       name: chosen.name,
       slug: chosen.slug,
       icon: chosen.icon,
-      providerCount: parseInt(chosen.providerCount, 10) || 0,
+      providerCount: chosen.providerCount,
       providers,
     };
   }
@@ -435,22 +413,7 @@ export class HomeService {
 
     const raw = await qb.getRawMany();
 
-    return raw.map((r) => ({
-      id: r.id,
-      name: r.name,
-      image: r.bannerImage || r.image || r.listingPhoto,
-      description: r.description,
-      city: r.city,
-      area: r.area,
-      location: [r.area, r.city].filter(Boolean).join(', '),
-      rating: parseFloat(r.rating) || 0,
-      reviewCount: parseInt(r.reviewCount, 10) || 0,
-      services: r.services || null,
-      verified: r.status === 'active',
-      isFeatured: r.isFeatured,
-      isAvailable: r.isAvailable,
-      distance: r.distance ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
-    }));
+    return this.mapProviders(raw);
   }
 
   /**
@@ -509,22 +472,7 @@ export class HomeService {
 
     return {
       city: cityName,
-      providers: raw.map((r) => ({
-        id: r.id,
-        name: r.name,
-        image: r.bannerImage || r.image || r.listingPhoto,
-        description: r.description,
-        city: r.city,
-        area: r.area,
-        location: [r.area, r.city].filter(Boolean).join(', '),
-        rating: parseFloat(r.rating) || 0,
-        reviewCount: parseInt(r.reviewCount, 10) || 0,
-        services: r.services || null,
-        verified: r.status === 'active',
-        isFeatured: r.isFeatured,
-        isAvailable: r.isAvailable,
-        distance: r.distance ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
-      })),
+      providers: this.mapProviders(raw),
     };
   }
 
@@ -579,20 +527,7 @@ export class HomeService {
 
     const raw = await qb.getRawMany();
 
-    return raw.map((r) => ({
-      id: r.id,
-      name: r.name,
-      image: r.bannerImage || r.image || r.listingPhoto,
-      description: r.description,
-      city: r.city,
-      area: r.area,
-      location: [r.area, r.city].filter(Boolean).join(', '),
-      rating: parseFloat(r.rating) || 0,
-      reviewCount: parseInt(r.reviewCount, 10) || 0,
-      services: r.services || null,
-      verified: r.status === 'active',
-      distance: r.distance ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
-    }));
+    return this.mapProviders(raw);
   }
 
   // ─── Deals Around You ────────────────────────────────────────
@@ -762,23 +697,7 @@ export class HomeService {
 
     const raw = await qb.getRawMany();
 
-    return raw.map((r) => ({
-      id: r.id,
-      name: r.name,
-      image: r.bannerImage || r.image || r.listingPhoto,
-      description: r.description,
-      city: r.city,
-      area: r.area,
-      location: [r.area, r.city].filter(Boolean).join(', '),
-      rating: parseFloat(r.rating) || 0,
-      reviewCount: parseInt(r.reviewCount, 10) || 0,
-      services: r.services || null,
-      verified: r.status === 'active',
-      isFeatured: r.isFeatured,
-      isAvailable: r.isAvailable,
-      isWomenLed: true,
-      distance: r.distance ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
-    }));
+    return this.mapProviders(raw).map((p) => ({ ...p, isWomenLed: true }));
   }
 
   /**
@@ -976,24 +895,16 @@ export class HomeService {
 
     const raw = await qb.getRawMany();
 
-    return raw.map((r) => ({
-      id: r.id,
-      name: r.name,
-      image: r.bannerImage || r.image || r.listingPhoto,
-      description: r.description,
-      location: [r.area, r.city].filter(Boolean).join(', '),
-      rating: parseFloat(r.rating) || 0,
-      reviewCount: parseInt(r.reviewCount, 10) || 0,
-      services: r.services || null,
-      verified: r.status === 'active',
-      distance: r.distance ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
-    }));
+    return this.mapProviders(raw);
   }
 
   /**
-   * Active promo banners within their date range, ordered by displayOrder.
+   * Active promo banners within their date range. Cached 2 min.
    */
   private async getActivePromoBanners() {
+    const cached = await this.cacheManager.get<any[]>(HomeService.CACHE_PROMO_BANNERS);
+    if (cached) return cached;
+
     const now = new Date();
     const qb = this.bannerRepo
       .createQueryBuilder('b')
@@ -1003,61 +914,51 @@ export class HomeService {
       .orderBy('b.displayOrder', 'ASC')
       .limit(10);
 
-    return qb.getMany();
+    const result = await qb.getMany();
+    await this.cacheManager.set(HomeService.CACHE_PROMO_BANNERS, result, HomeService.TTL_2MIN);
+    return result;
   }
 
   /**
-   * Trending categories: top-level categories ordered by the number of providers.
+   * Trending categories: top-level categories ordered by recent bookings + provider count.
+   * Cached 5 min. Uses LATERAL JOIN to avoid duplicate subqueries.
    */
   private async getTrendingCategories(limit = 6) {
-    const raw = await this.categoryRepo
-      .createQueryBuilder('c')
-      .select([
-        'c.id AS id',
-        'c.name AS name',
-        'c.slug AS slug',
-        'c.icon AS icon',
-      ])
-      .addSelect(
-        `COALESCE((
-          SELECT COUNT(DISTINCT pc.provider_id)::int
-          FROM provider_categories pc
-          JOIN providers p ON p.id = pc.provider_id AND p.status IN ('active', 'unverified')
-          WHERE pc.category_id = c.id
-             OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id = c.id)
-        ), 0)`,
-        'providerCount',
-      )
-      .addSelect(
-        `COALESCE((
-          SELECT COUNT(b.id)::int
-          FROM bookings b
-          JOIN provider_categories pc2 ON pc2.provider_id = b.provider_id
-          WHERE (pc2.category_id = c.id OR pc2.category_id IN (SELECT cc2.id FROM categories cc2 WHERE cc2.parent_id = c.id))
-            AND b.status IN ('completed', 'confirmed', 'in_progress')
-            AND b.created_at >= NOW() - INTERVAL '30 days'
-        ), 0)`,
-        'recentBookings',
-      )
-      .where('c.parentId IS NULL')
-      .andWhere('c.isActive = :active', { active: true })
-      .having(
-        `COALESCE((
-          SELECT COUNT(DISTINCT pc.provider_id)::int
-          FROM provider_categories pc
-          JOIN providers p ON p.id = pc.provider_id AND p.status IN ('active', 'unverified')
-          WHERE pc.category_id = c.id
-             OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id = c.id)
-        ), 0) > 0`,
-      )
-      .groupBy('c.id')
-      .orderBy('"recentBookings"', 'DESC')
-      .addOrderBy('"providerCount"', 'DESC')
-      .addOrderBy('c.displayOrder', 'ASC')
-      .limit(limit)
-      .getRawMany();
+    const cached = await this.cacheManager.get<any[]>(HomeService.CACHE_TRENDING_CATS);
+    if (cached) return cached;
 
-    return raw.map((r) => ({
+    const raw: any[] = await this.dataSource.query(`
+      SELECT
+        c.id,
+        c.name,
+        c.slug,
+        c.icon,
+        COALESCE(pc_stats.provider_count, 0)::int AS "providerCount",
+        COALESCE(bk_stats.recent_bookings, 0)::int AS "recentBookings"
+      FROM categories c
+      LEFT JOIN LATERAL (
+        SELECT COUNT(DISTINCT pc.provider_id) AS provider_count
+        FROM provider_categories pc
+        JOIN providers p ON p.id = pc.provider_id AND p.status IN ('active', 'unverified')
+        WHERE pc.category_id = c.id
+           OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id = c.id)
+      ) pc_stats ON true
+      LEFT JOIN LATERAL (
+        SELECT COUNT(b.id) AS recent_bookings
+        FROM bookings b
+        JOIN provider_categories pc2 ON pc2.provider_id = b.provider_id
+        WHERE (pc2.category_id = c.id OR pc2.category_id IN (SELECT cc2.id FROM categories cc2 WHERE cc2.parent_id = c.id))
+          AND b.status IN ('completed', 'confirmed', 'in_progress')
+          AND b.created_at >= NOW() - INTERVAL '30 days'
+      ) bk_stats ON true
+      WHERE c.parent_id IS NULL
+        AND c.is_active = true
+        AND COALESCE(pc_stats.provider_count, 0) > 0
+      ORDER BY bk_stats.recent_bookings DESC, pc_stats.provider_count DESC, c.display_order ASC
+      LIMIT $1
+    `, [limit]);
+
+    const result = raw.map((r) => ({
       id: r.id,
       name: r.name,
       slug: r.slug,
@@ -1065,12 +966,18 @@ export class HomeService {
       providerCount: parseInt(r.providerCount, 10) || 0,
       recentBookings: parseInt(r.recentBookings, 10) || 0,
     }));
+
+    await this.cacheManager.set(HomeService.CACHE_TRENDING_CATS, result, HomeService.TTL_5MIN);
+    return result;
   }
 
   /**
-   * Recent community reviews with reviewer info and provider context.
+   * Recent community reviews with reviewer info and provider context. Cached 2 min.
    */
   private async getCommunityReviews(limit = 10) {
+    const cached = await this.cacheManager.get<any[]>(HomeService.CACHE_COMMUNITY_REVIEWS);
+    if (cached) return cached;
+
     const reviews = await this.reviewRepo
       .createQueryBuilder('r')
       .select([
@@ -1090,7 +997,7 @@ export class HomeService {
       .limit(limit)
       .getRawMany();
 
-    return reviews.map((r) => ({
+    const result = reviews.map((r) => ({
       id: r.id,
       name: r.name,
       providerName: r.providerName,
@@ -1098,12 +1005,18 @@ export class HomeService {
       rating: r.rating,
       timeAgo: r.timeAgo,
     }));
+
+    await this.cacheManager.set(HomeService.CACHE_COMMUNITY_REVIEWS, result, HomeService.TTL_2MIN);
+    return result;
   }
 
   /**
-   * Platform-wide stats for the trust banner.
+   * Platform-wide stats for the trust banner. Cached 5 min.
    */
   private async getPlatformStats() {
+    const cached = await this.cacheManager.get<any>(HomeService.CACHE_PLATFORM_STATS);
+    if (cached) return cached;
+
     const [providerCount, reviewStats, categoryCount] = await Promise.all([
       this.providerRepo.count({
         where: { status: In(['active', 'unverified']) },
@@ -1119,12 +1032,15 @@ export class HomeService {
       }),
     ]);
 
-    return {
+    const result = {
       verifiedProviders: providerCount,
       totalReviews: parseInt(reviewStats?.totalReviews || '0', 10),
       avgRating: parseFloat(reviewStats?.avgRating || '0'),
       totalCategories: categoryCount,
     };
+
+    await this.cacheManager.set(HomeService.CACHE_PLATFORM_STATS, result, HomeService.TTL_5MIN);
+    return result;
   }
 
   /**

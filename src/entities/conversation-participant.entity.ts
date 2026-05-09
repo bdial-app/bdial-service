@@ -41,6 +41,10 @@ export class ConversationParticipant {
   @Column({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean;
 
+  /** When set, the user has blocked this conversation — prevents re-activation on new messages */
+  @Column({ name: 'blocked_at', type: 'timestamptz', nullable: true })
+  blockedAt: Date | null;
+
   @CreateDateColumn({ name: 'joined_at' })
   joinedAt: Date;
 

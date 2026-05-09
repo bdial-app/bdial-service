@@ -157,9 +157,10 @@ export class ProvidersService {
         await manager.save(cats);
       }
 
-      // Save products with multi-image support
+      // Save products with multi-image support — batch saves
       // Images are a flat array; each product's imageCount tells us how many belong to it
-      const savedProducts: Product[] = [];
+      const productsToSave: Product[] = [];
+      const galleryPhotos: Photo[] = [];
       let imgOffset = 0;
       if (parsedProducts.length > 0) {
         for (let i = 0; i < parsedProducts.length; i++) {
@@ -169,7 +170,7 @@ export class ProvidersService {
           imgOffset += count;
           const photoUrl = productPhotos[0]?.url || null;
           const photoUrls = productPhotos.map((ph) => ph.url);
-          const product = manager.create(Product, {
+          productsToSave.push(manager.create(Product, {
             providerId: savedProvider.id,
             name: p.name,
             description: p.description || null,
@@ -180,20 +181,22 @@ export class ProvidersService {
             productType: p.productType || 'product',
             isActive: true,
             displayOrder: i,
-          });
-          savedProducts.push(await manager.save(product));
+          }));
 
-          // Save additional product photos as provider gallery photos
+          // Collect additional product photos as provider gallery photos
           for (let j = 1; j < productPhotos.length; j++) {
-            const photo = manager.create(Photo, {
+            galleryPhotos.push(manager.create(Photo, {
               providerId: savedProvider.id,
               imageUrl: productPhotos[j].url,
               storageKey: productPhotos[j].storageKey,
               displayOrder: j,
-            });
-            await manager.save(photo);
+            }));
           }
         }
+      }
+      const savedProducts = productsToSave.length > 0 ? await manager.save(productsToSave) : [];
+      if (galleryPhotos.length > 0) {
+        await manager.save(galleryPhotos);
       }
 
       let savedVerification: Verification | null = null;
@@ -303,7 +306,7 @@ export class ProvidersService {
     });
     if (!provider) throw new NotFoundException(`Provider with ID '${id}' not found`);
 
-    const [photos, products, reviews, badges, activeOffers, activeSponsor] = await Promise.all([
+    const [photos, products, reviews, badges, activeOffers, activeSponsor, reviewStats] = await Promise.all([
       this.photoRepo.find({
         where: { providerId: id },
         order: { displayOrder: 'ASC' },
@@ -316,6 +319,7 @@ export class ProvidersService {
         where: { providerId: id, status: 'active' },
         relations: ['reviewer', 'photos'],
         order: { postedAt: 'DESC' },
+        take: 50,
       }),
       this.badgeRepo.find({
         where: { providerId: id, isActive: true },
@@ -338,18 +342,28 @@ export class ProvidersService {
         .andWhere('s.spent_amount < s.budget_amount')
         .andWhere("s.approval_status = 'approved'")
         .getOne(),
+      this.reviewRepo
+        .createQueryBuilder('r')
+        .select('COUNT(r.id)::int', 'totalReviews')
+        .addSelect('COALESCE(AVG(r.star_rating)::numeric(2,1), 0)', 'avgRating')
+        .addSelect("COUNT(CASE WHEN r.star_rating = 1 THEN 1 END)::int", 'r1')
+        .addSelect("COUNT(CASE WHEN r.star_rating = 2 THEN 1 END)::int", 'r2')
+        .addSelect("COUNT(CASE WHEN r.star_rating = 3 THEN 1 END)::int", 'r3')
+        .addSelect("COUNT(CASE WHEN r.star_rating = 4 THEN 1 END)::int", 'r4')
+        .addSelect("COUNT(CASE WHEN r.star_rating = 5 THEN 1 END)::int", 'r5')
+        .where('r.providerId = :pid AND r.status = :status', { pid: id, status: 'active' })
+        .getRawOne(),
     ]);
 
-    const ratingDist = [0, 0, 0, 0, 0];
-    reviews.forEach((r) => {
-      const idx = Math.max(0, Math.min(4, (r.starRating ?? 0) - 1));
-      ratingDist[idx]++;
-    });
-    const reviewCount = reviews.length;
-    const rating =
-      reviewCount > 0
-        ? reviews.reduce((sum, r) => sum + (r.starRating ?? 0), 0) / reviewCount
-        : 0;
+    const reviewCount = parseInt(reviewStats?.totalReviews || '0', 10);
+    const rating = parseFloat(reviewStats?.avgRating || '0');
+    const ratingDist = [
+      parseInt(reviewStats?.r1 || '0', 10),
+      parseInt(reviewStats?.r2 || '0', 10),
+      parseInt(reviewStats?.r3 || '0', 10),
+      parseInt(reviewStats?.r4 || '0', 10),
+      parseInt(reviewStats?.r5 || '0', 10),
+    ];
 
     const prices = products
       .map((p) => (p.price !== null && p.price !== undefined ? Number(p.price) : null))
@@ -474,16 +488,13 @@ export class ProvidersService {
       )
     `;
 
-    // Review stats subqueries used for filtering and sorting
-    const avgRatingSub = `(SELECT AVG(r.star_rating) FROM reviews r WHERE r.provider_id = provider.id AND r.status = 'active')`;
-    const reviewCountSub = `(SELECT COUNT(r.id)::int FROM reviews r WHERE r.provider_id = provider.id AND r.status = 'active')`;
-
     const qb = this.providerRepo
       .createQueryBuilder('provider')
       .leftJoinAndSelect('provider.user', 'user')
+      .leftJoin('provider_rating_stats', 'rs', 'rs.provider_id = provider.id')
       .addSelect(haversine, 'distance')
-      .addSelect(avgRatingSub, 'avg_rating')
-      .addSelect(reviewCountSub, 'review_count')
+      .addSelect('rs.avg_rating', 'avg_rating')
+      .addSelect('COALESCE(rs.review_count, 0)', 'review_count')
       .addSelect(
         `(SELECT string_agg(DISTINCT cat.name, ', ' ORDER BY cat.name) FROM categories cat JOIN provider_categories pcat ON pcat.category_id = cat.id WHERE pcat.provider_id = provider.id)`,
         'services',
@@ -518,7 +529,7 @@ export class ProvidersService {
       );
     }
     if (minRating != null && minRating > 0) {
-      qb.andWhere(`${avgRatingSub} >= :minRating`, { minRating });
+      qb.andWhere('rs.avg_rating >= :minRating', { minRating });
     }
     if (womenLedOnly) {
       qb.andWhere("provider.womenLedStatus = 'approved'");
@@ -617,9 +628,6 @@ export class ProvidersService {
     const offset = (page - 1) * limit;
     const hasGeo = lat != null && lng != null;
 
-    const avgRatingSub = `(SELECT AVG(r.star_rating) FROM reviews r WHERE r.provider_id = p.id AND r.status = 'active')`;
-    const reviewCountSub = `(SELECT COUNT(r.id)::int FROM reviews r WHERE r.provider_id = p.id AND r.status = 'active')`;
-
     const qb = this.providerRepo
       .createQueryBuilder('p')
       .select([
@@ -635,8 +643,9 @@ export class ProvidersService {
         'p.is_available AS "isAvailable"',
         'p.created_at AS "createdAt"',
       ])
-      .addSelect(avgRatingSub, 'rating')
-      .addSelect(reviewCountSub, 'reviewCount')
+      .leftJoin('provider_rating_stats', 'rs', 'rs.provider_id = p.id')
+      .addSelect('COALESCE(rs.avg_rating, 0)', 'rating')
+      .addSelect('COALESCE(rs.review_count, 0)', 'reviewCount')
       .addSelect(
         `(SELECT string_agg(DISTINCT c.name, ', ' ORDER BY c.name) FROM provider_categories pc JOIN categories c ON c.id = pc.category_id WHERE pc.provider_id = p.id)`,
         'services',
@@ -656,7 +665,7 @@ export class ProvidersService {
       );
     }
     if (minRating != null && minRating > 0) {
-      qb.andWhere(`${avgRatingSub} >= :minRating`, { minRating });
+      qb.andWhere('rs.avg_rating >= :minRating', { minRating });
     }
 
     if (hasGeo) {
@@ -668,9 +677,9 @@ export class ProvidersService {
     if (sortBy === 'newest') {
       qb.orderBy('p.created_at', 'DESC');
     } else if (sortBy === 'reviews') {
-      qb.orderBy(reviewCountSub, 'DESC').addOrderBy(avgRatingSub, 'DESC');
+      qb.orderBy('rs.review_count', 'DESC', 'NULLS LAST').addOrderBy('rs.avg_rating', 'DESC', 'NULLS LAST');
     } else {
-      qb.orderBy(avgRatingSub, 'DESC', 'NULLS LAST').addOrderBy('p.created_at', 'DESC');
+      qb.orderBy('rs.avg_rating', 'DESC', 'NULLS LAST').addOrderBy('p.created_at', 'DESC');
     }
 
     const totalQb = qb.clone();
@@ -789,31 +798,40 @@ export class ProvidersService {
     // Product count
     const totalProducts = await this.productRepo.count({ where: { providerId: provider.id } });
 
-    // Reviews
-    const reviews = await this.reviewRepo.find({
-      where: { providerId: provider.id },
-      relations: ['reviewer'],
-      order: { postedAt: 'DESC' },
-    });
+    // Reviews — SQL aggregation for stats, limited load for recent reviews
+    const [reviewStats, recentReviews, totalEnquiries] = await Promise.all([
+      this.reviewRepo
+        .createQueryBuilder('r')
+        .select('COUNT(r.id)::int', 'totalReviews')
+        .addSelect('COALESCE(AVG(r.star_rating)::numeric(2,1), 0)', 'averageRating')
+        .addSelect("COUNT(CASE WHEN r.star_rating = 1 THEN 1 END)::int", 'r1')
+        .addSelect("COUNT(CASE WHEN r.star_rating = 2 THEN 1 END)::int", 'r2')
+        .addSelect("COUNT(CASE WHEN r.star_rating = 3 THEN 1 END)::int", 'r3')
+        .addSelect("COUNT(CASE WHEN r.star_rating = 4 THEN 1 END)::int", 'r4')
+        .addSelect("COUNT(CASE WHEN r.star_rating = 5 THEN 1 END)::int", 'r5')
+        .where('r.providerId = :pid', { pid: provider.id })
+        .getRawOne(),
+      this.reviewRepo.find({
+        where: { providerId: provider.id },
+        relations: ['reviewer'],
+        order: { postedAt: 'DESC' },
+        take: 5,
+      }),
+      this.participantRepo
+        .createQueryBuilder('cp')
+        .where('cp.userId = :userId AND cp.role = :role', { userId, role: 'provider' })
+        .getCount(),
+    ]);
 
-    const totalReviews = reviews.length;
-    const averageRating =
-      totalReviews > 0
-        ? parseFloat((reviews.reduce((sum, r) => sum + r.starRating, 0) / totalReviews).toFixed(1))
-        : 0;
-
-    const ratingBreakdown = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
-    reviews.forEach((r) => {
-      if (r.starRating >= 1 && r.starRating <= 5) {
-        ratingBreakdown[r.starRating as 1 | 2 | 3 | 4 | 5]++;
-      }
-    });
-
-    // Enquiries = conversations where provider participated
-    const totalEnquiries = await this.participantRepo
-      .createQueryBuilder('cp')
-      .where('cp.userId = :userId AND cp.role = :role', { userId, role: 'provider' })
-      .getCount();
+    const totalReviews = parseInt(reviewStats?.totalReviews || '0', 10);
+    const averageRating = parseFloat(reviewStats?.averageRating || '0');
+    const ratingBreakdown = {
+      1: parseInt(reviewStats?.r1 || '0', 10),
+      2: parseInt(reviewStats?.r2 || '0', 10),
+      3: parseInt(reviewStats?.r3 || '0', 10),
+      4: parseInt(reviewStats?.r4 || '0', 10),
+      5: parseInt(reviewStats?.r5 || '0', 10),
+    };
 
     return {
       totalProducts,
@@ -821,7 +839,7 @@ export class ProvidersService {
       averageRating,
       totalEnquiries,
       ratingBreakdown,
-      recentReviews: reviews.slice(0, 5).map((r) => ({
+      recentReviews: recentReviews.map((r) => ({
         id: r.id,
         starRating: r.starRating,
         reviewText: r.reviewText,

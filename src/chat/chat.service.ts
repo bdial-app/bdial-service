@@ -56,7 +56,7 @@ export class ChatService {
 
   /**
    * Create or return existing conversation.
-   * WhatsApp-style: one conversation per customer↔provider pair per context.
+   * WhatsApp-style: one conversation per customer↔provider pair.
    */
   async createConversation(userId: string, dto: CreateConversationDto) {
     // 1. Validate provider exists and get their user ID
@@ -86,11 +86,24 @@ export class ChatService {
         await this.conversationRepo.save(existing);
       }
 
-      // Always re-activate participant rows (they may have been deactivated via "delete chat")
-      await this.participantRepo.update(
-        { conversationId: existing.id },
-        { isActive: true },
-      );
+      // Re-activate the initiator's own participant (clear any block they set)
+      await this.participantRepo
+        .createQueryBuilder()
+        .update(ConversationParticipant)
+        .set({ isActive: true, blockedAt: null as any })
+        .where('conversation_id = :conversationId', { conversationId: existing.id })
+        .andWhere('user_id = :userId', { userId })
+        .execute();
+
+      // Re-activate other participants only if they haven't blocked
+      await this.participantRepo
+        .createQueryBuilder()
+        .update(ConversationParticipant)
+        .set({ isActive: true })
+        .where('conversation_id = :conversationId', { conversationId: existing.id })
+        .andWhere('user_id != :userId', { userId })
+        .andWhere('blocked_at IS NULL')
+        .execute();
 
       // Send initial message if provided
       if (dto.initialMessage) {
@@ -415,13 +428,25 @@ export class ChatService {
       lastMessageSenderId: userId,
     });
 
-    // Increment unread for all OTHER participants
+    // WhatsApp-style: re-activate inactive (non-blocked) participants
+    // so the conversation reappears in their chat list on new messages
+    await this.participantRepo
+      .createQueryBuilder()
+      .update(ConversationParticipant)
+      .set({ isActive: true })
+      .where('conversation_id = :conversationId', { conversationId })
+      .andWhere('is_active = false')
+      .andWhere('blocked_at IS NULL')
+      .execute();
+
+    // Increment unread for all OTHER participants (active ones)
     await this.participantRepo
       .createQueryBuilder()
       .update(ConversationParticipant)
       .set({ unreadCount: () => '"unread_count" + 1' })
       .where('conversation_id = :conversationId', { conversationId })
       .andWhere('user_id != :userId', { userId })
+      .andWhere('is_active = true')
       .execute();
 
     // Build broadcast payload
@@ -641,6 +666,19 @@ export class ChatService {
     return { success: true };
   }
 
+  /**
+   * Block a conversation — hides it and prevents re-activation on new messages.
+   * The other participant can still send messages but they won't be delivered.
+   */
+  async blockConversation(userId: string, conversationId: string) {
+    const participant = await this.assertParticipant(userId, conversationId);
+    participant.isActive = false;
+    participant.unreadCount = 0;
+    participant.blockedAt = new Date();
+    await this.participantRepo.save(participant);
+    return { success: true };
+  }
+
   // ─────────────────────────────────────────────
   // MEDIA UPLOAD
   // ─────────────────────────────────────────────
@@ -722,36 +760,22 @@ export class ChatService {
     return participant;
   }
 
-  /** Find existing conversation between two users with same context */
+  /** Find existing conversation between two users (WhatsApp-style: one thread per pair) */
   private async findExistingConversation(
     userId: string,
     otherUserId: string,
-    contextType: string | null,
-    contextId: string | null,
+    _contextType: string | null,
+    _contextId: string | null,
   ): Promise<Conversation | null> {
-    // Find conversations where both users are participants
-    const baseQb = this.conversationRepo
+    // One conversation per customer↔provider pair, regardless of context
+    return this.conversationRepo
       .createQueryBuilder('c')
       .innerJoin('c.participants', 'p1', 'p1.userId = :userId', { userId })
       .innerJoin('c.participants', 'p2', 'p2.userId = :otherUserId', {
         otherUserId,
       })
-      .where("c.status IN ('active', 'archived')");
-
-    // Only match conversations with the exact same context
-    if (contextType && contextId) {
-      return baseQb
-        .clone()
-        .andWhere('c.contextType = :contextType', { contextType })
-        .andWhere('c.contextId = :contextId', { contextId })
-        .getOne();
-    }
-
-    // For direct conversations (no context), match null context
-    return baseQb
-      .clone()
-      .andWhere('c.contextType IS NULL')
-      .andWhere('c.contextId IS NULL')
+      .where("c.status IN ('active', 'archived')")
+      .orderBy('c.lastMessageAt', 'DESC', 'NULLS LAST')
       .getOne();
   }
 
