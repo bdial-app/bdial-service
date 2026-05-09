@@ -506,6 +506,7 @@ export class AnalyticsService {
   private formatLead(lead: ProviderLead) {
     const isLocked = !lead.isUnlocked;
     const user = lead.user;
+    const isAnonymous = !lead.userId;
 
     return {
       id: lead.id,
@@ -519,17 +520,23 @@ export class AnalyticsService {
       firstSeenAt: lead.firstSeenAt,
       lastSeenAt: lead.lastSeenAt,
       isUnlocked: lead.isUnlocked,
-      // Masked data for locked leads
+      isAnonymous,
       visitor: isLocked
         ? {
             name: user ? this.maskName(user.name || 'Anonymous') : 'Anonymous Visitor',
             avatar: null,
             userId: null,
+            phone: null,
+            email: null,
+            city: null,
           }
         : {
             name: user?.name || 'Anonymous Visitor',
             avatar: null,
             userId: lead.userId,
+            phone: user?.mobileNumber || null,
+            email: user?.email || user?.googleEmail || null,
+            city: user?.city || null,
           },
     };
   }

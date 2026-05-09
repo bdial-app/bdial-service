@@ -170,6 +170,13 @@ export class PaymentService {
     if (!lead) throw new NotFoundException('Lead not found');
     if (lead.isUnlocked) throw new BadRequestException('Lead already unlocked');
 
+    // Anonymous leads (no userId) are free — no contact info to sell
+    if (!lead.userId) {
+      lead.isUnlocked = true;
+      await this.leadRepo.save(lead);
+      return { unlocked: true, method: 'free', remainingCredits: -1 };
+    }
+
     // Check if monetization is disabled — free unlock for all
     const monetizationEnabled = (await this.getSetting('leads_monetization_enabled', 'false')) === 'true';
     if (!monetizationEnabled) {
