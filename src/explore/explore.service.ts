@@ -191,6 +191,8 @@ export class ExploreService {
         '(sl.target_cities IS NULL OR :city = ANY(sl.target_cities))',
         { city },
       );
+      // Ensure the provider is actually in the user's city
+      qb.andWhere('p.city ILIKE :provCity', { provCity: `%${city}%` });
     }
 
     if (lat != null && lng != null) {
@@ -268,14 +270,15 @@ export class ExploreService {
       qb.setParameter('lat', lat).setParameter('lng', lng);
       qb.addSelect(haversine, 'distance');
       qb.andWhere('p.latitude IS NOT NULL')
-        .andWhere('p.longitude IS NOT NULL')
-        .orderBy('distance', 'ASC');
-    } else if (city) {
-      qb.andWhere('p.city ILIKE :city', { city: `%${city}%` })
-        .orderBy('o.discount_value', 'DESC');
-    } else {
-      qb.orderBy('o.discount_value', 'DESC');
+        .andWhere('p.longitude IS NOT NULL');
     }
+
+    // Always filter by city when available
+    if (city) {
+      qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
+    }
+
+    qb.orderBy(hasLocation ? 'distance' : 'o.discount_value', hasLocation ? 'ASC' : 'DESC');
 
     qb.limit(8);
 
@@ -511,7 +514,10 @@ export class ExploreService {
     this.withCategoryServices(qb);
 
     if (hasLocation) {
-      this.withGeo(qb, lat!, lng!, 25);
+      this.withGeo(qb, lat!, lng!, 50);
+      if (city) {
+        qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
+      }
       qb.orderBy("CASE WHEN p.status = 'active' THEN 0 ELSE 1 END", 'ASC')
         .addOrderBy('distance', 'ASC');
     } else if (city) {
@@ -556,7 +562,10 @@ export class ExploreService {
       .andWhere('COALESCE(rs.review_count, 0) >= 1');
 
     if (hasLocation) {
-      this.withGeo(qb, lat!, lng!);
+      this.withGeo(qb, lat!, lng!, 50);
+      if (city) {
+        qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
+      }
       qb.orderBy('rating', 'DESC')
         .addOrderBy('distance', 'ASC');
     } else if (city) {
@@ -612,8 +621,14 @@ export class ExploreService {
     this.withCategoryServices(qb);
 
     if (hasLocation) {
-      this.withGeo(qb, lat!, lng!);
+      this.withGeo(qb, lat!, lng!, 50);
+      if (city) {
+        qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
+      }
       qb.orderBy('distance', 'ASC');
+    } else if (city) {
+      qb.andWhere('p.city ILIKE :city', { city: `%${city}%` })
+        .orderBy('p.created_at', 'DESC');
     } else {
       qb.orderBy('p.created_at', 'DESC');
     }
@@ -661,7 +676,10 @@ export class ExploreService {
     this.withCategoryServices(qb);
 
     if (hasLocation) {
-      this.withGeo(qb, lat!, lng!);
+      this.withGeo(qb, lat!, lng!, 50);
+      if (city) {
+        qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
+      }
       qb.orderBy('p.created_at', 'DESC')
         .addOrderBy('distance', 'ASC');
     } else if (city) {

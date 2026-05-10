@@ -244,7 +244,10 @@ export class HomeService {
     this.withCategoryServices(qb);
 
     if (hasLocation) {
-      this.withGeo(qb, lat!, lng!);
+      this.withGeo(qb, lat!, lng!, 50);
+      if (city) {
+        qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
+      }
       qb.orderBy("CASE WHEN p.status = 'active' THEN 0 ELSE 1 END", 'ASC')
         .addOrderBy('distance', 'ASC');
     } else if (city) {
@@ -259,7 +262,24 @@ export class HomeService {
 
     qb.limit(limit);
 
-    const raw = await qb.getRawMany();
+    let raw = await qb.getRawMany();
+
+    // Fallback: if city has no providers, relax city filter to show geo-nearby
+    if (raw.length === 0 && city && hasLocation) {
+      const fallbackQb = this.providerRepo
+        .createQueryBuilder('p')
+        .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"', 'p.description AS description', 'p.city AS city', 'p.area AS area', 'p.status AS status', 'p.is_featured AS "isFeatured"', 'p.is_available AS "isAvailable"', 'p.latitude AS latitude', 'p.longitude AS longitude'])
+        .addSelect(`(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`, 'listingPhoto')
+        .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] });
+      this.withReviewStats(fallbackQb);
+      this.withCategoryServices(fallbackQb);
+      this.withGeo(fallbackQb, lat!, lng!, 100);
+      fallbackQb.orderBy("CASE WHEN p.status = 'active' THEN 0 ELSE 1 END", 'ASC')
+        .addOrderBy('distance', 'ASC')
+        .limit(limit);
+      raw = await fallbackQb.getRawMany();
+    }
+
     return this.mapProviders(raw);
   }
 
@@ -347,19 +367,26 @@ export class HomeService {
 
     if (categoriesWithProviders.length === 0) return null;
 
-    // Pick a random category
-    const randomIndex = Math.floor(Math.random() * categoriesWithProviders.length);
-    const chosen = categoriesWithProviders[randomIndex];
+    // Shuffle and try up to 5 categories to find one with providers in this city
+    const shuffled = [...categoriesWithProviders].sort(() => Math.random() - 0.5);
+    const maxAttempts = Math.min(5, shuffled.length);
 
-    const providers = await this.getProvidersByCategory(chosen.name, lat, lng, city, limit);
+    for (let i = 0; i < maxAttempts; i++) {
+      const chosen = shuffled[i];
+      const providers = await this.getProvidersByCategory(chosen.name, lat, lng, city, limit);
+      if (providers.length > 0) {
+        return {
+          name: chosen.name,
+          slug: chosen.slug,
+          icon: chosen.icon,
+          providerCount: chosen.providerCount,
+          providers,
+        };
+      }
+    }
 
-    return {
-      name: chosen.name,
-      slug: chosen.slug,
-      icon: chosen.icon,
-      providerCount: chosen.providerCount,
-      providers,
-    };
+    // Fallback: no category has providers in this city
+    return null;
   }
 
   /**
@@ -402,7 +429,10 @@ export class HomeService {
     );
 
     if (hasLocation) {
-      this.withGeo(qb, lat!, lng!);
+      this.withGeo(qb, lat!, lng!, 50);
+      if (city) {
+        qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
+      }
     } else if (city) {
       qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
     }
@@ -411,7 +441,24 @@ export class HomeService {
       .addOrderBy('COALESCE(rs.review_count, 0)', 'DESC')
       .limit(limit);
 
-    const raw = await qb.getRawMany();
+    let raw = await qb.getRawMany();
+
+    // Fallback: if city has no reviewed providers, relax to geo-only
+    if (raw.length === 0 && city && hasLocation) {
+      const fallbackQb = this.providerRepo
+        .createQueryBuilder('p')
+        .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"', 'p.description AS description', 'p.city AS city', 'p.area AS area', 'p.status AS status', 'p.is_featured AS "isFeatured"', 'p.is_available AS "isAvailable"'])
+        .addSelect(`(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`, 'listingPhoto')
+        .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
+        .andWhere(`EXISTS (SELECT 1 FROM reviews rv WHERE rv.provider_id = p.id AND rv.status = 'active')`);
+      this.withReviewStats(fallbackQb);
+      this.withCategoryServices(fallbackQb);
+      this.withGeo(fallbackQb, lat!, lng!, 100);
+      fallbackQb.orderBy('COALESCE(rs.avg_rating, 0)', 'DESC')
+        .addOrderBy('COALESCE(rs.review_count, 0)', 'DESC')
+        .limit(limit);
+      raw = await fallbackQb.getRawMany();
+    }
 
     return this.mapProviders(raw);
   }
@@ -514,7 +561,10 @@ export class HomeService {
     this.withCategoryServices(qb);
 
     if (hasLocation) {
-      this.withGeo(qb, lat!, lng!);
+      this.withGeo(qb, lat!, lng!, 50);
+      if (city) {
+        qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
+      }
       qb.orderBy('p.created_at', 'DESC');
     } else if (city) {
       qb.andWhere('p.city ILIKE :city', { city: `%${city}%` })
@@ -525,7 +575,22 @@ export class HomeService {
 
     qb.limit(limit);
 
-    const raw = await qb.getRawMany();
+    let raw = await qb.getRawMany();
+
+    // Fallback: if city has no new arrivals, relax to geo-only
+    if (raw.length === 0 && city && hasLocation) {
+      const fallbackQb = this.providerRepo
+        .createQueryBuilder('p')
+        .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"', 'p.description AS description', 'p.city AS city', 'p.area AS area', 'p.status AS status', 'p.created_at AS "createdAt"'])
+        .addSelect(`(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`, 'listingPhoto')
+        .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
+        .andWhere('p.created_at >= :since', { since: thirtyDaysAgo });
+      this.withReviewStats(fallbackQb);
+      this.withCategoryServices(fallbackQb);
+      this.withGeo(fallbackQb, lat!, lng!, 100);
+      fallbackQb.orderBy('p.created_at', 'DESC').limit(limit);
+      raw = await fallbackQb.getRawMany();
+    }
 
     return this.mapProviders(raw);
   }
@@ -591,7 +656,10 @@ export class HomeService {
       qb.addSelect(haversine, 'distance');
       qb.andWhere('p.latitude IS NOT NULL')
         .andWhere('p.longitude IS NOT NULL');
-    } else if (city) {
+    }
+
+    // Always filter by city when available (not just as fallback)
+    if (city) {
       qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
     }
 
@@ -600,7 +668,32 @@ export class HomeService {
     // Fetch more than needed so we have a pool to deduplicate and randomize from
     qb.limit(limit * 5);
 
-    const raw = await qb.getRawMany();
+    let raw = await qb.getRawMany();
+
+    // Fallback: if city has no deals, relax city filter to show nearby deals
+    if (raw.length === 0 && city && hasLocation) {
+      qb.setParameters({ ...qb.getParameters() });
+      // Re-run without city filter — TypeORM doesn't support removing conditions,
+      // so just fetch geo-only with a distance cap
+      const fallbackRaw = await this.offerRepo
+        .createQueryBuilder('o')
+        .innerJoin('providers', 'p', 'p.id = o.provider_id')
+        .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"', 'p.city AS city', 'p.area AS area', 'p.status AS status', 'o.id AS "offerId"', 'o.title AS "offerTitle"', 'o.discount_type AS "discountType"', 'o.discount_value AS "discountValue"', 'o.ends_at AS "offerEndsAt"'])
+        .addSelect(`(SELECT COUNT(*)::int FROM provider_offers po2 WHERE po2.provider_id = p.id AND po2.is_active = true AND po2.starts_at <= NOW() AND po2.ends_at >= NOW() AND po2.approval_status = 'approved')`, 'totalOffers')
+        .where('o.is_active = :active', { active: true })
+        .andWhere('o.starts_at <= :now', { now })
+        .andWhere('o.ends_at >= :now', { now })
+        .andWhere('(o.usage_limit IS NULL OR o.usage_count < o.usage_limit)')
+        .andWhere("o.approval_status = 'approved'")
+        .andWhere("p.status IN ('active', 'unverified')")
+        .andWhere('p.latitude IS NOT NULL').andWhere('p.longitude IS NOT NULL')
+        .setParameter('lat', lat).setParameter('lng', lng)
+        .addSelect(HomeService.HAVERSINE, 'distance')
+        .orderBy('o.discount_value', 'DESC')
+        .limit(limit * 5)
+        .getRawMany();
+      raw = fallbackRaw;
+    }
 
     // Step 2: Deduplicate — keep only the best deal (highest discount) per provider
     // Also exclude providers already shown in the sponsored section
@@ -680,7 +773,10 @@ export class HomeService {
     this.withCategoryServices(qb);
 
     if (hasLocation) {
-      this.withGeo(qb, lat!, lng!, 25);
+      this.withGeo(qb, lat!, lng!, 50);
+      if (city) {
+        qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
+      }
       qb.orderBy('COALESCE(rs.avg_rating, 0)', 'DESC')
         .addOrderBy('distance', 'ASC')
         .addOrderBy('p.created_at', 'DESC');
@@ -695,7 +791,25 @@ export class HomeService {
 
     qb.limit(limit);
 
-    const raw = await qb.getRawMany();
+    let raw = await qb.getRawMany();
+
+    // Fallback: if city has no women-led providers, relax to geo-only
+    if (raw.length === 0 && city && hasLocation) {
+      const fallbackQb = this.providerRepo
+        .createQueryBuilder('p')
+        .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"', 'p.description AS description', 'p.city AS city', 'p.area AS area', 'p.status AS status', 'p.is_featured AS "isFeatured"', 'p.is_available AS "isAvailable"', 'p.latitude AS latitude', 'p.longitude AS longitude'])
+        .addSelect(`(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`, 'listingPhoto')
+        .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
+        .andWhere("p.women_led_status = 'approved'");
+      this.withReviewStats(fallbackQb);
+      this.withCategoryServices(fallbackQb);
+      this.withGeo(fallbackQb, lat!, lng!, 100);
+      fallbackQb.orderBy('COALESCE(rs.avg_rating, 0)', 'DESC')
+        .addOrderBy('distance', 'ASC')
+        .addOrderBy('p.created_at', 'DESC')
+        .limit(limit);
+      raw = await fallbackQb.getRawMany();
+    }
 
     return this.mapProviders(raw).map((p) => ({ ...p, isWomenLed: true }));
   }
@@ -767,13 +881,20 @@ export class HomeService {
       qb.addSelect(HomeService.HAVERSINE, 'distance');
       qb.andWhere('p.latitude IS NOT NULL')
         .andWhere('p.longitude IS NOT NULL');
-      // Optional: filter by target radius if set on the listing
-      // (skip if null = nationwide)
-    } else if (city) {
+      // Enforce target_radius when set on the listing
+      qb.andWhere(
+        `(s.target_radius IS NULL OR ${HomeService.HAVERSINE} <= s.target_radius)`,
+      );
+    }
+
+    // Always enforce city targeting when city is provided
+    if (city) {
       qb.andWhere(
         `(s.target_cities IS NULL OR :city = ANY(s.target_cities))`,
         { city },
       );
+      // Also ensure the provider is actually in the user's city
+      qb.andWhere('p.city ILIKE :provCity', { provCity: `%${city}%` });
     }
 
     // Prioritize by bid (cost_per_click) then randomize for fairness
@@ -781,7 +902,41 @@ export class HomeService {
       .addOrderBy('RANDOM()')
       .limit(limit * 3);
 
-    const raw = await qb.getRawMany();
+    let raw = await qb.getRawMany();
+
+    // Fallback: if no city-local sponsors, relax city filter on provider
+    // (still respect target_cities on the listing itself)
+    if (raw.length === 0 && city && hasLocation) {
+      const fallbackQb = qb.clone();
+      // Remove the provider city constraint by re-running without it
+      // Simpler approach: just remove p.city filter from the clone
+      raw = await this.sponsoredRepo
+        .createQueryBuilder('s')
+        .innerJoin('providers', 'p', 'p.id = s.provider_id')
+        .select([
+          'p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image',
+          'p.banner_image_url AS "bannerImage"', 'p.description AS description',
+          'p.city AS city', 'p.area AS area', 'p.status AS status',
+          's.id AS "sponsoredListingId"', 's.type AS "sponsorType"',
+          's.starts_at AS "startsAt"', 's.ends_at AS "endsAt"',
+        ])
+        .addSelect(`(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`, 'listingPhoto')
+        .addSelect(`(SELECT cats.name FROM provider_categories pcs INNER JOIN categories cats ON cats.id = pcs.category_id WHERE pcs.provider_id = p.id LIMIT 1)`, 'primaryCategory')
+        .addSelect(`EXISTS (SELECT 1 FROM provider_offers po WHERE po.provider_id = p.id AND po.is_active = true AND po.starts_at <= NOW() AND po.ends_at >= NOW() AND po.approval_status = 'approved')`, 'hasActiveOffer')
+        .where('s.is_active = :active', { active: true })
+        .andWhere('s.starts_at <= :now', { now })
+        .andWhere('s.ends_at >= :now', { now })
+        .andWhere('s.spent_amount < s.budget_amount')
+        .andWhere("s.approval_status = 'approved'")
+        .andWhere("p.status IN ('active', 'unverified')")
+        .andWhere('p.latitude IS NOT NULL').andWhere('p.longitude IS NOT NULL')
+        .setParameter('lat', lat).setParameter('lng', lng)
+        .addSelect(HomeService.HAVERSINE, 'distance')
+        .andWhere(`(s.target_radius IS NULL OR ${HomeService.HAVERSINE} <= s.target_radius)`)
+        .orderBy('s.cost_per_click', 'DESC').addOrderBy('RANDOM()')
+        .limit(limit * 3)
+        .getRawMany();
+    }
 
     // Deduplicate by provider (one sponsor slot per business)
     const seenProviders = new Set<string>();
@@ -882,7 +1037,10 @@ export class HomeService {
     this.withCategoryServices(qb);
 
     if (hasLocation) {
-      this.withGeo(qb, lat!, lng!);
+      this.withGeo(qb, lat!, lng!, 50);
+      if (city) {
+        qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
+      }
       qb.orderBy('distance', 'ASC');
     } else if (city) {
       qb.andWhere('p.city ILIKE :city', { city: `%${city}%` })
@@ -893,7 +1051,22 @@ export class HomeService {
 
     qb.limit(limit);
 
-    const raw = await qb.getRawMany();
+    let raw = await qb.getRawMany();
+
+    // Fallback: if city has no providers in this category, relax to geo-only
+    if (raw.length === 0 && city && hasLocation) {
+      const fallbackQb = this.providerRepo
+        .createQueryBuilder('p')
+        .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"', 'p.description AS description', 'p.city AS city', 'p.area AS area', 'p.status AS status'])
+        .addSelect(`(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`, 'listingPhoto')
+        .where('EXISTS (SELECT 1 FROM provider_categories pc_f WHERE pc_f.provider_id = p.id AND pc_f.category_id IN (:...categoryIds))', { categoryIds })
+        .andWhere('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] });
+      this.withReviewStats(fallbackQb);
+      this.withCategoryServices(fallbackQb);
+      this.withGeo(fallbackQb, lat!, lng!, 100);
+      fallbackQb.orderBy('distance', 'ASC').limit(limit);
+      raw = await fallbackQb.getRawMany();
+    }
 
     return this.mapProviders(raw);
   }
