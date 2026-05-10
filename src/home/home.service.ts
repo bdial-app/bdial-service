@@ -1349,7 +1349,9 @@ export class HomeService {
     const cityParam = city ? [city] : [];
     const paramOffset = cityParam.length;
 
-    // Run all queries in parallel
+    const fallback = [{ cnt: 0 }];
+
+    // Run all queries in parallel — each wrapped so one failure doesn't kill all
     const [
       providersInArea,
       completedThisWeek,
@@ -1364,7 +1366,7 @@ export class HomeService {
         FROM providers p
         WHERE p.status IN ('active', 'unverified')
           ${cityCondition}
-      `, cityParam),
+      `, cityParam).catch(() => fallback),
 
       // 2. Bookings completed this week in user's area
       this.dataSource.query(`
@@ -1374,7 +1376,7 @@ export class HomeService {
         WHERE b.status = 'completed'
           AND b.created_at >= $${paramOffset + 1}
           ${cityCondition}
-      `, [...cityParam, weekAgo]),
+      `, [...cityParam, weekAgo]).catch(() => fallback),
 
       // 3. Active deals/offers right now in the area
       this.dataSource.query(`
@@ -1386,7 +1388,7 @@ export class HomeService {
           AND po.ends_at >= NOW()
           AND p.status IN ('active', 'unverified')
           ${cityCondition}
-      `, cityParam),
+      `, cityParam).catch(() => fallback),
 
       // 4. Reviews left this week in the area
       this.dataSource.query(`
@@ -1396,7 +1398,7 @@ export class HomeService {
         WHERE r.status = 'active'
           AND r.created_at >= $${paramOffset + 1}
           ${cityCondition}
-      `, [...cityParam, weekAgo]),
+      `, [...cityParam, weekAgo]).catch(() => fallback),
 
       // 5. Average rating of providers in area
       this.dataSource.query(`
@@ -1414,7 +1416,7 @@ export class HomeService {
         JOIN providers p ON p.id = pc.provider_id
         WHERE p.status IN ('active', 'unverified')
           ${cityCondition}
-      `, cityParam),
+      `, cityParam).catch(() => fallback),
     ]);
 
     const cityLabel = city ? `in ${city}` : 'near you';
