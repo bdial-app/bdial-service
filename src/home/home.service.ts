@@ -1161,34 +1161,121 @@ export class HomeService {
    * Live activity pulse data — aggregated stats for social proof.
    */
   async getLiveActivity(lat?: number, lng?: number, city?: string) {
+    const cacheKey = `home:live-activity:${city || 'all'}:${lat ? lat.toFixed(2) : ''}:${lng ? lng.toFixed(2) : ''}`;
+    const cached = await this.cacheManager.get<any[]>(cacheKey);
+    if (cached) return cached;
+
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
 
-    const [completedToday, onlineProviders, recentBookings] = await Promise.all([
-      this.bookingRepo.count({
-        where: {
-          status: 'completed',
-          completedAt: MoreThan(todayStart),
-        },
-      }),
-      this.providerRepo.count({
-        where: {
-          isAvailable: true,
-          status: In(['active', 'unverified']),
-        },
-      }),
-      this.bookingRepo.count({
-        where: {
-          status: In(['confirmed', 'in_progress']),
-          createdAt: MoreThan(todayStart),
-        },
-      }),
+    const hasGeo = lat != null && lng != null;
+
+    // Build city condition for raw SQL
+    const cityCondition = city ? `AND p.city ILIKE '%' || $1 || '%'` : '';
+    const cityParam = city ? [city] : [];
+    const paramOffset = cityParam.length;
+
+    // Run all queries in parallel
+    const [
+      providersInArea,
+      completedThisWeek,
+      activeDeals,
+      reviewsThisWeek,
+      avgRatingInArea,
+      categoriesServed,
+    ] = await Promise.all([
+      // 1. Providers in the user's city/area
+      this.dataSource.query(`
+        SELECT COUNT(*)::int AS cnt
+        FROM providers p
+        WHERE p.status IN ('active', 'unverified')
+          ${cityCondition}
+      `, cityParam),
+
+      // 2. Bookings completed this week in user's area
+      this.dataSource.query(`
+        SELECT COUNT(*)::int AS cnt
+        FROM bookings b
+        JOIN providers p ON p.id = b.provider_id
+        WHERE b.status = 'completed'
+          AND b.created_at >= $${paramOffset + 1}
+          ${cityCondition}
+      `, [...cityParam, weekAgo]),
+
+      // 3. Active deals/offers right now in the area
+      this.dataSource.query(`
+        SELECT COUNT(DISTINCT po.provider_id)::int AS cnt
+        FROM provider_offers po
+        JOIN providers p ON p.id = po.provider_id
+        WHERE po.is_active = true
+          AND po.starts_at <= NOW()
+          AND po.ends_at >= NOW()
+          AND p.status IN ('active', 'unverified')
+          ${cityCondition}
+      `, cityParam),
+
+      // 4. Reviews left this week in the area
+      this.dataSource.query(`
+        SELECT COUNT(*)::int AS cnt
+        FROM reviews r
+        JOIN providers p ON p.id = r.provider_id
+        WHERE r.status = 'active'
+          AND r.created_at >= $${paramOffset + 1}
+          ${cityCondition}
+      `, [...cityParam, weekAgo]),
+
+      // 5. Average rating of providers in area
+      this.dataSource.query(`
+        SELECT COALESCE(AVG(rs.avg_rating)::numeric(2,1), 0) AS avg
+        FROM provider_rating_stats rs
+        JOIN providers p ON p.id = rs.provider_id
+        WHERE p.status IN ('active', 'unverified')
+          ${cityCondition}
+      `, cityParam).catch(() => [{ avg: 0 }]),
+
+      // 6. Unique categories with providers in area
+      this.dataSource.query(`
+        SELECT COUNT(DISTINCT pc.category_id)::int AS cnt
+        FROM provider_categories pc
+        JOIN providers p ON p.id = pc.provider_id
+        WHERE p.status IN ('active', 'unverified')
+          ${cityCondition}
+      `, cityParam),
     ]);
 
-    return [
-      { count: onlineProviders || 0, text: 'providers available in your area' },
-      { count: completedToday || 0, text: 'services completed near you today' },
-      { count: recentBookings || 0, text: 'new requests in the last hour' },
+    const cityLabel = city ? `in ${city}` : 'near you';
+
+    const result = [
+      {
+        count: providersInArea[0]?.cnt || 0,
+        text: `providers available ${cityLabel}`,
+      },
+      {
+        count: completedThisWeek[0]?.cnt || 0,
+        text: `services completed ${cityLabel} this week`,
+      },
+      {
+        count: activeDeals[0]?.cnt || 0,
+        text: `businesses with active deals ${cityLabel}`,
+      },
+      {
+        count: reviewsThisWeek[0]?.cnt || 0,
+        text: `new reviews ${cityLabel} this week`,
+      },
+      {
+        count: parseFloat(avgRatingInArea[0]?.avg) || 0,
+        text: `average rating ${cityLabel}`,
+        format: 'rating',
+      },
+      {
+        count: categoriesServed[0]?.cnt || 0,
+        text: `service categories available ${cityLabel}`,
+      },
     ];
+
+    // Cache for 2 minutes
+    await this.cacheManager.set(cacheKey, result, 2 * 60 * 1000);
+    return result;
   }
 }
