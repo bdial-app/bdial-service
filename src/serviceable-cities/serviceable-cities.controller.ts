@@ -43,6 +43,13 @@ export class ServiceableCitiesController {
   @ApiResponse({ status: 409, description: 'Already requested this city today' })
   requestCity(@Body() dto: RequestCityDto, @Request() req: any) {
     const userId = req.user?.id ?? undefined;
-    return this.service.createCityRequest(dto.city, userId, dto.deviceId);
+    return this.service.createCityRequest(dto.city, userId, dto.deviceId, {
+      platform: dto.platform,
+      deviceType: dto.deviceType,
+      osVersion: dto.osVersion,
+      appVersion: dto.appVersion,
+      lat: dto.lat,
+      lng: dto.lng,
+    });
   }
 }

@@ -1204,4 +1204,10 @@ export class AdminController {
   getCityRequestStats(@Request() req) {
     return this.adminService.getCityRequestStats(req.user);
   }
+
+  @Get('city-requests/insights')
+  @ApiOperation({ summary: 'Get platform/device breakdown and recent city requests' })
+  getCityRequestInsights(@Request() req) {
+    return this.adminService.getCityRequestInsights(req.user);
+  }
 }

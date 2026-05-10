@@ -3060,5 +3060,10 @@ export class AdminService {
     this.assertAdmin(admin);
     return this.serviceableCitiesService.getRequestStats();
   }
+
+  async getCityRequestInsights(admin: any) {
+    this.assertAdmin(admin);
+    return this.serviceableCitiesService.getRequestInsights();
+  }
 }
 

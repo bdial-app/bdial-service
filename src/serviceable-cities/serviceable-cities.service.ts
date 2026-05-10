@@ -68,7 +68,12 @@ export class ServiceableCitiesService {
   /**
    * Record a city request. Rate-limited: max 1 per city per user/device per day.
    */
-  async createCityRequest(city: string, userId?: string, deviceId?: string) {
+  async createCityRequest(
+    city: string,
+    userId?: string,
+    deviceId?: string,
+    extra?: { platform?: string; deviceType?: string; osVersion?: string; appVersion?: string; lat?: number; lng?: number },
+  ) {
     const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
     // Check for duplicate within 24h
@@ -96,6 +101,12 @@ export class ServiceableCitiesService {
       city,
       userId: userId || null,
       deviceId: deviceId || null,
+      platform: extra?.platform || null,
+      deviceType: extra?.deviceType || null,
+      osVersion: extra?.osVersion || null,
+      appVersion: extra?.appVersion || null,
+      lat: extra?.lat ?? null,
+      lng: extra?.lng ?? null,
     });
     return this.requestRepo.save(request);
   }
@@ -112,6 +123,36 @@ export class ServiceableCitiesService {
       .getRawMany();
 
     return stats;
+  }
+
+  /** Platform & device breakdown for admin insights */
+  async getRequestInsights() {
+    const [platformStats, deviceTypeStats, recentRequests] = await Promise.all([
+      // Breakdown by platform
+      this.requestRepo
+        .createQueryBuilder('cr')
+        .select('COALESCE(cr.platform, \'unknown\')', 'platform')
+        .addSelect('COUNT(*)::int', 'count')
+        .groupBy('cr.platform')
+        .orderBy('count', 'DESC')
+        .getRawMany(),
+      // Breakdown by device type
+      this.requestRepo
+        .createQueryBuilder('cr')
+        .select('COALESCE(cr.device_type, \'unknown\')', 'deviceType')
+        .addSelect('COUNT(*)::int', 'count')
+        .groupBy('cr.device_type')
+        .orderBy('count', 'DESC')
+        .getRawMany(),
+      // Last 50 requests with full detail
+      this.requestRepo.find({
+        order: { createdAt: 'DESC' },
+        take: 50,
+        select: ['id', 'city', 'platform', 'deviceType', 'osVersion', 'appVersion', 'lat', 'lng', 'createdAt'],
+      }),
+    ]);
+
+    return { platformStats, deviceTypeStats, recentRequests };
   }
 
   /** Haversine formula — returns distance in km between two lat/lng pairs */
