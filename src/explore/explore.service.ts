@@ -680,7 +680,8 @@ export class ExploreService {
   // ─── Trending Categories ─────────────────────────────────────
 
   /**
-   * Trending categories — cached 5 min, uses LATERAL JOIN instead of duplicate subqueries.
+   * Trending categories — cached 5 min, ranked by velocity-weighted trending
+   * score (this_week bookings * (1 + growth_rate)).
    */
   private async getTrendingCategories(limit = 8) {
     const cached = await this.cacheManager.get<any[]>(ExploreService.CACHE_TRENDING_CATS);
@@ -689,7 +690,18 @@ export class ExploreService {
     const raw: any[] = await this.dataSource.query(`
       SELECT
         c.id, c.name, c.slug, c.icon,
-        COALESCE(pc_stats.provider_count, 0)::int AS "providerCount"
+        COALESCE(pc_stats.provider_count, 0)::int                AS "providerCount",
+        COALESCE(bk_this.cnt, 0)::int                            AS "weeklyBookings",
+        COALESCE(bk_last.cnt, 0)::int                            AS "lastWeekBookings",
+        GREATEST(
+          COALESCE(bk_this.cnt, 0) * (1.0 +
+            CASE
+              WHEN COALESCE(bk_last.cnt, 0) = 0 AND COALESCE(bk_this.cnt, 0) > 0 THEN 1.0
+              WHEN COALESCE(bk_last.cnt, 0) = 0 THEN 0.0
+              ELSE (COALESCE(bk_this.cnt, 0) - bk_last.cnt)::numeric / bk_last.cnt
+            END
+          ), 0
+        )                                                         AS "trendingScore"
       FROM categories c
       LEFT JOIN LATERAL (
         SELECT COUNT(DISTINCT pc.provider_id) AS provider_count
@@ -698,10 +710,27 @@ export class ExploreService {
         WHERE pc.category_id = c.id
            OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id = c.id)
       ) pc_stats ON true
+      LEFT JOIN LATERAL (
+        SELECT COUNT(b.id) AS cnt
+        FROM bookings b
+        JOIN provider_categories pc2 ON pc2.provider_id = b.provider_id
+        WHERE (pc2.category_id = c.id OR pc2.category_id IN (SELECT cc2.id FROM categories cc2 WHERE cc2.parent_id = c.id))
+          AND b.status IN ('completed', 'confirmed', 'in_progress')
+          AND b.created_at >= NOW() - INTERVAL '7 days'
+      ) bk_this ON true
+      LEFT JOIN LATERAL (
+        SELECT COUNT(b.id) AS cnt
+        FROM bookings b
+        JOIN provider_categories pc3 ON pc3.provider_id = b.provider_id
+        WHERE (pc3.category_id = c.id OR pc3.category_id IN (SELECT cc3.id FROM categories cc3 WHERE cc3.parent_id = c.id))
+          AND b.status IN ('completed', 'confirmed', 'in_progress')
+          AND b.created_at >= NOW() - INTERVAL '14 days'
+          AND b.created_at <  NOW() - INTERVAL '7 days'
+      ) bk_last ON true
       WHERE c.parent_id IS NULL
         AND c.is_active = true
         AND COALESCE(pc_stats.provider_count, 0) > 0
-      ORDER BY pc_stats.provider_count DESC, c.display_order ASC
+      ORDER BY "trendingScore" DESC, pc_stats.provider_count DESC, c.display_order ASC
       LIMIT $1
     `, [limit]);
 

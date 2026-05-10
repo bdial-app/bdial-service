@@ -387,7 +387,11 @@ export class SearchService {
     if (hasCategoryFilter) {
       const catPlaceholders = opts.categoryIds!.map((_, idx) => `$${pi + idx}`);
       conditions.push(
-        `p.id IN (SELECT pc.provider_id FROM provider_categories pc WHERE pc.category_id IN (${catPlaceholders.join(',')}))`,
+        `p.id IN (
+          SELECT pc.provider_id FROM provider_categories pc
+          WHERE pc.category_id IN (${catPlaceholders.join(',')})
+             OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id IN (${catPlaceholders.join(',')}))
+        )`,
       );
       allParams.push(...opts.categoryIds!);
       pi += opts.categoryIds!.length;
@@ -618,7 +622,11 @@ export class SearchService {
       const hasCategoryFilter = opts.categoryIds && opts.categoryIds.length > 0;
       if (hasCategoryFilter) {
         const catPlaceholders = opts.categoryIds!.map((_, idx) => `$${pi + idx}`);
-        conditions.push(`p.id IN (SELECT pc.provider_id FROM provider_categories pc WHERE pc.category_id IN (${catPlaceholders.join(',')}))`);
+        conditions.push(`p.id IN (
+          SELECT pc.provider_id FROM provider_categories pc
+          WHERE pc.category_id IN (${catPlaceholders.join(',')})
+             OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id IN (${catPlaceholders.join(',')}))
+        )`);
         allParams.push(...opts.categoryIds!);
         pi += opts.categoryIds!.length;
       }
@@ -731,7 +739,11 @@ export class SearchService {
       const hasCategoryFilter = opts.categoryIds && opts.categoryIds.length > 0;
       if (hasCategoryFilter) {
         const catPlaceholders = opts.categoryIds!.map((_, idx) => `$${pi + idx}`);
-        conditions.push(`p.id IN (SELECT pc.provider_id FROM provider_categories pc WHERE pc.category_id IN (${catPlaceholders.join(',')}))`);
+        conditions.push(`p.id IN (
+          SELECT pc.provider_id FROM provider_categories pc
+          WHERE pc.category_id IN (${catPlaceholders.join(',')})
+             OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id IN (${catPlaceholders.join(',')}))
+        )`);
         allParams.push(...opts.categoryIds!);
         pi += opts.categoryIds!.length;
       }
