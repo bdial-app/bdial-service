@@ -211,8 +211,34 @@ export class UserArchiveSystem1778800000000 implements MigrationInterface {
       ON CONFLICT ("id") DO NOTHING
     `);
 
-    // Hard-delete the migrated users (CASCADE will clean up owned data,
-    // SET NULL will preserve business records)
+    // Clean up provider child tables that lack ON DELETE CASCADE
+    // before hard-deleting users (users → providers cascades, but
+    // these children of providers would block it).
+    const deletedProviderIds = `
+      SELECT p."id" FROM "providers" p
+      WHERE p."user_id" IN (SELECT "id" FROM "users" WHERE "status" = 'deleted')
+    `;
+
+    // review children first (review_photos, review_reports → reviews)
+    await queryRunner.query(`
+      DELETE FROM "review_photos" WHERE "review_id" IN (
+        SELECT "id" FROM "reviews" WHERE "provider_id" IN (${deletedProviderIds})
+      )
+    `);
+    await queryRunner.query(`
+      DELETE FROM "review_reports" WHERE "review_id" IN (
+        SELECT "id" FROM "reviews" WHERE "provider_id" IN (${deletedProviderIds})
+      )
+    `);
+
+    // direct provider children without CASCADE
+    await queryRunner.query(`DELETE FROM "reviews" WHERE "provider_id" IN (${deletedProviderIds})`);
+    await queryRunner.query(`DELETE FROM "photos" WHERE "provider_id" IN (${deletedProviderIds})`);
+    await queryRunner.query(`DELETE FROM "products" WHERE "provider_id" IN (${deletedProviderIds})`);
+    await queryRunner.query(`DELETE FROM "provider_categories" WHERE "provider_id" IN (${deletedProviderIds})`);
+
+    // Now hard-delete the migrated users (CASCADE will clean up providers
+    // and their remaining CASCADE children; SET NULL preserves business records)
     await queryRunner.query(`
       DELETE FROM "users" WHERE "status" = 'deleted'
     `);
@@ -227,6 +253,7 @@ export class UserArchiveSystem1778800000000 implements MigrationInterface {
     // 6. Remove 'deleted' from users_status_enum
     //    PostgreSQL requires recreating the enum type
     // ════════════════════════════════════════════════════════════════════════
+    await queryRunner.query(`ALTER TABLE "users" ALTER COLUMN "status" DROP DEFAULT`);
     await queryRunner.query(`
       ALTER TABLE "users" ALTER COLUMN "status" TYPE varchar(20)
     `);
@@ -238,6 +265,7 @@ export class UserArchiveSystem1778800000000 implements MigrationInterface {
         ALTER COLUMN "status" TYPE "users_status_enum"
         USING "status"::"users_status_enum"
     `);
+    await queryRunner.query(`ALTER TABLE "users" ALTER COLUMN "status" SET DEFAULT 'active'`);
     await queryRunner.query(`DROP TYPE "users_status_enum_old"`);
   }
 

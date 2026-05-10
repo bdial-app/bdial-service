@@ -48,6 +48,7 @@ export class NotificationTemplate {
       'subscription_update',
       'invite_update',
     ],
+    default: 'system_announcement',
   })
   type: string;
 
