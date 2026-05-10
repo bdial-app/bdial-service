@@ -33,34 +33,80 @@ export class CategoriesService {
     const { page = 1, limit = 10 } = paginationDto;
     const skip = (page - 1) * limit;
 
-    const providerCountExpr = `COALESCE((
-      SELECT COUNT(DISTINCT pc.provider_id)::int
-      FROM provider_categories pc
-      JOIN providers p ON p.id = pc.provider_id AND p.status IN ('active', 'unverified')
-      WHERE pc.category_id = c.id
-         OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id = c.id)
-    ), 0)`;
-
-    // Get total count of categories with providers
-    const [{ count: total }] = await this.categoryRepo.query(
-      `SELECT COUNT(*)::int AS count FROM (
-        SELECT c.id FROM categories c
-        WHERE c.is_active = true
-        AND ${providerCountExpr} > 0
-      ) sub`,
+    // Raw SQL avoids TypeORM wrapping the correlated subquery for pagination,
+    // which would break the `c` alias and cause a 500.
+    const rows: any[] = await this.categoryRepo.query(
+      `SELECT
+         c.id,
+         c.name,
+         c.slug,
+         c.description,
+         c.icon,
+         c.image_url       AS "imageUrl",
+         c.is_active       AS "isActive",
+         c.display_order   AS "displayOrder",
+         c.parent_id       AS "parentId",
+         c.created_at      AS "createdAt",
+         c.updated_at      AS "updatedAt",
+         COALESCE((
+           SELECT COUNT(DISTINCT pc.provider_id)::int
+           FROM provider_categories pc
+           JOIN providers p ON p.id = pc.provider_id AND p.status IN ('active', 'unverified')
+           WHERE pc.category_id = c.id
+              OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id = c.id)
+         ), 0) AS "providerCount",
+         COUNT(*) OVER()::int AS "totalCount"
+       FROM categories c
+       WHERE c.is_active = true
+         AND COALESCE((
+           SELECT COUNT(DISTINCT pc2.provider_id)::int
+           FROM provider_categories pc2
+           JOIN providers p2 ON p2.id = pc2.provider_id AND p2.status IN ('active', 'unverified')
+           WHERE pc2.category_id = c.id
+              OR pc2.category_id IN (SELECT cc2.id FROM categories cc2 WHERE cc2.parent_id = c.id)
+         ), 0) > 0
+       ORDER BY "providerCount" DESC, c.display_order ASC
+       LIMIT $1 OFFSET $2`,
+      [limit, skip],
     );
 
-    // Get paginated categories with children
-    const data = await this.categoryRepo
-      .createQueryBuilder('c')
-      .leftJoinAndSelect('c.children', 'ch')
-      .where('c.is_active = true')
-      .andWhere(`${providerCountExpr} > 0`)
-      .orderBy(`${providerCountExpr}`, 'DESC')
-      .addOrderBy('c.display_order', 'ASC')
-      .offset(skip)
-      .limit(limit)
-      .getMany();
+    const total: number = rows[0]?.totalCount ?? 0;
+    const categoryIds = rows.map((r) => r.id);
+
+    // Load children for the fetched page in a single query
+    let childrenMap: Map<string, any[]> = new Map();
+    if (categoryIds.length > 0) {
+      const placeholders = categoryIds.map((_, i) => `$${i + 1}`).join(',');
+      const children: any[] = await this.categoryRepo.query(
+        `SELECT id, name, slug, description, icon, image_url AS "imageUrl",
+                is_active AS "isActive", display_order AS "displayOrder", parent_id AS "parentId",
+                created_at AS "createdAt", updated_at AS "updatedAt"
+         FROM categories
+         WHERE parent_id IN (${placeholders}) AND is_active = true
+         ORDER BY display_order ASC, name ASC`,
+        categoryIds,
+      );
+      for (const child of children) {
+        if (!childrenMap.has(child.parentId)) childrenMap.set(child.parentId, []);
+        childrenMap.get(child.parentId)!.push(child);
+      }
+    }
+
+    const data = rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      slug: r.slug,
+      description: r.description,
+      icon: r.icon,
+      imageUrl: r.imageUrl,
+      isActive: r.isActive,
+      displayOrder: r.displayOrder,
+      parentId: r.parentId,
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+      providerCount: parseInt(r.providerCount, 10) || 0,
+      children: childrenMap.get(r.id) ?? [],
+    }));
 
     return { data, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
   }
