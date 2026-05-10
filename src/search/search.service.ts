@@ -1,4 +1,4 @@
-import { Injectable, Logger, Inject } from '@nestjs/common';
+import { Injectable, Logger, Inject, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { CACHE_MANAGER, Cache } from '@nestjs/cache-manager';
@@ -100,7 +100,7 @@ export interface SearchResponse {
 }
 
 @Injectable()
-export class SearchService {
+export class SearchService implements OnModuleInit {
   private readonly logger = new Logger(SearchService.name);
 
   constructor(
@@ -115,6 +115,100 @@ export class SearchService {
     @Inject(CACHE_MANAGER) private cacheManager: Cache,
     private readonly categoryPersonalization: CategoryPersonalizationService,
   ) {}
+
+  // ────────────────────────────────────────────────────────────
+  // BOOTSTRAP — ensure search infrastructure exists
+  // ────────────────────────────────────────────────────────────
+
+  async onModuleInit(): Promise<void> {
+    await this.ensureSearchInfrastructure();
+  }
+
+  private async ensureSearchInfrastructure(): Promise<void> {
+    try {
+      // 1. Ensure pg_trgm extension
+      await this.dataSource.query('CREATE EXTENSION IF NOT EXISTS pg_trgm');
+
+      // 2. Ensure provider_rating_stats materialized view exists
+      const viewExists = await this.dataSource.query(`
+        SELECT 1 FROM pg_matviews WHERE matviewname = 'provider_rating_stats'
+      `);
+
+      if (viewExists.length === 0) {
+        this.logger.warn('provider_rating_stats materialized view missing — creating now');
+        await this.dataSource.query(`
+          CREATE MATERIALIZED VIEW provider_rating_stats AS
+          SELECT
+            provider_id,
+            AVG(star_rating)::numeric(3,2) AS avg_rating,
+            COUNT(*)::int                  AS review_count
+          FROM reviews
+          WHERE status = 'active'
+          GROUP BY provider_id
+        `);
+        await this.dataSource.query(`
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_rating_stats_pid
+            ON provider_rating_stats(provider_id)
+        `);
+        this.logger.log('Created provider_rating_stats materialized view');
+      }
+
+      // 3. Ensure search_vector column + trigger exist on providers
+      const svColExists = await this.dataSource.query(`
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'providers' AND column_name = 'search_vector'
+      `);
+
+      if (svColExists.length === 0) {
+        this.logger.warn('search_vector column missing on providers — creating now');
+        await this.dataSource.query('ALTER TABLE providers ADD COLUMN IF NOT EXISTS search_vector tsvector');
+        await this.dataSource.query('CREATE INDEX IF NOT EXISTS idx_providers_search_vector ON providers USING gin(search_vector)');
+      }
+
+      // 4. Backfill NULL search_vectors (trigger updates them on INSERT/UPDATE)
+      const nullCount = await this.dataSource.query(`
+        SELECT COUNT(*)::int AS cnt FROM providers
+        WHERE search_vector IS NULL AND status IN ('active', 'unverified')
+      `);
+
+      if (nullCount[0]?.cnt > 0) {
+        this.logger.warn(`${nullCount[0].cnt} providers have NULL search_vector — backfilling`);
+        await this.dataSource.query(`
+          UPDATE providers SET updated_at = NOW()
+          WHERE search_vector IS NULL AND status IN ('active', 'unverified')
+        `);
+        this.logger.log('Backfilled provider search_vectors');
+      }
+
+      // 5. Same for categories
+      const catSvExists = await this.dataSource.query(`
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'categories' AND column_name = 'search_vector'
+      `);
+
+      if (catSvExists.length === 0) {
+        await this.dataSource.query('ALTER TABLE categories ADD COLUMN IF NOT EXISTS search_vector tsvector');
+        await this.dataSource.query('CREATE INDEX IF NOT EXISTS idx_categories_search_vector ON categories USING gin(search_vector)');
+      }
+
+      const catNullCount = await this.dataSource.query(`
+        SELECT COUNT(*)::int AS cnt FROM categories
+        WHERE search_vector IS NULL AND is_active = true
+      `);
+
+      if (catNullCount[0]?.cnt > 0) {
+        this.logger.warn(`${catNullCount[0].cnt} categories have NULL search_vector — backfilling`);
+        await this.dataSource.query(`
+          UPDATE categories SET updated_at = NOW()
+          WHERE search_vector IS NULL AND is_active = true
+        `);
+      }
+
+      this.logger.log('Search infrastructure verified');
+    } catch (err) {
+      this.logger.error('Failed to verify search infrastructure — search may not work correctly', err);
+    }
+  }
 
   // ────────────────────────────────────────────────────────────
   // CONSTANTS
