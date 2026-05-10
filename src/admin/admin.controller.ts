@@ -1176,4 +1176,32 @@ export class AdminController {
   getModerationQueue(@Request() req) {
     return this.adminService.getModerationQueue(req.user);
   }
+
+  // ============================================
+  // Serviceable Cities
+  // ============================================
+
+  @Get('serviceable-cities')
+  @ApiOperation({ summary: 'Get all serviceable cities with request counts' })
+  getServiceableCities(@Request() req) {
+    return this.adminService.getServiceableCities(req.user);
+  }
+
+  @Patch('serviceable-cities/:id')
+  @ApiOperation({ summary: 'Update a serviceable city status' })
+  @ApiParam({ name: 'id', description: 'City ID' })
+  @ApiBody({ schema: { properties: { status: { type: 'string', enum: ['active', 'coming_soon', 'disabled'] } } } })
+  updateServiceableCity(
+    @Param('id') id: string,
+    @Request() req,
+    @Body('status') status: 'active' | 'coming_soon' | 'disabled',
+  ) {
+    return this.adminService.updateServiceableCity(req.user, id, status);
+  }
+
+  @Get('city-requests/stats')
+  @ApiOperation({ summary: 'Get aggregated city request stats' })
+  getCityRequestStats(@Request() req) {
+    return this.adminService.getCityRequestStats(req.user);
+  }
 }

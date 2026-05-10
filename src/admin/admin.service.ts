@@ -1,7 +1,7 @@
 import { Injectable, ForbiddenException, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, IsNull, In, MoreThan, ILike, Between } from 'typeorm';
-import { Provider, User, Verification, Review, ReviewReport, Report, ProviderWarning, Product, Category, ProviderCategory, Conversation, ConversationParticipant, Message, PromoBanner, SponsoredListing, ProviderOffer, ProviderBadge, ProviderAnalyticsEvent, ProviderLead, SearchLog, AdEvent, AppInvite, AuditLog, SystemSetting, Photo, ReviewPhoto } from '../entities';
+import { Provider, User, Verification, Review, ReviewReport, Report, ProviderWarning, Product, Category, ProviderCategory, Conversation, ConversationParticipant, Message, PromoBanner, SponsoredListing, ProviderOffer, ProviderBadge, ProviderAnalyticsEvent, ProviderLead, SearchLog, AdEvent, AppInvite, AuditLog, SystemSetting, Photo, ReviewPhoto, ServiceableCity } from '../entities';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { BugReport } from '../bug-reports/bug-report.entity';
 import { AdminCreateUserDto, AdminCreateProviderWithUserDto } from './dto/admin-create-user.dto';
@@ -9,6 +9,7 @@ import { StorageService } from '../storage/storage.service';
 import { OtpService } from '../otp/otp.service';
 import { compressImage, compressImages } from '../common/image-processor';
 import { SupabaseAuthService } from '../supabase/supabase-auth.service';
+import { ServiceableCitiesService } from '../serviceable-cities/serviceable-cities.service';
 
 @Injectable()
 export class AdminService {
@@ -44,6 +45,7 @@ export class AdminService {
     private storageService: StorageService,
     private otpService: OtpService,
     private supabaseAuthService: SupabaseAuthService,
+    private serviceableCitiesService: ServiceableCitiesService,
   ) {}
 
   private assertAdmin(user: any) {
@@ -3020,6 +3022,43 @@ export class AdminService {
         { type: 'bugReports', label: 'Open Bug Reports', count: openBugReports, route: '/bug-reports-admin?status=open' },
       ],
     };
+  }
+
+  // ============================================
+  // Serviceable Cities
+  // ============================================
+
+  async getServiceableCities(admin: any) {
+    this.assertAdmin(admin);
+    const cities = await this.serviceableCitiesService.getAllCities();
+    const requestStats = await this.serviceableCitiesService.getRequestStats();
+    const statsMap = new Map(requestStats.map((s) => [s.city.toLowerCase(), s]));
+
+    return cities.map((c) => ({
+      ...c,
+      requestCount: statsMap.get(c.name.toLowerCase())?.count ?? 0,
+      lastRequestAt: statsMap.get(c.name.toLowerCase())?.lastRequestAt ?? null,
+    }));
+  }
+
+  async updateServiceableCity(admin: any, id: string, status: 'active' | 'coming_soon' | 'disabled') {
+    this.assertAdmin(admin);
+    const cityRepo = this.dataSource.getRepository(ServiceableCity);
+    const city = await cityRepo.findOneBy({ id });
+    if (!city) throw new NotFoundException('Serviceable city not found');
+    const prev = city.status;
+    city.status = status;
+    if (status === 'active' && !city.launchDate) {
+      city.launchDate = new Date();
+    }
+    const saved = await cityRepo.save(city);
+    await this.createAuditLog(admin.id, 'update_serviceable_city', 'serviceable_city', id, { status: prev }, { status }, `City: ${city.name}`);
+    return saved;
+  }
+
+  async getCityRequestStats(admin: any) {
+    this.assertAdmin(admin);
+    return this.serviceableCitiesService.getRequestStats();
   }
 }
 

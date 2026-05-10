@@ -39,6 +39,7 @@ import { ContentSanitizerModule } from './common/content-sanitizer';
 import { BugReportsModule } from './bug-reports/bug-reports.module';
 import { PaymentModule } from './payment/payment.module';
 import { VoucherModule } from './voucher/voucher.module';
+import { ServiceableCitiesModule } from './serviceable-cities/serviceable-cities.module';
 import { SystemSetting } from './entities';
 
 @Module({
@@ -91,6 +92,7 @@ import { SystemSetting } from './entities';
     BugReportsModule,
     PaymentModule,
     VoucherModule,
+    ServiceableCitiesModule,
     TypeOrmModule.forFeature([SystemSetting]),
   ],
   controllers: [AppController],
