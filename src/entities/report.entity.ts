@@ -42,8 +42,8 @@ export class Report {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ name: 'reporter_id', type: 'uuid' })
-  reporterId: string;
+  @Column({ name: 'reporter_id', type: 'uuid', nullable: true })
+  reporterId: string | null;
 
   @Column({
     name: 'entity_type',
@@ -105,9 +105,9 @@ export class Report {
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
-  @ManyToOne(() => User, (u) => u.reports)
+  @ManyToOne(() => User, (u) => u.reports, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'reporter_id' })
-  reporter: User;
+  reporter: User | null;
 
   @ManyToOne(() => User, { nullable: true })
   @JoinColumn({ name: 'reviewed_by' })

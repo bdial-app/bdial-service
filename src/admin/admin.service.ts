@@ -1,7 +1,7 @@
 import { Injectable, ForbiddenException, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, IsNull, In, MoreThan, ILike, Between } from 'typeorm';
-import { Provider, User, Verification, Review, ReviewReport, Report, ProviderWarning, Product, Category, ProviderCategory, Conversation, ConversationParticipant, Message, PromoBanner, SponsoredListing, ProviderOffer, ProviderBadge, ProviderAnalyticsEvent, ProviderLead, SearchLog, AdEvent, AppInvite, AuditLog, SystemSetting, Photo, ReviewPhoto, ServiceableCity } from '../entities';
+import { Provider, User, Verification, Review, ReviewReport, Report, ProviderWarning, Product, Category, ProviderCategory, Conversation, ConversationParticipant, Message, PromoBanner, SponsoredListing, ProviderOffer, ProviderBadge, ProviderAnalyticsEvent, ProviderLead, SearchLog, AdEvent, AppInvite, AuditLog, SystemSetting, Photo, ReviewPhoto, ServiceableCity, UserArchive } from '../entities';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { BugReport } from '../bug-reports/bug-report.entity';
 import { AdminCreateUserDto, AdminCreateProviderWithUserDto } from './dto/admin-create-user.dto';
@@ -40,6 +40,7 @@ export class AdminService {
     @InjectRepository(ProviderCategory) private providerCatRepo: Repository<ProviderCategory>,
     @InjectRepository(Photo) private photoRepo: Repository<Photo>,
     @InjectRepository(ReviewPhoto) private reviewPhotoRepo: Repository<ReviewPhoto>,
+    @InjectRepository(UserArchive) private userArchiveRepo: Repository<UserArchive>,
     private dataSource: DataSource,
     private notificationDispatch: NotificationDispatchService,
     private storageService: StorageService,
@@ -360,7 +361,6 @@ export class AdminService {
     if (!user) throw new NotFoundException('User not found');
     if (user.role === 'admin') throw new BadRequestException('Cannot pause admin users');
     if (user.status === 'paused') throw new BadRequestException('User is already paused');
-    if (user.status === 'deleted') throw new BadRequestException('Cannot pause a deleted user');
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -475,9 +475,9 @@ export class AdminService {
 
     // Reporter credibility stats
     const [totalFiled, dismissedCount, actionCount] = await Promise.all([
-      this.entityReportRepo.count({ where: { reporterId: report.reporterId } }),
-      this.entityReportRepo.count({ where: { reporterId: report.reporterId, status: 'dismissed' as any } }),
-      this.entityReportRepo.count({ where: { reporterId: report.reporterId, status: 'action_taken' as any } }),
+      report.reporterId ? this.entityReportRepo.count({ where: { reporterId: report.reporterId } }) : Promise.resolve(0),
+      report.reporterId ? this.entityReportRepo.count({ where: { reporterId: report.reporterId, status: 'dismissed' as any } }) : Promise.resolve(0),
+      report.reporterId ? this.entityReportRepo.count({ where: { reporterId: report.reporterId, status: 'action_taken' as any } }) : Promise.resolve(0),
     ]);
 
     // Other reports against same target
@@ -756,6 +756,28 @@ export class AdminService {
     const pageSize = Math.min(100, Math.max(1, limit || 10));
     const skip = (currentPage - 1) * pageSize;
 
+    // Deleted users are in the archive table
+    if (status === 'deleted') {
+      const qb = this.userArchiveRepo.createQueryBuilder('a');
+      if (role) qb.andWhere('a.role = :role', { role });
+      qb.orderBy('a.deletedAt', 'DESC').skip(skip).take(pageSize);
+      const [items, total] = await qb.getManyAndCount();
+      return {
+        items: items.map((a) => ({
+          id: a.id,
+          name: 'Deleted User',
+          role: a.role,
+          gender: a.gender,
+          status: 'deleted' as const,
+          archiveReason: a.archiveReason,
+          deletedBy: a.deletedBy,
+          createdAt: a.originalCreatedAt,
+          deletedAt: a.deletedAt,
+        })),
+        meta: { total, page: currentPage, limit: pageSize, totalPages: Math.ceil(total / pageSize) },
+      };
+    }
+
     const qb = this.userRepo.createQueryBuilder('u');
 
     if (search) {
@@ -764,7 +786,7 @@ export class AdminService {
         { search: `%${search}%` },
       );
     }
-    const VALID_USER_STATUSES = ['active', 'suspended', 'deleted', 'paused'];
+    const VALID_USER_STATUSES = ['active', 'suspended', 'paused'];
     const VALID_USER_ROLES = ['customer', 'admin'];
     if (status && VALID_USER_STATUSES.includes(status)) qb.andWhere('u.status = :status', { status });
     if (role && VALID_USER_ROLES.includes(role)) qb.andWhere('u.role = :role', { role });
@@ -2567,20 +2589,52 @@ export class AdminService {
 
   async softDeleteUser(admin: any, userId: string) {
     this.assertAdmin(admin);
-    const user = await this.userRepo.findOneBy({ id: userId });
+    const user = await this.userRepo.findOne({ where: { id: userId }, relations: ['provider'] });
     if (!user) throw new NotFoundException('User not found');
     if (user.role === 'admin') throw new BadRequestException('Cannot delete admin users through this endpoint');
 
-    await this.userRepo.update(userId, { status: 'deleted', deletedAt: new Date() });
-    await this.createAuditLog(admin.id, 'delete_user', 'user', userId, { status: user.status }, { status: 'deleted' });
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
 
-    // Also disable their provider if they have one
-    const provider = await this.providerRepo.findOneBy({ userId });
-    if (provider && !provider.deletedAt) {
-      await this.providerRepo.update(provider.id, { status: 'disabled', deletedAt: new Date() });
+    try {
+      // 1. Create audit log BEFORE deleting the user (references admin, not user)
+      await this.createAuditLog(admin.id, 'delete_user', 'user', userId, { status: user.status }, { archived: true });
+
+      // 2. Archive non-PII audit data
+      await queryRunner.manager.save(UserArchive, {
+        id: user.id,
+        role: user.role,
+        gender: user.gender,
+        archiveReason: 'admin_action',
+        deletedBy: admin.id,
+        originalCreatedAt: user.createdAt,
+      });
+
+      // 3. Soft-delete provider if exists
+      if (user.provider && !user.provider.deletedAt) {
+        await queryRunner.manager.update(Provider, user.provider.id, { status: 'disabled', deletedAt: new Date() });
+      }
+
+      // 4. Deactivate chat participations
+      await queryRunner.manager.update(
+        ConversationParticipant,
+        { userId },
+        { isActive: false },
+      );
+
+      // 5. Hard-delete user row
+      await queryRunner.manager.delete(User, userId);
+
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
     }
 
-    return { message: 'User soft-deleted', id: userId };
+    return { message: 'User deleted and archived', id: userId };
   }
 
   // ============================================

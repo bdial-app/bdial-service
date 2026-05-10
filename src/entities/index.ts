@@ -1,4 +1,5 @@
 export { User } from './user.entity';
+export { UserArchive } from './user-archive.entity';
 export { Category } from './category.entity';
 export { ProviderCategory } from './provider-category.entity';
 export { Verification } from './verification.entity';

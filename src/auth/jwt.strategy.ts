@@ -24,7 +24,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     if (!user) {
       throw new UnauthorizedException('User not found');
     }
-    if (user.status === 'deleted' || user.status === 'suspended') {
+    if (user.status === 'suspended') {
       throw new UnauthorizedException('User account is inactive');
     }
     // Paused users are returned here — the JwtAuthGuard will decide

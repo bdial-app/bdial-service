@@ -22,8 +22,8 @@ export class ConversationParticipant {
   @Column({ name: 'conversation_id', type: 'uuid' })
   conversationId: string;
 
-  @Column({ name: 'user_id', type: 'uuid' })
-  userId: string;
+  @Column({ name: 'user_id', type: 'uuid', nullable: true })
+  userId: string | null;
 
   /** Role in this conversation */
   @Column({ type: 'enum', enum: ['customer', 'provider'] })
@@ -52,7 +52,7 @@ export class ConversationParticipant {
   @JoinColumn({ name: 'conversation_id' })
   conversation: Conversation;
 
-  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'user_id' })
-  user: User;
+  user: User | null;
 }

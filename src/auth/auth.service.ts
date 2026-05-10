@@ -182,7 +182,7 @@ export class AuthService {
     if (!user) {
       throw new BadRequestException('User not found');
     }
-    if (user.status === 'deleted' || user.status === 'suspended') {
+    if (user.status === 'suspended') {
       throw new ForbiddenException('Account is inactive');
     }
     const token = this.jwtService.sign({ sub: user.id, mobile: user.mobileNumber, email: user.email });

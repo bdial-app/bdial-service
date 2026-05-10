@@ -49,16 +49,12 @@ export class User {
   @Column({ type: 'decimal', precision: 9, scale: 6, nullable: true })
   longitude: number | null;
 
-  @Column({ type: 'enum', enum: ['active', 'suspended', 'deleted', 'paused'], default: 'active' })
+  @Column({ type: 'enum', enum: ['active', 'suspended', 'paused'], default: 'active' })
   status: string;
 
   @Column({ name: 'paused_at', type: 'timestamptz', nullable: true })
   @Exclude()
   pausedAt: Date | null;
-
-  @Column({ name: 'archive_reason', type: 'varchar', length: 50, nullable: true })
-  @Exclude()
-  archiveReason: string | null;
 
   @Column({ name: 'supabase_id', type: 'varchar', length: 100, nullable: true, unique: true })
   @Exclude()
@@ -77,10 +73,6 @@ export class User {
 
   @Column({ name: 'sso_provider', type: 'varchar', length: 50, nullable: true })
   ssoProvider: string | null;
-
-  @Column({ name: 'deleted_at', type: 'timestamptz', nullable: true })
-  @Exclude()
-  deletedAt: Date | null;
 
   @Column({ name: 'preferred_mode', type: 'varchar', length: 20, default: 'customer' })
   preferredMode: string;

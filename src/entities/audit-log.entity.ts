@@ -13,8 +13,8 @@ export class AuditLog {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ name: 'admin_id', type: 'uuid' })
-  adminId: string;
+  @Column({ name: 'admin_id', type: 'uuid', nullable: true })
+  adminId: string | null;
 
   @Column({ type: 'varchar', length: 50 })
   action: string;
@@ -40,7 +40,7 @@ export class AuditLog {
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
-  @ManyToOne(() => User)
+  @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'admin_id' })
-  admin: User;
+  admin: User | null;
 }

@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull, Not, ILike, DataSource } from 'typeorm';
-import { User, Verification, Provider, ConversationParticipant, SavedItem, SavedLocation, Review, Booking, SearchLog } from '../entities';
+import { User, Verification, Provider, ConversationParticipant, SavedItem, SavedLocation, Review, Booking, SearchLog, UserArchive } from '../entities';
 import { UpdateUserDto, UserListQueryDto } from './dto/user.dto';
 import { CreateUserDto } from './dto/create-user.dto';
 import { AdminUpdateUserDto } from './dto/admin-update-user.dto';
@@ -12,6 +12,7 @@ import { SupabaseAuthService } from '../supabase/supabase-auth.service';
 export class UsersService {
   constructor(
     @InjectRepository(User) private userRepo: Repository<User>,
+    @InjectRepository(UserArchive) private userArchiveRepo: Repository<UserArchive>,
     @InjectRepository(Verification) private verificationRepo: Repository<Verification>,
     @InjectRepository(Provider) private providerRepo: Repository<Provider>,
     @InjectRepository(ConversationParticipant) private participantRepo: Repository<ConversationParticipant>,
@@ -30,7 +31,6 @@ export class UsersService {
     const skip = (page - 1) * limit;
 
     const [items, total] = await this.userRepo.findAndCount({
-      where: { deletedAt: IsNull() },
       skip,
       take: limit,
       order: { createdAt: 'DESC' },
@@ -94,13 +94,7 @@ export class UsersService {
 
     const qb = this.userRepo.createQueryBuilder('user');
 
-    if (status === 'deleted') {
-      qb.where('user.deletedAt IS NOT NULL');
-    } else {
-      qb.where('user.deletedAt IS NULL');
-      if (status) qb.andWhere('user.status = :status', { status });
-    }
-
+    if (status) qb.andWhere('user.status = :status', { status });
     if (role) qb.andWhere('user.role = :role', { role });
 
     if (search) {
@@ -114,8 +108,10 @@ export class UsersService {
   }
 
   /**
-   * Soft-delete (archive) user account.
-   * Scrubs PII, deletes Supabase auth user, suspends provider, deactivates chats.
+   * Archive and hard-delete user account.
+   * Copies audit data to user_archives, deletes Supabase auth user,
+   * soft-deletes provider, deactivates chats, then removes user row.
+   * FK cascades handle cleanup: owned data is deleted, business records get SET NULL.
    */
   async deleteAccount(userId: string) {
     const user = await this.userRepo.findOne({
@@ -123,52 +119,47 @@ export class UsersService {
       relations: ['provider'],
     });
     if (!user) throw new NotFoundException('User not found');
-    if (user.status === 'deleted') throw new BadRequestException('Account is already deleted');
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
 
     try {
-      // 1. Scrub PII and set status to deleted
-      await queryRunner.manager.update(User, userId, {
-        status: 'deleted',
-        deletedAt: new Date(),
+      // 1. Archive non-PII audit data
+      await queryRunner.manager.save(UserArchive, {
+        id: user.id,
+        role: user.role,
+        gender: user.gender,
         archiveReason: 'user_request',
-        name: 'Deleted User',
-        mobileNumber: null,
-        email: null,
-        googleId: null,
-        googleEmail: null,
-        googleName: null,
-        ssoProvider: null,
-        city: null,
-        area: null,
-        pincode: null,
-        latitude: null,
-        longitude: null,
+        deletedBy: null,
+        originalCreatedAt: user.createdAt,
       });
 
       // 2. Delete Supabase auth user (prevents SSO ghost re-login)
       if (user.supabaseId) {
         await this.supabaseAuthService.deleteSupabaseUser(user.supabaseId);
-        await queryRunner.manager.update(User, userId, { supabaseId: null });
       }
 
-      // 3. Suspend provider if exists
+      // 3. Soft-delete provider if exists (keeps provider products/sponsorships intact)
       if (user.provider) {
         await queryRunner.manager.update(Provider, user.provider.id, {
-          status: 'suspended',
+          status: 'disabled',
           isAvailable: false,
+          deletedAt: new Date(),
         });
       }
 
-      // 4. Deactivate chat participations
+      // 4. Deactivate chat participations before deletion
       await queryRunner.manager.update(
         ConversationParticipant,
         { userId },
         { isActive: false },
       );
+
+      // 5. Hard-delete user row — CASCADE deletes owned data (notifications,
+      //    device tokens, saved items, etc.), SET NULL preserves business records
+      //    (bookings, messages, reviews, reports)
+      await queryRunner.manager.delete(User, userId);
 
       await queryRunner.commitTransaction();
       return { message: 'Account has been deleted and archived successfully' };

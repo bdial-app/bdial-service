@@ -133,6 +133,7 @@ export class ProvidersController {
   @ApiQuery({ name: 'minRating', required: false, type: Number })
   @ApiQuery({ name: 'lat', required: false, type: Number })
   @ApiQuery({ name: 'lng', required: false, type: Number })
+  @ApiQuery({ name: 'search', required: false, type: String, description: 'Search by business name or service' })
   getWomenLedProviders(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
@@ -142,6 +143,7 @@ export class ProvidersController {
     @Query('minRating') minRating?: string,
     @Query('lat') lat?: string,
     @Query('lng') lng?: string,
+    @Query('search') search?: string,
   ) {
     return this.providersService.getWomenLedHub({
       page: page ? parseInt(page, 10) : 1,
@@ -152,6 +154,7 @@ export class ProvidersController {
       minRating: minRating ? parseFloat(minRating) : undefined,
       lat: lat ? parseFloat(lat) : undefined,
       lng: lng ? parseFloat(lng) : undefined,
+      search: search?.trim() || undefined,
     });
   }
 

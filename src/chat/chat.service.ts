@@ -236,8 +236,8 @@ export class ChatService {
 
     // Get provider info for provider participants
     const providerUserIds = otherParticipants
-      .filter((p) => p.role === 'provider')
-      .map((p) => p.userId);
+      .filter((p) => p.role === 'provider' && p.userId)
+      .map((p) => p.userId!);
 
     const providers =
       providerUserIds.length > 0
@@ -274,7 +274,7 @@ export class ChatService {
         (op) => op.conversationId === conv.id && op.userId !== userId,
       );
       const otherUser = otherP?.user;
-      const otherProvider = otherP ? providerByUserId.get(otherP.userId) : null;
+      const otherProvider = otherP?.userId ? providerByUserId.get(otherP.userId) : null;
 
       // Display name: provider brand name if provider, else user name
       const displayName =
@@ -342,7 +342,7 @@ export class ChatService {
 
     // Get provider info if other is provider
     let otherProvider: Provider | null = null;
-    if (otherP?.role === 'provider') {
+    if (otherP?.role === 'provider' && otherP.userId) {
       otherProvider = await this.providerRepo.findOne({
         where: { userId: otherP.userId },
       });
@@ -472,7 +472,7 @@ export class ChatService {
     });
 
     for (const op of otherParticipants) {
-      if (op.userId !== userId) {
+      if (op.userId && op.userId !== userId) {
         this.realtime.broadcastConversationUpdate(op.userId, {
           conversationId,
           lastMessagePreview: preview,

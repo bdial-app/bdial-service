@@ -20,8 +20,8 @@ export class Message {
   @Column({ name: 'conversation_id', type: 'uuid' })
   conversationId: string;
 
-  @Column({ name: 'sender_id', type: 'uuid' })
-  senderId: string;
+  @Column({ name: 'sender_id', type: 'uuid', nullable: true })
+  senderId: string | null;
 
   /** Nullable for image-only or system messages */
   @Column({ type: 'text', nullable: true })
@@ -62,7 +62,7 @@ export class Message {
   @JoinColumn({ name: 'conversation_id' })
   conversation: Conversation;
 
-  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'sender_id' })
-  sender: User;
+  sender: User | null;
 }

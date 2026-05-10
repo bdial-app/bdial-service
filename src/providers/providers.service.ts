@@ -613,6 +613,7 @@ export class ProvidersService {
 
   /**
    * Women-Led Hub — paginated list of approved women-led providers with aggregate stats.
+   * Sponsored women-led businesses appear first, then the rest sorted by chosen criteria.
    */
   async getWomenLedHub(opts: {
     page?: number;
@@ -623,10 +624,12 @@ export class ProvidersService {
     minRating?: number;
     lat?: number;
     lng?: number;
+    search?: string;
   }) {
-    const { page = 1, limit = 12, city, categoryIds, sortBy = 'rating', minRating, lat, lng } = opts;
+    const { page = 1, limit = 12, city, categoryIds, sortBy = 'rating', minRating, lat, lng, search } = opts;
     const offset = (page - 1) * limit;
     const hasGeo = lat != null && lng != null;
+    const now = new Date();
 
     const qb = this.providerRepo
       .createQueryBuilder('p')
@@ -654,6 +657,13 @@ export class ProvidersService {
         `(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`,
         'listingPhoto',
       )
+      // Sponsored flag: check if provider has an active sponsored listing right now
+      .leftJoin(
+        'sponsored_listings', 'sl',
+        `sl.provider_id = p.id AND sl.is_active = true AND sl.approval_status = 'approved' AND sl.starts_at <= :now AND sl.ends_at >= :now AND sl.spent_amount < sl.budget_amount`,
+      )
+      .addSelect('CASE WHEN sl.id IS NOT NULL THEN true ELSE false END', 'isSponsored')
+      .setParameter('now', now)
       .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
       .andWhere("p.women_led_status = 'approved'");
 
@@ -667,6 +677,12 @@ export class ProvidersService {
     if (minRating != null && minRating > 0) {
       qb.andWhere('rs.avg_rating >= :minRating', { minRating });
     }
+    if (search) {
+      qb.andWhere(
+        `(p.brand_name ILIKE :search OR p.description ILIKE :search OR EXISTS (SELECT 1 FROM provider_categories pc3 JOIN categories c3 ON c3.id = pc3.category_id WHERE pc3.provider_id = p.id AND c3.name ILIKE :search))`,
+        { search: `%${search}%` },
+      );
+    }
 
     if (hasGeo) {
       const haversine = `6371 * acos(LEAST(1.0, cos(radians(:lat)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians(:lng)) + sin(radians(:lat)) * sin(radians(p.latitude))))`;
@@ -674,12 +690,14 @@ export class ProvidersService {
         .setParameters({ lat, lng });
     }
 
+    // Sponsored first, then by chosen sort
+    qb.orderBy('CASE WHEN sl.id IS NOT NULL THEN 0 ELSE 1 END', 'ASC');
     if (sortBy === 'newest') {
-      qb.orderBy('p.created_at', 'DESC');
+      qb.addOrderBy('p.created_at', 'DESC');
     } else if (sortBy === 'reviews') {
-      qb.orderBy('rs.review_count', 'DESC', 'NULLS LAST').addOrderBy('rs.avg_rating', 'DESC', 'NULLS LAST');
+      qb.addOrderBy('rs.review_count', 'DESC', 'NULLS LAST').addOrderBy('rs.avg_rating', 'DESC', 'NULLS LAST');
     } else {
-      qb.orderBy('rs.avg_rating', 'DESC', 'NULLS LAST').addOrderBy('p.created_at', 'DESC');
+      qb.addOrderBy('rs.avg_rating', 'DESC', 'NULLS LAST').addOrderBy('p.created_at', 'DESC');
     }
 
     const totalQb = qb.clone();
@@ -728,6 +746,7 @@ export class ProvidersService {
       isFeatured: r.isFeatured,
       isAvailable: r.isAvailable,
       isWomenLed: true,
+      isSponsored: r.isSponsored === true || r.isSponsored === 'true',
       distance: r.distance ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
     }));
 

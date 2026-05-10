@@ -8,6 +8,7 @@ import { AuthModule } from '../auth/auth.module';
 import { SupabaseModule } from '../supabase/supabase.module';
 import {
   User,
+  UserArchive,
   Verification,
   Provider,
   ConversationParticipant,
@@ -24,6 +25,7 @@ import {
   imports: [
     TypeOrmModule.forFeature([
       User,
+      UserArchive,
       Verification,
       Provider,
       ConversationParticipant,

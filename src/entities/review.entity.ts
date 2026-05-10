@@ -24,8 +24,8 @@ export class Review {
   @Column({ name: 'provider_id', type: 'uuid' })
   providerId: string;
 
-  @Column({ name: 'reviewer_id', type: 'uuid' })
-  reviewerId: string;
+  @Column({ name: 'reviewer_id', type: 'uuid', nullable: true })
+  reviewerId: string | null;
 
   @Column({ name: 'star_rating', type: 'smallint' })
   starRating: number;
@@ -52,9 +52,9 @@ export class Review {
   @JoinColumn({ name: 'provider_id' })
   provider: Provider;
 
-  @ManyToOne(() => User, (u) => u.reviews)
+  @ManyToOne(() => User, (u) => u.reviews, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'reviewer_id' })
-  reviewer: User;
+  reviewer: User | null;
 
   @ManyToOne(() => User, (u) => u.moderatedReviews, { nullable: true })
   @JoinColumn({ name: 'moderated_by' })

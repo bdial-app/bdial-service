@@ -60,7 +60,7 @@ export class NotificationSchedulerService {
     const type = (batch.data?.type as NotificationType) || 'promotional';
 
     await this.dispatchService.sendBroadcast(
-      batch.sentBy,
+      batch.sentBy!,
       batch.title,
       batch.body,
       batch.targetType,
