@@ -11,10 +11,93 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * 4. Drops archive-related columns from `users` (deleted_at, archive_reason)
  * 5. Removes 'deleted' from users_status_enum
  *
- * All statements are idempotent where possible.
+ * Uses dynamic constraint lookup to handle TypeORM's auto-generated constraint names.
  */
 export class UserArchiveSystem1778800000000 implements MigrationInterface {
   name = 'UserArchiveSystem1778800000000';
+
+  /**
+   * Helper: dynamically find and replace a FK constraint on a column.
+   * Looks up the actual constraint name from pg catalog, drops it,
+   * and recreates with the desired ON DELETE behavior.
+   */
+  private async replaceFk(
+    queryRunner: QueryRunner,
+    tableName: string,
+    columnName: string,
+    refTable: string,
+    refColumn: string,
+    onDelete: 'SET NULL' | 'CASCADE',
+    newConstraintName: string,
+  ): Promise<void> {
+    // Find all FK constraints on this table+column referencing the target
+    const constraints: { constraint_name: string }[] = await queryRunner.query(`
+      SELECT con.conname AS constraint_name
+      FROM pg_constraint con
+      JOIN pg_attribute att ON att.attnum = ANY(con.conkey) AND att.attrelid = con.conrelid
+      WHERE con.contype = 'f'
+        AND con.conrelid = $1::regclass
+        AND att.attname = $2
+        AND con.confrelid = $3::regclass
+    `, [tableName, columnName, refTable]);
+
+    // Drop all matching constraints
+    for (const c of constraints) {
+      await queryRunner.query(`ALTER TABLE "${tableName}" DROP CONSTRAINT "${c.constraint_name}"`);
+    }
+
+    // Recreate with desired behavior
+    await queryRunner.query(`
+      ALTER TABLE "${tableName}"
+        ADD CONSTRAINT "${newConstraintName}"
+        FOREIGN KEY ("${columnName}") REFERENCES "${refTable}"("${refColumn}") ON DELETE ${onDelete}
+    `);
+  }
+
+  /**
+   * Helper: drop a unique constraint by looking it up dynamically.
+   */
+  private async dropUniqueConstraint(
+    queryRunner: QueryRunner,
+    tableName: string,
+    columns: string[],
+  ): Promise<void> {
+    // Drop table-level unique constraints
+    const constraints: { conname: string }[] = await queryRunner.query(`
+      SELECT con.conname
+      FROM pg_constraint con
+      WHERE con.contype = 'u'
+        AND con.conrelid = $1::regclass
+        AND (
+          SELECT array_agg(att.attname ORDER BY att.attname)
+          FROM pg_attribute att
+          WHERE att.attnum = ANY(con.conkey) AND att.attrelid = con.conrelid
+        ) = $2::name[]
+    `, [tableName, columns.sort()]);
+
+    for (const c of constraints) {
+      await queryRunner.query(`ALTER TABLE "${tableName}" DROP CONSTRAINT "${c.conname}"`);
+    }
+
+    // Drop unique indexes (TypeORM sometimes creates these instead of constraints)
+    const indexes: { indexname: string }[] = await queryRunner.query(`
+      SELECT i.relname AS indexname
+      FROM pg_index ix
+      JOIN pg_class i ON i.oid = ix.indexrelid
+      WHERE ix.indrelid = $1::regclass
+        AND ix.indisunique = true
+        AND NOT ix.indisprimary
+        AND (
+          SELECT array_agg(att.attname ORDER BY att.attname)
+          FROM pg_attribute att
+          WHERE att.attnum = ANY(ix.indkey) AND att.attrelid = ix.indrelid
+        ) = $2::name[]
+    `, [tableName, columns.sort()]);
+
+    for (const idx of indexes) {
+      await queryRunner.query(`DROP INDEX IF EXISTS "${idx.indexname}"`);
+    }
+  }
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     // ════════════════════════════════════════════════════════════════════════
@@ -33,176 +116,79 @@ export class UserArchiveSystem1778800000000 implements MigrationInterface {
     `);
 
     // ════════════════════════════════════════════════════════════════════════
-    // 2. Alter FK constraints — change CASCADE to SET NULL for business records
+    // 2. Make columns nullable + replace FK constraints with SET NULL
+    //    Uses dynamic lookup so auto-generated constraint names are handled
     // ════════════════════════════════════════════════════════════════════════
 
-    // -- bookings.user_id: CASCADE → SET NULL (bookings are business records)
+    // -- bookings.user_id: CASCADE → SET NULL
     await queryRunner.query(`ALTER TABLE "bookings" ALTER COLUMN "user_id" DROP NOT NULL`);
-    await queryRunner.query(`
-      ALTER TABLE "bookings" DROP CONSTRAINT IF EXISTS "FK_bookings_user_id";
-      ALTER TABLE "bookings" DROP CONSTRAINT IF EXISTS "FK_64cd97487c5c42806e7cb1acefd"
-    `);
-    await queryRunner.query(`
-      DO $$ BEGIN
-        ALTER TABLE "bookings"
-          ADD CONSTRAINT "FK_bookings_user_id"
-          FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE SET NULL;
-      EXCEPTION WHEN duplicate_object THEN NULL;
-      END $$
-    `);
+    await this.replaceFk(queryRunner, 'bookings', 'user_id', 'users', 'id', 'SET NULL', 'FK_bookings_user_id');
 
-    // -- messages.sender_id: CASCADE → SET NULL (other party needs chat history)
+    // -- messages.sender_id: CASCADE → SET NULL
     await queryRunner.query(`ALTER TABLE "messages" ALTER COLUMN "sender_id" DROP NOT NULL`);
-    await queryRunner.query(`
-      ALTER TABLE "messages" DROP CONSTRAINT IF EXISTS "FK_messages_sender_id";
-      ALTER TABLE "messages" DROP CONSTRAINT IF EXISTS "FK_22133395bd13b970cee5cc03e15"
-    `);
-    await queryRunner.query(`
-      DO $$ BEGIN
-        ALTER TABLE "messages"
-          ADD CONSTRAINT "FK_messages_sender_id"
-          FOREIGN KEY ("sender_id") REFERENCES "users"("id") ON DELETE SET NULL;
-      EXCEPTION WHEN duplicate_object THEN NULL;
-      END $$
-    `);
+    await this.replaceFk(queryRunner, 'messages', 'sender_id', 'users', 'id', 'SET NULL', 'FK_messages_sender_id');
 
     // -- conversation_participants.user_id: CASCADE → SET NULL
     await queryRunner.query(`ALTER TABLE "conversation_participants" ALTER COLUMN "user_id" DROP NOT NULL`);
-    await queryRunner.query(`
-      ALTER TABLE "conversation_participants" DROP CONSTRAINT IF EXISTS "FK_conversation_participants_user_id";
-      ALTER TABLE "conversation_participants" DROP CONSTRAINT IF EXISTS "FK_be84f16f78cf84b8077b4508adb"
-    `);
-    await queryRunner.query(`
-      DO $$ BEGIN
-        ALTER TABLE "conversation_participants"
-          ADD CONSTRAINT "FK_conversation_participants_user_id"
-          FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE SET NULL;
-      EXCEPTION WHEN duplicate_object THEN NULL;
-      END $$
-    `);
+    await this.replaceFk(queryRunner, 'conversation_participants', 'user_id', 'users', 'id', 'SET NULL', 'FK_conv_participants_user_id');
 
     // -- reviews.reviewer_id: NO ACTION → SET NULL
     await queryRunner.query(`ALTER TABLE "reviews" ALTER COLUMN "reviewer_id" DROP NOT NULL`);
-    await queryRunner.query(`
-      ALTER TABLE "reviews" DROP CONSTRAINT IF EXISTS "FK_reviews_reviewer_id";
-      ALTER TABLE "reviews" DROP CONSTRAINT IF EXISTS "FK_a0ad2ce47b01011f1e614ffd31b"
-    `);
-    await queryRunner.query(`
-      DO $$ BEGIN
-        ALTER TABLE "reviews"
-          ADD CONSTRAINT "FK_reviews_reviewer_id"
-          FOREIGN KEY ("reviewer_id") REFERENCES "users"("id") ON DELETE SET NULL;
-      EXCEPTION WHEN duplicate_object THEN NULL;
-      END $$
-    `);
+    await this.replaceFk(queryRunner, 'reviews', 'reviewer_id', 'users', 'id', 'SET NULL', 'FK_reviews_reviewer_id');
+
+    // -- reviews.moderated_by: ensure SET NULL (already nullable)
+    await this.replaceFk(queryRunner, 'reviews', 'moderated_by', 'users', 'id', 'SET NULL', 'FK_reviews_moderated_by');
 
     // -- review_reports.reporter_id: NO ACTION → SET NULL
     await queryRunner.query(`ALTER TABLE "review_reports" ALTER COLUMN "reporter_id" DROP NOT NULL`);
-    await queryRunner.query(`
-      ALTER TABLE "review_reports" DROP CONSTRAINT IF EXISTS "FK_review_reports_reporter_id";
-      ALTER TABLE "review_reports" DROP CONSTRAINT IF EXISTS "FK_6c3b6a53c2dbb46dc7b1b6c0bfe"
-    `);
-    await queryRunner.query(`
-      DO $$ BEGIN
-        ALTER TABLE "review_reports"
-          ADD CONSTRAINT "FK_review_reports_reporter_id"
-          FOREIGN KEY ("reporter_id") REFERENCES "users"("id") ON DELETE SET NULL;
-      EXCEPTION WHEN duplicate_object THEN NULL;
-      END $$
-    `);
+    await this.replaceFk(queryRunner, 'review_reports', 'reporter_id', 'users', 'id', 'SET NULL', 'FK_review_reports_reporter_id');
 
     // -- reports.reporter_id: NO ACTION → SET NULL
     await queryRunner.query(`ALTER TABLE "reports" ALTER COLUMN "reporter_id" DROP NOT NULL`);
-    await queryRunner.query(`
-      ALTER TABLE "reports" DROP CONSTRAINT IF EXISTS "FK_reports_reporter_id";
-      ALTER TABLE "reports" DROP CONSTRAINT IF EXISTS "FK_31bb535ffa19fd9f48e4bc0fedd"
-    `);
-    await queryRunner.query(`
-      DO $$ BEGIN
-        ALTER TABLE "reports"
-          ADD CONSTRAINT "FK_reports_reporter_id"
-          FOREIGN KEY ("reporter_id") REFERENCES "users"("id") ON DELETE SET NULL;
-      EXCEPTION WHEN duplicate_object THEN NULL;
-      END $$
-    `);
+    await this.replaceFk(queryRunner, 'reports', 'reporter_id', 'users', 'id', 'SET NULL', 'FK_reports_reporter_id');
+
+    // -- reports.reviewed_by: ensure SET NULL (already nullable)
+    await this.replaceFk(queryRunner, 'reports', 'reviewed_by', 'users', 'id', 'SET NULL', 'FK_reports_reviewed_by');
+
+    // -- verifications.reviewed_by: ensure SET NULL (already nullable)
+    await this.replaceFk(queryRunner, 'verifications', 'reviewed_by', 'users', 'id', 'SET NULL', 'FK_verifications_reviewed_by');
 
     // -- audit_logs.admin_id: NO ACTION → SET NULL
     await queryRunner.query(`ALTER TABLE "audit_logs" ALTER COLUMN "admin_id" DROP NOT NULL`);
-    await queryRunner.query(`
-      ALTER TABLE "audit_logs" DROP CONSTRAINT IF EXISTS "FK_audit_logs_admin_id";
-      ALTER TABLE "audit_logs" DROP CONSTRAINT IF EXISTS "FK_fca3a9e13ab56de3bd59c3a17ac"
-    `);
-    await queryRunner.query(`
-      DO $$ BEGIN
-        ALTER TABLE "audit_logs"
-          ADD CONSTRAINT "FK_audit_logs_admin_id"
-          FOREIGN KEY ("admin_id") REFERENCES "users"("id") ON DELETE SET NULL;
-      EXCEPTION WHEN duplicate_object THEN NULL;
-      END $$
-    `);
+    await this.replaceFk(queryRunner, 'audit_logs', 'admin_id', 'users', 'id', 'SET NULL', 'FK_audit_logs_admin_id');
 
     // -- notification_batches.sent_by: NO ACTION → SET NULL
     await queryRunner.query(`ALTER TABLE "notification_batches" ALTER COLUMN "sent_by" DROP NOT NULL`);
-    await queryRunner.query(`
-      ALTER TABLE "notification_batches" DROP CONSTRAINT IF EXISTS "FK_notification_batches_sent_by";
-      ALTER TABLE "notification_batches" DROP CONSTRAINT IF EXISTS "FK_7e8b9e2c5a3c4f1d2e6a7b8c9d0"
-    `);
-    await queryRunner.query(`
-      DO $$ BEGIN
-        ALTER TABLE "notification_batches"
-          ADD CONSTRAINT "FK_notification_batches_sent_by"
-          FOREIGN KEY ("sent_by") REFERENCES "users"("id") ON DELETE SET NULL;
-      EXCEPTION WHEN duplicate_object THEN NULL;
-      END $$
-    `);
+    await this.replaceFk(queryRunner, 'notification_batches', 'sent_by', 'users', 'id', 'SET NULL', 'FK_notification_batches_sent_by');
 
-    // -- provider_warnings.issued_by: already nullable, ensure SET NULL
-    await queryRunner.query(`
-      ALTER TABLE "provider_warnings" DROP CONSTRAINT IF EXISTS "FK_provider_warnings_issued_by";
-      ALTER TABLE "provider_warnings" DROP CONSTRAINT IF EXISTS "FK_a2f3b4c5d6e7f8a9b0c1d2e3f4a5"
-    `);
-    await queryRunner.query(`
-      DO $$ BEGIN
-        ALTER TABLE "provider_warnings"
-          ADD CONSTRAINT "FK_provider_warnings_issued_by"
-          FOREIGN KEY ("issued_by") REFERENCES "users"("id") ON DELETE SET NULL;
-      EXCEPTION WHEN duplicate_object THEN NULL;
-      END $$
-    `);
+    // -- provider_warnings.issued_by: ensure SET NULL (already nullable)
+    await this.replaceFk(queryRunner, 'provider_warnings', 'issued_by', 'users', 'id', 'SET NULL', 'FK_provider_warnings_issued_by');
 
     // ════════════════════════════════════════════════════════════════════════
-    // 3. Drop the unique constraint on reviews(provider_id, reviewer_id)
-    //    and recreate it as a partial unique index that excludes nulls
-    //    (since reviewer_id is now nullable)
+    // 3. Fix unique constraints that include now-nullable columns
+    //    Replace table constraints with partial unique indexes (WHERE col IS NOT NULL)
     // ════════════════════════════════════════════════════════════════════════
-    await queryRunner.query(`
-      ALTER TABLE "reviews" DROP CONSTRAINT IF EXISTS "UQ_reviews_provider_reviewer";
-      ALTER TABLE "reviews" DROP CONSTRAINT IF EXISTS "UQ_0ec840c67c1c14e2ac1732fea78"
-    `);
+
+    // reviews(provider_id, reviewer_id)
+    await this.dropUniqueConstraint(queryRunner, 'reviews', ['provider_id', 'reviewer_id']);
     await queryRunner.query(`
       CREATE UNIQUE INDEX IF NOT EXISTS "UQ_reviews_provider_reviewer"
         ON "reviews" ("provider_id", "reviewer_id")
         WHERE "reviewer_id" IS NOT NULL
     `);
 
-    // Same for review_reports(review_id, reporter_id)
-    await queryRunner.query(`
-      ALTER TABLE "review_reports" DROP CONSTRAINT IF EXISTS "UQ_review_reports_review_reporter";
-      ALTER TABLE "review_reports" DROP CONSTRAINT IF EXISTS "UQ_c975e5b5dfff26fc5aafb92dbf1"
-    `);
+    // review_reports(review_id, reporter_id)
+    await this.dropUniqueConstraint(queryRunner, 'review_reports', ['review_id', 'reporter_id']);
     await queryRunner.query(`
       CREATE UNIQUE INDEX IF NOT EXISTS "UQ_review_reports_review_reporter"
         ON "review_reports" ("review_id", "reporter_id")
         WHERE "reporter_id" IS NOT NULL
     `);
 
-    // Same for conversation_participants(conversation_id, user_id)
+    // conversation_participants(conversation_id, user_id)
+    await this.dropUniqueConstraint(queryRunner, 'conversation_participants', ['conversation_id', 'user_id']);
     await queryRunner.query(`
-      ALTER TABLE "conversation_participants" DROP CONSTRAINT IF EXISTS "UQ_conversation_participants_conv_user";
-      ALTER TABLE "conversation_participants" DROP CONSTRAINT IF EXISTS "UQ_0a1b2c3d4e5f6a7b8c9d0e1f2a3"
-    `);
-    await queryRunner.query(`
-      CREATE UNIQUE INDEX IF NOT EXISTS "UQ_conversation_participants_conv_user"
+      CREATE UNIQUE INDEX IF NOT EXISTS "UQ_conv_participants_conv_user"
         ON "conversation_participants" ("conversation_id", "user_id")
         WHERE "user_id" IS NOT NULL
     `);

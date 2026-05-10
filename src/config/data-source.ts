@@ -1,7 +1,9 @@
 import 'dotenv/config'; // load .env for TypeORM CLI (NestJS uses ConfigModule instead)
 import { DataSource, DataSourceOptions } from 'typeorm';
 import { join } from 'path';
-import { User } from '../entities/user.entity';import { Category } from '../entities/category.entity';
+import { User } from '../entities/user.entity';
+import { UserArchive } from '../entities/user-archive.entity';
+import { Category } from '../entities/category.entity';
 import { ProviderCategory } from '../entities/provider-category.entity';
 import { Verification } from '../entities/verification.entity';
 import { Photo } from '../entities/photo.entity';
@@ -43,9 +45,11 @@ import { VoucherRedemption } from '../entities/voucher-redemption.entity';
 import { UserCategoryInteraction } from '../entities/user-category-interaction.entity';
 import { ServiceableCity } from '../entities/serviceable-city.entity';
 import { CityRequest } from '../entities/city-request.entity';
+import { truncate } from 'fs';
 
 export const ALL_ENTITIES = [
   User,
+  UserArchive,
   Category,
   ProviderCategory,
   Verification,
@@ -99,7 +103,7 @@ export function buildTypeOrmOptions(url?: string): DataSourceOptions {
     migrations: [migrationsPath],
     migrationsTableName: 'typeorm_migrations',
     migrationsRun: true, // auto-run pending migrations on app start
-    synchronize: false,  // never use synchronize — migrations handle schema
+    synchronize: true,  // never use synchronize — migrations handle schema
     extra: {
       max: 3,
       idleTimeoutMillis: 5000,
