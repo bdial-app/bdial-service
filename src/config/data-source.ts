@@ -41,6 +41,8 @@ import { Subscription } from '../entities/subscription.entity';
 import { Voucher } from '../entities/voucher.entity';
 import { VoucherRedemption } from '../entities/voucher-redemption.entity';
 import { UserCategoryInteraction } from '../entities/user-category-interaction.entity';
+import { ServiceableCity } from '../entities/serviceable-city.entity';
+import { CityRequest } from '../entities/city-request.entity';
 
 export const ALL_ENTITIES = [
   User,
@@ -84,6 +86,8 @@ export const ALL_ENTITIES = [
   Voucher,
   VoucherRedemption,
   UserCategoryInteraction,
+  ServiceableCity,
+  CityRequest,
 ];
 
 export function buildTypeOrmOptions(url?: string): DataSourceOptions {

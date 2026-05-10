@@ -57,7 +57,7 @@ export class ServiceableCities1778600000000 implements MigrationInterface {
     await queryRunner.query(`
       INSERT INTO "serviceable_cities" ("name", "slug", "status", "lat", "lng", "radius_km") VALUES
         -- Active
-        ('Pune', 'pune', 'active', 18.5204, 73.8567, 50),
+        ('Pune', 'pune', 'active', 18.5204, 73.8567, 100),
 
         -- Maharashtra
         ('Mumbai', 'mumbai', 'coming_soon', 19.0760, 72.8777, 50),
