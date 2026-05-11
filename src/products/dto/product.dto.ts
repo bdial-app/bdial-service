@@ -12,7 +12,7 @@ import {
   IsIn,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Type, Transform } from 'class-transformer';
 
 export class CreateProductDto {
   @ApiProperty()
@@ -21,12 +21,14 @@ export class CreateProductDto {
 
   @ApiProperty()
   @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @MaxLength(150)
   name: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @MaxLength(2000)
   description?: string;
 
@@ -66,12 +68,14 @@ export class UpdateProductDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @MaxLength(150)
   name?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @MaxLength(2000)
   description?: string;
 

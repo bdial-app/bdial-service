@@ -12,7 +12,7 @@ import {
   IsDateString,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Type, Transform } from 'class-transformer';
 
 // ──────────────────────────────────────────────
 // Conversation
@@ -86,6 +86,7 @@ export class SendMessageDto {
   @ApiPropertyOptional({ description: 'Message text content' })
   @IsOptional()
   @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @MaxLength(4000)
   content?: string;
 

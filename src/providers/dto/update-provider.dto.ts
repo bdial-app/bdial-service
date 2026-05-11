@@ -1,5 +1,5 @@
 import { PartialType, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsArray, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsOptional, IsString, MaxLength } from 'class-validator';
 import { CreateProviderDto } from './create-provider.dto';
 
 export class UpdateProviderDto extends PartialType(CreateProviderDto) {
@@ -7,5 +7,6 @@ export class UpdateProviderDto extends PartialType(CreateProviderDto) {
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
+  @MaxLength(100, { each: true })
   keywords?: string[];
 }

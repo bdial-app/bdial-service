@@ -10,17 +10,21 @@ import {
   MaxLength,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
 
 export class CreateVoucherDto {
   @ApiProperty({ description: 'Unique voucher code (will be uppercased)' })
   @IsString()
   @IsNotEmpty()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @MaxLength(50)
   code: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @MaxLength(500)
   description?: string;
 
   @ApiProperty({ enum: ['percentage', 'fixed_amount'] })

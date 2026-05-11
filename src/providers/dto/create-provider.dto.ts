@@ -19,27 +19,34 @@ export class CreateProviderDto {
 
   @ApiProperty({ example: 'Fatema Beauty Salon' })
   @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @MaxLength(150)
   brandName: string;
 
   @ApiPropertyOptional({ example: 'Professional beauty services for women' })
   @IsOptional()
   @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @MaxLength(2000)
   description?: string;
 
   @ApiPropertyOptional({ example: '123 Main Street, Near City Center' })
   @IsOptional()
   @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @MaxLength(300)
   address?: string;
 
   @ApiProperty({ example: 'Mumbai' })
   @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @MaxLength(100)
   city: string;
 
   @ApiPropertyOptional({ example: 'Dadar' })
   @IsOptional()
   @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @MaxLength(100)
   area?: string;
 
