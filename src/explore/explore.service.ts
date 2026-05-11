@@ -25,6 +25,7 @@ export class ExploreService {
   private static readonly CACHE_PLATFORM_STATS = 'explore:platform-stats';
   private static readonly CACHE_TRENDING_CATS = 'explore:trending-categories';
   private static readonly CACHE_BANNERS = 'explore:banners';
+  private static readonly CACHE_COMMUNITY_REVIEWS = 'explore:community-reviews';
   private static readonly TTL_5MIN = 5 * 60 * 1000;
   private static readonly TTL_2MIN = 2 * 60 * 1000;
 
@@ -112,6 +113,8 @@ export class ExploreService {
       categorySpotlight,
       newArrivals,
       platformStats,
+      communityReviews,
+      womenLedProviders,
     ] = await Promise.all([
       this.getSponsoredCarousel(lat, lng, city),
       this.getActiveOffers(lat, lng, city),
@@ -122,10 +125,12 @@ export class ExploreService {
       this.getCategorySpotlight(lat, lng, city),
       this.getNewArrivals(lat, lng, city, 6),
       this.getPlatformStats(),
+      this.getCommunityReviews(10),
+      this.getWomenLedProviders(lat, lng, city, 8),
     ]);
 
     // Cross-section deduplication: each provider appears in at most one section
-    // Priority: sponsored > offers > popularNearby > topRated > categorySpotlight > newArrivals
+    // Priority: sponsored > offers > popularNearby > topRated > categorySpotlight > newArrivals > womenLed
     const seen = new Set<string>();
     const dedup = <T extends { id: string }>(list: T[]): T[] => {
       const result: T[] = [];
@@ -146,6 +151,7 @@ export class ExploreService {
       ? { ...categorySpotlight, providers: dedup(categorySpotlight.providers) }
       : null;
     const dedupedNewArrivals = dedup(newArrivals);
+    const dedupedWomenLed = dedup(womenLedProviders);
 
     // Collect all provider IDs across sections for badge enrichment
     const allProviderIds = new Set<string>();
@@ -156,6 +162,7 @@ export class ExploreService {
     addIds(dedupedTopRated);
     if (dedupedSpotlight) addIds(dedupedSpotlight.providers);
     addIds(dedupedNewArrivals);
+    addIds(dedupedWomenLed);
 
     const badgeMap = await this.enrichWithBadges([...allProviderIds]);
 
@@ -173,6 +180,8 @@ export class ExploreService {
         ? { ...dedupedSpotlight, providers: attachBadges(dedupedSpotlight.providers) }
         : null,
       newArrivals: attachBadges(dedupedNewArrivals),
+      communityReviews,
+      womenLedProviders: attachBadges(dedupedWomenLed),
       platformStats,
     };
   }
@@ -1025,6 +1034,111 @@ export class ExploreService {
         trusted: trusted.length,
       },
     };
+  }
+
+  // ─── Community Reviews ────────────────────────────────────────
+
+  private async getCommunityReviews(limit = 10) {
+    const cached = await this.cacheManager.get<any[]>(ExploreService.CACHE_COMMUNITY_REVIEWS);
+    if (cached) return cached;
+
+    const reviews = await this.reviewRepo
+      .createQueryBuilder('r')
+      .select([
+        'r.id AS id',
+        'r.star_rating AS rating',
+        'r.review_text AS text',
+        'r.posted_at AS "timeAgo"',
+      ])
+      .addSelect('u.name', 'name')
+      .addSelect('p.brand_name', 'providerName')
+      .innerJoin('users', 'u', 'u.id = r.reviewer_id')
+      .innerJoin('providers', 'p', 'p.id = r.provider_id')
+      .where('r.status = :status', { status: 'active' })
+      .andWhere('r.review_text IS NOT NULL')
+      .andWhere("r.review_text != ''")
+      .orderBy('r.posted_at', 'DESC')
+      .limit(limit)
+      .getRawMany();
+
+    const result = reviews.map((r) => ({
+      id: r.id,
+      name: r.name,
+      providerName: r.providerName,
+      text: r.text,
+      rating: r.rating,
+      timeAgo: r.timeAgo,
+    }));
+
+    await this.cacheManager.set(ExploreService.CACHE_COMMUNITY_REVIEWS, result, ExploreService.TTL_2MIN);
+    return result;
+  }
+
+  // ─── Women-Led Providers ─────────────────────────────────────
+
+  private async getWomenLedProviders(
+    lat?: number,
+    lng?: number,
+    city?: string,
+    limit = 8,
+  ) {
+    const hasLocation = lat != null && lng != null;
+
+    const qb = this.providerRepo
+      .createQueryBuilder('p')
+      .select([
+        'p.id AS id',
+        'p.brand_name AS name',
+        'p.profile_photo_url AS image',
+        'p.banner_image_url AS "bannerImage"',
+        'p.description AS description',
+        'p.city AS city',
+        'p.area AS area',
+        'p.status AS status',
+        'p.is_featured AS "isFeatured"',
+        'p.is_women_led AS "isWomenLed"',
+      ])
+      .where("p.status IN ('active', 'unverified')")
+      .andWhere("p.women_led_status = 'approved'");
+
+    this.withReviewStats(qb);
+    this.withCategoryServices(qb);
+
+    if (hasLocation) {
+      this.withGeo(qb, lat!, lng!, 50);
+      if (city) {
+        qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
+      }
+      qb.orderBy('COALESCE(rs.avg_rating, 0)', 'DESC')
+        .addOrderBy('distance', 'ASC');
+    } else if (city) {
+      qb.andWhere('p.city ILIKE :city', { city: `%${city}%` })
+        .orderBy('COALESCE(rs.avg_rating, 0)', 'DESC');
+    } else {
+      qb.orderBy('COALESCE(rs.avg_rating, 0)', 'DESC');
+    }
+
+    qb.limit(limit);
+
+    let raw = await qb.getRawMany();
+
+    // Fallback: if city has no women-led providers, relax to geo-only
+    if (raw.length === 0 && city && hasLocation) {
+      const fallbackQb = this.providerRepo
+        .createQueryBuilder('p')
+        .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"', 'p.description AS description', 'p.city AS city', 'p.area AS area', 'p.status AS status', 'p.is_featured AS "isFeatured"', 'p.is_women_led AS "isWomenLed"'])
+        .where("p.status IN ('active', 'unverified')")
+        .andWhere("p.women_led_status = 'approved'");
+      this.withReviewStats(fallbackQb);
+      this.withCategoryServices(fallbackQb);
+      this.withGeo(fallbackQb, lat!, lng!, 100);
+      fallbackQb.orderBy('COALESCE(rs.avg_rating, 0)', 'DESC')
+        .addOrderBy('distance', 'ASC')
+        .limit(limit);
+      raw = await fallbackQb.getRawMany();
+    }
+
+    return this.mapProviders(raw).map((p) => ({ ...p, isWomenLed: true }));
   }
 
   // ─── Helpers ─────────────────────────────────────────────────
