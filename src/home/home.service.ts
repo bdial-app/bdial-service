@@ -97,7 +97,7 @@ export class HomeService {
       description: r.description,
       city: r.city,
       area: r.area,
-      location: [r.area, r.city].filter(Boolean).join(', '),
+      location: [r.area, r.city].filter(Boolean).map((s: string) => s.replace(/[\r\n]+/g, '').trim()).join(', '),
       rating: parseFloat(r.rating) || 0,
       reviewCount: parseInt(r.reviewCount, 10) || 0,
       services: r.services || null,
@@ -173,9 +173,35 @@ export class HomeService {
       }
     }
 
-    // Cross-section deduplication: remove sponsored businesses from other lists
-    const filterSponsored = <T extends { id: string }>(list: T[]): T[] =>
-      list.filter((p) => !sponsoredIds.has(p.id));
+    // Cross-section deduplication: each provider appears in at most one section
+    // Priority order: sponsored > nearby > topRated > deals > featured > newArrivals > womenLed > city > forYou
+    const seen = new Set<string>(sponsoredIds);
+
+    const dedup = <T extends { id: string }>(list: T[]): T[] => {
+      const result: T[] = [];
+      for (const p of list) {
+        if (!seen.has(p.id)) {
+          seen.add(p.id);
+          result.push(p);
+        }
+      }
+      return result;
+    };
+
+    const dedupedNearby = dedup(nearbyProviders);
+    const dedupedTopRated = dedup(topRatedProviders);
+    const dedupedDeals = dealsAroundYou; // already excludes sponsored via param
+    // Mark deals provider IDs as seen too
+    for (const d of dedupedDeals) { if (d.id) seen.add(d.id); }
+    const dedupedFeatured = featuredCategory
+      ? { ...featuredCategory, providers: dedup(featuredCategory.providers) }
+      : null;
+    const dedupedNewArrivals = dedup(newArrivals);
+    const dedupedWomenLed = dedup(womenLedProviders);
+    const dedupedCity = cityProviders
+      ? { ...cityProviders, providers: dedup(cityProviders.providers) }
+      : null;
+    const dedupedForYou = forYouProviders ? dedup(forYouProviders) : null;
 
     // Build dynamic search prompts from trending categories
     const searchPrompts = trendingCategories
@@ -184,24 +210,20 @@ export class HomeService {
       .map((c) => c.name);
 
     return {
-      nearbyProviders: filterSponsored(nearbyProviders),
-      featuredCategory: featuredCategory
-        ? { ...featuredCategory, providers: filterSponsored(featuredCategory.providers) }
-        : null,
+      nearbyProviders: dedupedNearby,
+      featuredCategory: dedupedFeatured,
       promoBanners,
       trendingCategories,
       personalizedCategories,
-      forYouProviders: forYouProviders ? filterSponsored(forYouProviders) : null,
+      forYouProviders: dedupedForYou,
       communityReviews,
       platformStats,
-      topRatedProviders: filterSponsored(topRatedProviders),
-      cityProviders: cityProviders
-        ? { ...cityProviders, providers: filterSponsored(cityProviders.providers) }
-        : null,
-      newArrivals: filterSponsored(newArrivals),
-      dealsAroundYou,
+      topRatedProviders: dedupedTopRated,
+      cityProviders: dedupedCity,
+      newArrivals: dedupedNewArrivals,
+      dealsAroundYou: dedupedDeals,
       sponsoredProviders,
-      womenLedProviders: filterSponsored(womenLedProviders),
+      womenLedProviders: dedupedWomenLed,
       searchPrompts,
     };
   }
@@ -718,7 +740,7 @@ export class HomeService {
       id: r.id,
       name: r.name,
       image: r.bannerImage || r.image,
-      location: [r.area, r.city].filter(Boolean).join(', '),
+      location: [r.area, r.city].filter(Boolean).map((s: string) => s.replace(/[\r\n]+/g, '').trim()).join(', '),
       rating: parseFloat(r.rating) || 0,
       reviewCount: parseInt(r.reviewCount, 10) || 0,
       verified: r.status === 'active',
@@ -972,7 +994,7 @@ export class HomeService {
       name: r.name,
       image: r.bannerImage || r.image || r.listingPhoto,
       description: r.description ? r.description.slice(0, 80) : null,
-      location: [r.area, r.city].filter(Boolean).join(', '),
+      location: [r.area, r.city].filter(Boolean).map((s: string) => s.replace(/[\r\n]+/g, '').trim()).join(', '),
       rating: parseFloat(r.rating) || 0,
       reviewCount: parseInt(r.reviewCount, 10) || 0,
       services: r.services || null,

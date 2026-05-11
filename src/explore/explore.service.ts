@@ -1,6 +1,6 @@
 import { Injectable, Logger, Inject } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, MoreThan, DataSource } from 'typeorm';
+import { Repository, In, DataSource } from 'typeorm';
 import { CACHE_MANAGER, Cache } from '@nestjs/cache-manager';
 import {
   Provider,
@@ -124,15 +124,38 @@ export class ExploreService {
       this.getPlatformStats(),
     ]);
 
+    // Cross-section deduplication: each provider appears in at most one section
+    // Priority: sponsored > offers > popularNearby > topRated > categorySpotlight > newArrivals
+    const seen = new Set<string>();
+    const dedup = <T extends { id: string }>(list: T[]): T[] => {
+      const result: T[] = [];
+      for (const p of list) {
+        if (!seen.has(p.id)) {
+          seen.add(p.id);
+          result.push(p);
+        }
+      }
+      return result;
+    };
+
+    const dedupedSponsored = dedup(sponsoredCarousel);
+    const dedupedOffers = dedup(activeOffers);
+    const dedupedPopular = dedup(popularNearby);
+    const dedupedTopRated = dedup(topRated);
+    const dedupedSpotlight = categorySpotlight
+      ? { ...categorySpotlight, providers: dedup(categorySpotlight.providers) }
+      : null;
+    const dedupedNewArrivals = dedup(newArrivals);
+
     // Collect all provider IDs across sections for badge enrichment
     const allProviderIds = new Set<string>();
     const addIds = (list: any[]) => list.forEach((p) => allProviderIds.add(p.id));
-    addIds(sponsoredCarousel);
-    addIds(activeOffers);
-    addIds(popularNearby);
-    addIds(topRated);
-    if (categorySpotlight) addIds(categorySpotlight.providers);
-    addIds(newArrivals);
+    addIds(dedupedSponsored);
+    addIds(dedupedOffers);
+    addIds(dedupedPopular);
+    addIds(dedupedTopRated);
+    if (dedupedSpotlight) addIds(dedupedSpotlight.providers);
+    addIds(dedupedNewArrivals);
 
     const badgeMap = await this.enrichWithBadges([...allProviderIds]);
 
@@ -140,16 +163,16 @@ export class ExploreService {
       list.map((p) => ({ ...p, badges: badgeMap.get(p.id) || [] }));
 
     return {
-      sponsoredCarousel: attachBadges(sponsoredCarousel),
-      activeOffers: attachBadges(activeOffers),
+      sponsoredCarousel: attachBadges(dedupedSponsored),
+      activeOffers: attachBadges(dedupedOffers),
       quickCategories,
-      popularNearby: attachBadges(popularNearby),
+      popularNearby: attachBadges(dedupedPopular),
       bannerAds,
-      topRated: attachBadges(topRated),
-      categorySpotlight: categorySpotlight
-        ? { ...categorySpotlight, providers: attachBadges(categorySpotlight.providers) }
+      topRated: attachBadges(dedupedTopRated),
+      categorySpotlight: dedupedSpotlight
+        ? { ...dedupedSpotlight, providers: attachBadges(dedupedSpotlight.providers) }
         : null,
-      newArrivals: attachBadges(newArrivals),
+      newArrivals: attachBadges(dedupedNewArrivals),
       platformStats,
     };
   }
@@ -218,7 +241,7 @@ export class ExploreService {
       name: r.name,
       image: r.bannerImage || r.image,
       description: r.description,
-      location: [r.area, r.city].filter(Boolean).join(', '),
+      location: [r.area, r.city].filter(Boolean).map((s: string) => s.replace(/[\r\n]+/g, '').trim()).join(', '),
       rating: parseFloat(r.rating) || 0,
       reviewCount: parseInt(r.reviewCount, 10) || 0,
       services: r.services || null,
@@ -288,7 +311,7 @@ export class ExploreService {
       id: r.id,
       name: r.name,
       image: r.bannerImage || r.image,
-      location: [r.area, r.city].filter(Boolean).join(', '),
+      location: [r.area, r.city].filter(Boolean).map((s: string) => s.replace(/[\r\n]+/g, '').trim()).join(', '),
       rating: parseFloat(r.rating) || 0,
       reviewCount: parseInt(r.reviewCount, 10) || 0,
       verified: r.status === 'active',
@@ -464,7 +487,7 @@ export class ExploreService {
       id: r.id,
       name: r.name,
       image: r.bannerImage || r.image,
-      location: [r.area, r.city].filter(Boolean).join(', '),
+      location: [r.area, r.city].filter(Boolean).map((s: string) => s.replace(/[\r\n]+/g, '').trim()).join(', '),
       rating: parseFloat(r.rating) || 0,
       reviewCount: parseInt(r.reviewCount, 10) || 0,
       verified: r.status === 'active',
@@ -476,6 +499,7 @@ export class ExploreService {
       discountType: r.discountType,
       discountValue: parseFloat(r.discountValue),
       offerEndsAt: r.offerEndsAt,
+      offerStartsAt: r.offerStartsAt,
       hasActiveOffer: true,
       providerDealCount: parseInt(r.providerDealCount, 10) || 1,
     }));
@@ -1011,7 +1035,7 @@ export class ExploreService {
       name: r.name,
       image: r.bannerImage || r.image,
       description: r.description || null,
-      location: [r.area, r.city].filter(Boolean).join(', '),
+      location: [r.area, r.city].filter(Boolean).map((s: string) => s.replace(/[\r\n]+/g, '').trim()).join(', '),
       rating: parseFloat(r.rating) || 0,
       reviewCount: parseInt(r.reviewCount, 10) || 0,
       services: r.services || null,
