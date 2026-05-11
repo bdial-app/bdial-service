@@ -509,7 +509,7 @@ export class SearchService implements OnModuleInit {
     // When filtering by category, don't require text match
     if (!hasCategoryFilter) {
       conditions.push(`(
-        ($2 <> '' AND p.search_vector @@ to_tsquery('english', $2))
+        ($2 <> '' AND to_tsvector('english', COALESCE(p.brand_name, '') || ' ' || COALESCE(p.description, '')) @@ to_tsquery('english', $2))
         OR similarity(p.brand_name, $1) > 0.1
         OR p.brand_name ILIKE $1 || '%'
         OR p.brand_name ILIKE '%' || $1 || '%'
@@ -599,7 +599,7 @@ export class SearchService implements OnModuleInit {
           ao.discount_type,
           asp.provider_id IS NOT NULL AS is_sponsored,
           (
-            CASE WHEN $2 <> '' THEN COALESCE(ts_rank_cd(p.search_vector, to_tsquery('english', $2)), 0) * 0.22 ELSE 0 END +
+            CASE WHEN $2 <> '' THEN COALESCE(ts_rank_cd(to_tsvector('english', COALESCE(p.brand_name, '') || ' ' || COALESCE(p.description, '')), to_tsquery('english', $2)), 0) * 0.22 ELSE 0 END +
             COALESCE(similarity(p.brand_name, $1), 0) * 0.08 +
             CASE WHEN EXISTS (
               SELECT 1 FROM provider_categories pc2
@@ -617,7 +617,10 @@ export class SearchService implements OnModuleInit {
           ) AS relevance_score,
           COUNT(*) OVER() AS total_count
         FROM providers p
-        LEFT JOIN provider_rating_stats rs ON rs.provider_id = p.id
+        LEFT JOIN (
+          SELECT rv.provider_id, AVG(rv.star_rating)::numeric(2,1) AS avg_rating, COUNT(*)::int AS review_count
+          FROM reviews rv WHERE rv.status = 'active' GROUP BY rv.provider_id
+        ) rs ON rs.provider_id = p.id
         LEFT JOIN cat_names cn ON cn.provider_id = p.id
         LEFT JOIN active_offers ao ON ao.provider_id = p.id
         LEFT JOIN active_sponsorships asp ON asp.provider_id = p.id
@@ -728,7 +731,7 @@ export class SearchService implements OnModuleInit {
       // Text match (skip if category filter)
       if (!hasCategoryFilter) {
         conditions.push(`(
-          ($2 <> '' AND p.search_vector @@ to_tsquery('english', $2))
+          ($2 <> '' AND to_tsvector('english', COALESCE(p.brand_name, '') || ' ' || COALESCE(p.description, '')) @@ to_tsquery('english', $2))
           OR similarity(p.brand_name, $1) > 0.1
           OR p.brand_name ILIKE '%' || $1 || '%'
         )`);
@@ -745,7 +748,10 @@ export class SearchService implements OnModuleInit {
           po.discount_value AS sort_discount
         FROM providers p
         JOIN provider_offers po ON po.provider_id = p.id
-        LEFT JOIN provider_rating_stats rs ON rs.provider_id = p.id
+        LEFT JOIN (
+          SELECT rv.provider_id, AVG(rv.star_rating)::numeric(2,1) AS avg_rating, COUNT(*)::int AS review_count
+          FROM reviews rv WHERE rv.status = 'active' GROUP BY rv.provider_id
+        ) rs ON rs.provider_id = p.id
         WHERE ${conditions.join(' AND ')}
         ORDER BY p.id, po.discount_value DESC
       `;
@@ -844,7 +850,7 @@ export class SearchService implements OnModuleInit {
 
       if (!hasCategoryFilter) {
         conditions.push(`(
-          ($2 <> '' AND p.search_vector @@ to_tsquery('english', $2))
+          ($2 <> '' AND to_tsvector('english', COALESCE(p.brand_name, '') || ' ' || COALESCE(p.description, '')) @@ to_tsquery('english', $2))
           OR similarity(p.brand_name, $1) > 0.1
           OR p.brand_name ILIKE '%' || $1 || '%'
         )`);
@@ -860,7 +866,10 @@ export class SearchService implements OnModuleInit {
           rs.avg_rating, rs.review_count,
           (SELECT string_agg(DISTINCT c.name, ', ') FROM provider_categories pc JOIN categories c ON c.id = pc.category_id WHERE pc.provider_id = p.id) AS categories
         FROM providers p
-        JOIN provider_rating_stats rs ON rs.provider_id = p.id
+        JOIN (
+          SELECT rv.provider_id, AVG(rv.star_rating)::numeric(2,1) AS avg_rating, COUNT(*)::int AS review_count
+          FROM reviews rv WHERE rv.status = 'active' GROUP BY rv.provider_id
+        ) rs ON rs.provider_id = p.id
         WHERE ${conditions.join(' AND ')}
         ORDER BY rs.avg_rating DESC, rs.review_count DESC
         LIMIT $${pi}
@@ -968,7 +977,10 @@ export class SearchService implements OnModuleInit {
           (SELECT string_agg(DISTINCT c.name, ', ') FROM provider_categories pc JOIN categories c ON c.id = pc.category_id WHERE pc.provider_id = p.id) AS categories
         FROM sponsored_listings sl
         JOIN providers p ON p.id = sl.provider_id
-        LEFT JOIN provider_rating_stats rs ON rs.provider_id = p.id
+        LEFT JOIN (
+          SELECT rv.provider_id, AVG(rv.star_rating)::numeric(2,1) AS avg_rating, COUNT(*)::int AS review_count
+          FROM reviews rv WHERE rv.status = 'active' GROUP BY rv.provider_id
+        ) rs ON rs.provider_id = p.id
         WHERE sl.is_active = true
           AND sl.starts_at <= NOW()
           AND sl.ends_at >= NOW()
@@ -1244,7 +1256,7 @@ export class SearchService implements OnModuleInit {
         rs.avg_rating,
         GREATEST(
           similarity(p.brand_name, $1),
-          CASE WHEN $2 <> '' AND p.search_vector @@ to_tsquery('english', $2)
+          CASE WHEN $2 <> '' AND to_tsvector('english', COALESCE(p.brand_name, '') || ' ' || COALESCE(p.description, '')) @@ to_tsquery('english', $2)
                THEN 0.5 ELSE 0 END
         ) AS sim,
         CASE WHEN EXISTS (
@@ -1270,10 +1282,13 @@ export class SearchService implements OnModuleInit {
         FROM provider_categories pc JOIN categories c ON c.id = pc.category_id
         WHERE pc.provider_id = p.id
       ) cn ON true
-      LEFT JOIN provider_rating_stats rs ON rs.provider_id = p.id
+      LEFT JOIN (
+        SELECT rv.provider_id, AVG(rv.star_rating)::numeric(2,1) AS avg_rating, COUNT(*)::int AS review_count
+        FROM reviews rv WHERE rv.status = 'active' GROUP BY rv.provider_id
+      ) rs ON rs.provider_id = p.id
       WHERE p.status IN ('active', 'unverified')
         AND (
-          ($2 <> '' AND p.search_vector @@ to_tsquery('english', $2))
+          ($2 <> '' AND to_tsvector('english', COALESCE(p.brand_name, '') || ' ' || COALESCE(p.description, '')) @@ to_tsquery('english', $2))
           OR similarity(p.brand_name, $1) > 0.06
           OR p.brand_name ILIKE $1 || '%'
           OR p.brand_name ILIKE '%' || $1 || '%'
@@ -1575,7 +1590,7 @@ export class SearchService implements OnModuleInit {
 
         // Lower thresholds + trigram fuzzy for relaxed search
         conditions.push(`(
-          ($2 <> '' AND p.search_vector @@ to_tsquery('english', $2))
+          ($2 <> '' AND to_tsvector('english', COALESCE(p.brand_name, '') || ' ' || COALESCE(p.description, '')) @@ to_tsquery('english', $2))
           OR similarity(p.brand_name, $1) > 0.05
           OR p.brand_name ILIKE '%' || $1 || '%'
           OR p.description ILIKE '%' || $1 || '%'
@@ -1591,11 +1606,14 @@ export class SearchService implements OnModuleInit {
             rs.avg_rating, COALESCE(rs.review_count, 0) AS review_count,
             (SELECT string_agg(DISTINCT c.name, ', ') FROM provider_categories pc JOIN categories c ON c.id = pc.category_id WHERE pc.provider_id = p.id) AS categories,
             GREATEST(
-              CASE WHEN $2 <> '' THEN COALESCE(ts_rank_cd(p.search_vector, to_tsquery('english', $2)), 0) ELSE 0 END,
+              CASE WHEN $2 <> '' THEN COALESCE(ts_rank_cd(to_tsvector('english', COALESCE(p.brand_name, '') || ' ' || COALESCE(p.description, '')), to_tsquery('english', $2)), 0) ELSE 0 END,
               similarity(p.brand_name, $1)
             ) AS relevance_score
           FROM providers p
-          LEFT JOIN provider_rating_stats rs ON rs.provider_id = p.id
+          LEFT JOIN (
+            SELECT rv.provider_id, AVG(rv.star_rating)::numeric(2,1) AS avg_rating, COUNT(*)::int AS review_count
+            FROM reviews rv WHERE rv.status = 'active' GROUP BY rv.provider_id
+          ) rs ON rs.provider_id = p.id
           WHERE ${conditions.join(' AND ')}
           ORDER BY relevance_score DESC, distance ASC NULLS LAST
           LIMIT $${pi}
@@ -1682,7 +1700,10 @@ export class SearchService implements OnModuleInit {
           (SELECT string_agg(DISTINCT c.name, ', ') FROM provider_categories pc JOIN categories c ON c.id = pc.category_id WHERE pc.provider_id = p.id) AS categories,
           COALESCE(rs.avg_rating, 0) AS relevance_score
         FROM providers p
-        LEFT JOIN provider_rating_stats rs ON rs.provider_id = p.id
+        LEFT JOIN (
+          SELECT rv.provider_id, AVG(rv.star_rating)::numeric(2,1) AS avg_rating, COUNT(*)::int AS review_count
+          FROM reviews rv WHERE rv.status = 'active' GROUP BY rv.provider_id
+        ) rs ON rs.provider_id = p.id
         WHERE p.status IN ('active', 'unverified')
           AND p.latitude IS NOT NULL AND p.longitude IS NOT NULL
           AND ${distExpr} <= $3
