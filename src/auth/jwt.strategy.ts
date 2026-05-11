@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, InternalServerErrorException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -8,6 +8,8 @@ import { User } from '../entities';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
+  private readonly logger = new Logger(JwtStrategy.name);
+
   constructor(
     @InjectRepository(User) private userRepo: Repository<User>,
     private configService: ConfigService,
@@ -20,15 +22,21 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: { sub: string; mobile: string }) {
-    const user = await this.userRepo.findOneBy({ id: payload.sub });
+    let user: User | null;
+    try {
+      user = await this.userRepo.findOneBy({ id: payload.sub });
+    } catch (err) {
+      // DB errors (connection pool exhaustion, timeout, etc.) should NOT
+      // return 401 — that causes the client to clear valid tokens.
+      this.logger.error(`DB error during JWT validation: ${err instanceof Error ? err.message : err}`);
+      throw new InternalServerErrorException('Temporary server error, please retry');
+    }
     if (!user) {
       throw new UnauthorizedException('User not found');
     }
     if (user.status === 'suspended') {
       throw new UnauthorizedException('User account is inactive');
     }
-    // Paused users are returned here — the JwtAuthGuard will decide
-    // whether to block or allow based on @AllowPaused() decorator
     return user;
   }
 }

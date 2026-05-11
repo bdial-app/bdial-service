@@ -53,8 +53,9 @@ import { SystemSetting } from './entities';
       }),
     }),
 
-    // Rate limiting — 100 requests per minute globally
-    ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]),
+    // Rate limiting — 300 requests per minute globally (per IP)
+    // Sensitive endpoints (auth, become-provider) have tighter per-route limits.
+    ThrottlerModule.forRoot([{ ttl: 60000, limit: 300 }]),
 
     // In-memory cache with 5-minute default TTL
     CacheModule.register({ isGlobal: true, ttl: 300000 }),

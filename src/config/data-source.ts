@@ -103,10 +103,15 @@ export function buildTypeOrmOptions(url?: string): DataSourceOptions {
     migrations: [migrationsPath],
     migrationsTableName: 'typeorm_migrations',
     migrationsRun: true, // auto-run pending migrations on app start
-    synchronize: true,  // never use synchronize — migrations handle schema
+    synchronize: false,  // never use synchronize — migrations handle schema
     extra: {
-      max: 3,
-      idleTimeoutMillis: 5000,
+      // Pool size per instance — Supabase Pro allows 200 total connections.
+      // Keep this moderate so multiple instances can coexist:
+      //   3 instances × 15 = 45 connections (leaves room for Studio, migrations, etc.)
+      max: 15,
+      min: 2,                      // keep 2 warm connections for fast cold starts
+      idleTimeoutMillis: 30000,    // release idle connections after 30s
+      connectionTimeoutMillis: 5000, // fail fast if pool is exhausted
     },
   };
 
