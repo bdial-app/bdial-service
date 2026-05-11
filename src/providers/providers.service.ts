@@ -491,7 +491,17 @@ export class ProvidersService {
     const qb = this.providerRepo
       .createQueryBuilder('provider')
       .leftJoinAndSelect('provider.user', 'user')
-      .leftJoin('provider_rating_stats', 'rs', 'rs.provider_id = provider.id')
+      .leftJoin(
+        (sub) => sub
+          .select('rv.provider_id', 'provider_id')
+          .addSelect('COALESCE(AVG(rv.star_rating)::numeric(2,1), 0)', 'avg_rating')
+          .addSelect('COALESCE(COUNT(rv.id)::int, 0)', 'review_count')
+          .from('reviews', 'rv')
+          .where("rv.status = 'active'")
+          .groupBy('rv.provider_id'),
+        'rs',
+        'rs.provider_id = provider.id',
+      )
       .addSelect(haversine, 'distance')
       .addSelect('rs.avg_rating', 'avg_rating')
       .addSelect('COALESCE(rs.review_count, 0)', 'review_count')
@@ -646,7 +656,17 @@ export class ProvidersService {
         'p.is_available AS "isAvailable"',
         'p.created_at AS "createdAt"',
       ])
-      .leftJoin('provider_rating_stats', 'rs', 'rs.provider_id = p.id')
+      .leftJoin(
+        (sub) => sub
+          .select('rv.provider_id', 'provider_id')
+          .addSelect('COALESCE(AVG(rv.star_rating)::numeric(2,1), 0)', 'avg_rating')
+          .addSelect('COALESCE(COUNT(rv.id)::int, 0)', 'review_count')
+          .from('reviews', 'rv')
+          .where("rv.status = 'active'")
+          .groupBy('rv.provider_id'),
+        'rs',
+        'rs.provider_id = p.id',
+      )
       .addSelect('COALESCE(rs.avg_rating, 0)', 'rating')
       .addSelect('COALESCE(rs.review_count, 0)', 'reviewCount')
       .addSelect(
@@ -726,7 +746,10 @@ export class ProvidersService {
         COUNT(DISTINCT pc.category_id)::int AS "categoriesCovered",
         COALESCE(AVG(rs.avg_rating)::numeric(2,1), 0) AS "avgRating"
       FROM providers p
-      LEFT JOIN provider_rating_stats rs ON rs.provider_id = p.id
+      LEFT JOIN (
+        SELECT rv.provider_id, AVG(rv.star_rating)::numeric(2,1) AS avg_rating
+        FROM reviews rv WHERE rv.status = 'active' GROUP BY rv.provider_id
+      ) rs ON rs.provider_id = p.id
       LEFT JOIN provider_categories pc ON pc.provider_id = p.id
       WHERE ${statsWhere}
     `, statsParams);
