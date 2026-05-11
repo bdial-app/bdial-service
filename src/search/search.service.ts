@@ -1076,7 +1076,7 @@ export class SearchService implements OnModuleInit {
         prov.area AS provider_area,
         ${distExpr} AS distance,
         (
-          CASE WHEN $2 <> '' THEN COALESCE(ts_rank_cd(prod.search_vector, to_tsquery('english', $2)), 0) * 0.6 ELSE 0 END +
+          CASE WHEN $2 <> '' THEN COALESCE(ts_rank_cd(to_tsvector('english', prod.name || ' ' || COALESCE(prod.description, '')), to_tsquery('english', $2)), 0) * 0.6 ELSE 0 END +
           COALESCE(similarity(prod.name, $1), 0) * 0.4
         ) AS relevance_score,
         COUNT(*) OVER() AS total_count
@@ -1084,7 +1084,7 @@ export class SearchService implements OnModuleInit {
       JOIN providers prov ON prov.id = prod.provider_id
       WHERE ${whereClause}
         AND (
-          ($2 <> '' AND prod.search_vector @@ to_tsquery('english', $2))
+          ($2 <> '' AND to_tsvector('english', prod.name || ' ' || COALESCE(prod.description, '')) @@ to_tsquery('english', $2))
           OR similarity(prod.name, $1) > 0.15
           OR prod.name ILIKE '%' || $1 || '%'
         )
@@ -1322,7 +1322,7 @@ export class SearchService implements OnModuleInit {
         prov.brand_name AS provider_name,
         GREATEST(
           similarity(prod.name, $1),
-          CASE WHEN $2 <> '' AND prod.search_vector @@ to_tsquery('english', $2)
+          CASE WHEN $2 <> '' AND to_tsvector('english', prod.name || ' ' || COALESCE(prod.description, '')) @@ to_tsquery('english', $2)
                THEN 0.5 ELSE 0 END
         ) AS sim
       FROM products prod
@@ -1330,7 +1330,7 @@ export class SearchService implements OnModuleInit {
       WHERE prod.is_active = true
         AND prov.status IN ('active', 'unverified')
         AND (
-          ($2 <> '' AND prod.search_vector @@ to_tsquery('english', $2))
+          ($2 <> '' AND to_tsvector('english', prod.name || ' ' || COALESCE(prod.description, '')) @@ to_tsquery('english', $2))
           OR similarity(prod.name, $1) > 0.08
           OR prod.name ILIKE $1 || '%'
           OR prod.name ILIKE '%' || $1 || '%'

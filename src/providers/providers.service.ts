@@ -521,7 +521,7 @@ export class ProvidersService {
       const prefixTsQuery = prefixWords.length > 0 ? prefixWords.map((w) => `${w}:*`).join(' & ') : '';
       qb.andWhere(
         `(provider.brandName ILIKE :search OR provider.description ILIKE :search
-          OR (:prefixTsQuery <> '' AND provider.search_vector @@ to_tsquery('english', :prefixTsQuery))
+          OR (:prefixTsQuery <> '' AND to_tsvector('english', COALESCE(provider.brandName, '') || ' ' || COALESCE(provider.description, '')) @@ to_tsquery('english', :prefixTsQuery))
           OR provider.id IN (
             SELECT pc.provider_id FROM provider_categories pc
             JOIN categories c ON c.id = pc.category_id
