@@ -131,6 +131,7 @@ export class HomeService {
     const sponsoredIds = new Set(sponsoredProviders.map((s) => s.id));
 
     // Phase 2: Fetch remaining sections, passing exclusion set
+    // Over-fetch (3x) so cross-section dedup still leaves enough per section
     const [
       nearbyProviders,
       featuredCategory,
@@ -141,12 +142,12 @@ export class HomeService {
       womenLedProviders,
     ] = await Promise.all([
       this.getNearbyProviders(lat, lng, city, 10),
-      this.getRandomFeaturedCategory(lat, lng, city, 6),
-      this.getTopRatedProviders(lat, lng, city, 6),
-      this.getCityProviders(city, lat, lng, 6),
-      this.getNewArrivals(lat, lng, city, 6),
+      this.getRandomFeaturedCategory(lat, lng, city, 12),
+      this.getTopRatedProviders(lat, lng, city, 18),
+      this.getCityProviders(city, lat, lng, 18),
+      this.getNewArrivals(lat, lng, city, 18),
       this.getDealsAroundYou(lat, lng, city, 8, sponsoredIds),
-      this.getWomenLedProviders(lat, lng, city, 8),
+      this.getWomenLedProviders(lat, lng, city, 24),
     ]);
 
     // Phase 3: Personalization (if user is logged in)
@@ -189,19 +190,19 @@ export class HomeService {
     };
 
     const dedupedNearby = dedup(nearbyProviders);
-    const dedupedTopRated = dedup(topRatedProviders);
+    const dedupedTopRated = dedup(topRatedProviders).slice(0, 6);
     const dedupedDeals = dealsAroundYou; // already excludes sponsored via param
     // Mark deals provider IDs as seen too
     for (const d of dedupedDeals) { if (d.id) seen.add(d.id); }
     const dedupedFeatured = featuredCategory
-      ? { ...featuredCategory, providers: dedup(featuredCategory.providers) }
+      ? { ...featuredCategory, providers: dedup(featuredCategory.providers).slice(0, 6) }
       : null;
-    const dedupedNewArrivals = dedup(newArrivals);
-    const dedupedWomenLed = dedup(womenLedProviders);
+    const dedupedNewArrivals = dedup(newArrivals).slice(0, 6);
+    const dedupedWomenLed = dedup(womenLedProviders).slice(0, 8);
     const dedupedCity = cityProviders
-      ? { ...cityProviders, providers: dedup(cityProviders.providers) }
+      ? { ...cityProviders, providers: dedup(cityProviders.providers).slice(0, 6) }
       : null;
-    const dedupedForYou = forYouProviders ? dedup(forYouProviders) : null;
+    const dedupedForYou = forYouProviders ? dedup(forYouProviders).slice(0, 6) : null;
 
     // Build dynamic search prompts from trending categories
     const searchPrompts = trendingCategories
@@ -413,6 +414,7 @@ export class HomeService {
 
   /**
    * Get top-rated providers across all categories.
+   * Falls back to newest providers if no reviews exist yet.
    */
   private async getTopRatedProviders(
     lat?: number,
@@ -445,11 +447,6 @@ export class HomeService {
     this.withReviewStats(qb);
     this.withCategoryServices(qb);
 
-    // Only providers that have at least 1 review
-    qb.andWhere(
-      `EXISTS (SELECT 1 FROM reviews rv WHERE rv.provider_id = p.id AND rv.status = 'active')`,
-    );
-
     if (hasLocation) {
       this.withGeo(qb, lat!, lng!, 50);
       if (city) {
@@ -459,27 +456,48 @@ export class HomeService {
       qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
     }
 
+    // Prefer providers with reviews first, then fall back to featured/newest
     qb.orderBy('COALESCE(rs.avg_rating, 0)', 'DESC')
       .addOrderBy('COALESCE(rs.review_count, 0)', 'DESC')
+      .addOrderBy('p.is_featured', 'DESC')
+      .addOrderBy('p.created_at', 'DESC')
       .limit(limit);
 
     let raw = await qb.getRawMany();
 
-    // Fallback: if city has no reviewed providers, relax to geo-only
+    // Fallback: if city has no providers, relax to geo-only with wider radius
     if (raw.length === 0 && city && hasLocation) {
       const fallbackQb = this.providerRepo
         .createQueryBuilder('p')
         .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"', 'p.description AS description', 'p.city AS city', 'p.area AS area', 'p.status AS status', 'p.is_featured AS "isFeatured"', 'p.is_available AS "isAvailable"'])
         .addSelect(`(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`, 'listingPhoto')
-        .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
-        .andWhere(`EXISTS (SELECT 1 FROM reviews rv WHERE rv.provider_id = p.id AND rv.status = 'active')`);
+        .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] });
       this.withReviewStats(fallbackQb);
       this.withCategoryServices(fallbackQb);
       this.withGeo(fallbackQb, lat!, lng!, 100);
       fallbackQb.orderBy('COALESCE(rs.avg_rating, 0)', 'DESC')
         .addOrderBy('COALESCE(rs.review_count, 0)', 'DESC')
+        .addOrderBy('p.is_featured', 'DESC')
+        .addOrderBy('p.created_at', 'DESC')
         .limit(limit);
       raw = await fallbackQb.getRawMany();
+    }
+
+    // Final fallback: no location/city constraints — show any top providers
+    if (raw.length === 0) {
+      const globalQb = this.providerRepo
+        .createQueryBuilder('p')
+        .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"', 'p.description AS description', 'p.city AS city', 'p.area AS area', 'p.status AS status', 'p.is_featured AS "isFeatured"', 'p.is_available AS "isAvailable"'])
+        .addSelect(`(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`, 'listingPhoto')
+        .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] });
+      this.withReviewStats(globalQb);
+      this.withCategoryServices(globalQb);
+      globalQb.orderBy('COALESCE(rs.avg_rating, 0)', 'DESC')
+        .addOrderBy('COALESCE(rs.review_count, 0)', 'DESC')
+        .addOrderBy('p.is_featured', 'DESC')
+        .addOrderBy('p.created_at', 'DESC')
+        .limit(limit);
+      raw = await globalQb.getRawMany();
     }
 
     return this.mapProviders(raw);
