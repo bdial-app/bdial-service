@@ -80,6 +80,9 @@ export class ProvidersService {
     const existingProvider = await this.providerRepo.findOneBy({ userId });
     if (existingProvider) throw new ConflictException(`Provider already exists for user with ID '${userId}'`);
 
+    // Content moderation
+    this.checkProviderContent(createProviderDto.brandName, createProviderDto.description);
+
     const { latitude, longitude, ...rest } = createProviderDto;
     const provider = this.providerRepo.create({
       ...rest,
@@ -897,6 +900,20 @@ export class ProvidersService {
     const provider = await this.providerRepo.findOneBy({ userId });
     if (!provider) throw new NotFoundException('Provider not found. Please register as a provider first.');
 
+    // Content moderation on offer text
+    if (dto.title) {
+      const titleCheck = this.contentSanitizer.check(dto.title);
+      if (titleCheck.flagged) {
+        throw new BadRequestException('Your deal title contains inappropriate language. Please revise.');
+      }
+    }
+    if (dto.description) {
+      const descCheck = this.contentSanitizer.check(dto.description);
+      if (descCheck.flagged) {
+        throw new BadRequestException('Your deal description contains inappropriate language. Please revise.');
+      }
+    }
+
     if (new Date(dto.endsAt) <= new Date(dto.startsAt)) {
       throw new BadRequestException('End date must be after start date');
     }
@@ -1025,6 +1042,20 @@ export class ProvidersService {
     const offer = await this.offerRepo.findOneBy({ id: offerId });
     if (!offer) throw new NotFoundException('Offer not found');
     if (offer.providerId !== provider.id) throw new BadRequestException('You do not own this offer');
+
+    // Content moderation on offer text
+    if (dto.title) {
+      const titleCheck = this.contentSanitizer.check(dto.title);
+      if (titleCheck.flagged) {
+        throw new BadRequestException('Your deal title contains inappropriate language. Please revise.');
+      }
+    }
+    if (dto.description) {
+      const descCheck = this.contentSanitizer.check(dto.description);
+      if (descCheck.flagged) {
+        throw new BadRequestException('Your deal description contains inappropriate language. Please revise.');
+      }
+    }
 
     if (dto.startsAt || dto.endsAt) {
       const startsAt = dto.startsAt ? new Date(dto.startsAt) : offer.startsAt;

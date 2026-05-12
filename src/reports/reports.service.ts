@@ -11,6 +11,7 @@ import { Report } from '../entities/report.entity';
 import { Provider, Product, Message, User } from '../entities';
 import { CreateReportDto, REASONS_BY_ENTITY_TYPE } from './dto/create-report.dto';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { ContentSanitizerService } from '../common/content-sanitizer';
 
 const MAX_REPORTS_PER_DAY = 5;
 const DISMISSAL_COOLDOWN_DAYS = 30;
@@ -25,6 +26,7 @@ export class ReportsService {
     @InjectRepository(Message) private messageRepo: Repository<Message>,
     @InjectRepository(User) private userRepo: Repository<User>,
     private readonly notificationDispatch: NotificationDispatchService,
+    private readonly contentSanitizer: ContentSanitizerService,
   ) {}
 
   async createReport(reporterUser: any, dto: CreateReportDto) {
@@ -50,6 +52,14 @@ export class ReportsService {
 
     // 3. Target existence + self-report prevention
     await this.validateTargetAndOwnership(reporter.id, dto);
+
+    // 3b. Content moderation on description
+    if (dto.description) {
+      const check = this.contentSanitizer.check(dto.description);
+      if (check.flagged) {
+        throw new BadRequestException('Your report description contains inappropriate language. Please revise.');
+      }
+    }
 
     // 4. Duplicate check — no active report for same (reporter, target)
     const existingActive = await this.reportRepo.findOne({

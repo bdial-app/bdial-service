@@ -7,6 +7,7 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { AdminUpdateUserDto } from './dto/admin-update-user.dto';
 import { UserPaginationDto } from './dto/user-pagination.dto';
 import { SupabaseAuthService } from '../supabase/supabase-auth.service';
+import { ContentSanitizerService } from '../common/content-sanitizer';
 
 @Injectable()
 export class UsersService {
@@ -23,6 +24,7 @@ export class UsersService {
     @InjectRepository(SearchLog) private searchLogRepo: Repository<SearchLog>,
     private readonly supabaseAuthService: SupabaseAuthService,
     private readonly dataSource: DataSource,
+    private readonly contentSanitizer: ContentSanitizerService,
   ) {}
 
   async list(query: UserListQueryDto) {
@@ -47,6 +49,12 @@ export class UsersService {
 
   async updateById(id: string, dto: UpdateUserDto) {
     const user = await this.findById(id);
+    if (dto.name) {
+      const check = this.contentSanitizer.check(dto.name);
+      if (check.flagged) {
+        throw new BadRequestException('Name contains inappropriate language. Please choose a different name.');
+      }
+    }
     await this.userRepo.update(user.id, dto);
     return this.userRepo.findOneBy({ id: user.id });
   }
@@ -62,6 +70,12 @@ export class UsersService {
   }
 
   async updateProfile(id: string, dto: UpdateUserDto) {
+    if (dto.name) {
+      const check = this.contentSanitizer.check(dto.name);
+      if (check.flagged) {
+        throw new BadRequestException('Name contains inappropriate language. Please choose a different name.');
+      }
+    }
     await this.userRepo.update(id, dto);
     return this.userRepo.findOneBy({ id });
   }

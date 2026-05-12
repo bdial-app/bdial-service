@@ -10,6 +10,7 @@ import { OtpService } from '../otp/otp.service';
 import { compressImage, compressImages } from '../common/image-processor';
 import { SupabaseAuthService } from '../supabase/supabase-auth.service';
 import { ServiceableCitiesService } from '../serviceable-cities/serviceable-cities.service';
+import { ContentSanitizerService } from '../common/content-sanitizer';
 
 @Injectable()
 export class AdminService {
@@ -47,6 +48,7 @@ export class AdminService {
     private otpService: OtpService,
     private supabaseAuthService: SupabaseAuthService,
     private serviceableCitiesService: ServiceableCitiesService,
+    private contentSanitizer: ContentSanitizerService,
   ) {}
 
   private assertAdmin(user: any) {
@@ -2095,6 +2097,14 @@ export class AdminService {
   async adminCreateUser(admin: any, dto: AdminCreateUserDto) {
     this.assertAdmin(admin);
 
+    // Content moderation
+    if (dto.name) {
+      const check = this.contentSanitizer.check(dto.name);
+      if (check.flagged) {
+        throw new BadRequestException('Name contains inappropriate language.');
+      }
+    }
+
     // Check for duplicate mobile number
     const existingByMobile = await this.userRepo.findOne({ where: { mobileNumber: dto.mobileNumber } });
     if (existingByMobile) {
@@ -2139,6 +2149,37 @@ export class AdminService {
 
   async adminCreateProviderWithUser(admin: any, dto: AdminCreateProviderWithUserDto) {
     this.assertAdmin(admin);
+
+    // Content moderation on text fields
+    const fieldsToCheck = [
+      { label: 'user name', value: dto.userName },
+      { label: 'brand name', value: dto.brandName },
+      { label: 'description', value: dto.description },
+    ];
+    for (const field of fieldsToCheck) {
+      if (field.value && typeof field.value === 'string') {
+        const check = this.contentSanitizer.check(field.value);
+        if (check.flagged) {
+          throw new BadRequestException(`The ${field.label} contains inappropriate language. Please revise.`);
+        }
+      }
+    }
+    if (dto.products?.length) {
+      for (const p of dto.products) {
+        if (p.name) {
+          const nameCheck = this.contentSanitizer.check(p.name);
+          if (nameCheck.flagged) {
+            throw new BadRequestException(`Product name "${p.name}" contains inappropriate language.`);
+          }
+        }
+        if (p.description) {
+          const descCheck = this.contentSanitizer.check(p.description);
+          if (descCheck.flagged) {
+            throw new BadRequestException(`Product description for "${p.name}" contains inappropriate language.`);
+          }
+        }
+      }
+    }
 
     // ── Pre-flight validations ────────────────────────────
     // 1. Check duplicate user mobile

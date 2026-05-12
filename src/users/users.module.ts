@@ -6,6 +6,7 @@ import { UsersService } from './users.service';
 import { CategoryPersonalizationService } from './category-personalization.service';
 import { AuthModule } from '../auth/auth.module';
 import { SupabaseModule } from '../supabase/supabase.module';
+import { ContentSanitizerModule } from '../common/content-sanitizer';
 import {
   User,
   UserArchive,
@@ -39,6 +40,7 @@ import {
     ]),
     AuthModule,
     SupabaseModule,
+    ContentSanitizerModule,
   ],
   controllers: [UsersController, AdminUsersController],
   providers: [UsersService, CategoryPersonalizationService],

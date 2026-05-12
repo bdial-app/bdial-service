@@ -21,6 +21,7 @@ import {
   VerifyEmailOtpDto,
   CompleteProfileDto,
 } from './dto/auth.dto';
+import { ContentSanitizerService } from '../common/content-sanitizer';
 
 const OTP_RESEND_COOLDOWN_MS = 60 * 1000; // 60s cooldown between resends
 
@@ -36,6 +37,7 @@ export class AuthService {
     private supabaseAuth: SupabaseAuthService,
     private otpService: OtpService,
     private notificationDispatch: NotificationDispatchService,
+    private contentSanitizer: ContentSanitizerService,
   ) {}
 
   async sendOtp(dto: SendOtpDto) {
@@ -139,6 +141,12 @@ export class AuthService {
 
   async googleSignIn(dto: GoogleSignInDto) {
     if (!dto.email) throw new BadRequestException('Email is required');
+    if (dto.name) {
+      const nameCheck = this.contentSanitizer.check(dto.name);
+      if (nameCheck.flagged) {
+        throw new BadRequestException('Name contains inappropriate language. Please choose a different name.');
+      }
+    }
 
     let user = await this.userRepo.findOne({
       where: [{ email: dto.email }, ...(dto.googleId ? [{ googleId: dto.googleId }] : [])],
@@ -258,6 +266,10 @@ export class AuthService {
     }
     if (name.length < 2 || name.length > 100) {
       throw new BadRequestException({ statusCode: 400, message: 'Name must be between 2 and 100 characters', field: 'name' });
+    }
+    const nameCheck = this.contentSanitizer.check(name);
+    if (nameCheck.flagged) {
+      throw new BadRequestException({ statusCode: 400, message: 'Name contains inappropriate language. Please choose a different name.', field: 'name' });
     }
     if (!['male', 'female', 'other'].includes(dto.gender.toLowerCase())) {
       throw new BadRequestException({ statusCode: 400, message: 'Gender must be one of: male, female, other', field: 'gender' });
