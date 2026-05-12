@@ -551,7 +551,8 @@ export class ExploreService {
       if (city) {
         qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
       }
-      qb.orderBy("CASE WHEN p.status = 'active' THEN 0 ELSE 1 END", 'ASC')
+      qb.addSelect("CASE WHEN p.status = 'active' THEN 0 ELSE 1 END", 'status_rank');
+      qb.orderBy('status_rank', 'ASC')
         .addOrderBy('distance', 'ASC');
     } else if (city) {
       qb.andWhere('p.city ILIKE :city', { city: `%${city}%` })

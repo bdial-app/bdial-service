@@ -563,24 +563,27 @@ export class ProvidersService {
       qb.andWhere("provider.womenLedStatus = 'approved'");
     }
 
+    // Add a computed column to rank verified (active) above unverified
+    qb.addSelect("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'status_rank');
+
     // Sort - verified (active) providers always rank above unverified
     if (sortBy === 'distance') {
-      qb.orderBy("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'ASC')
+      qb.orderBy('status_rank', 'ASC')
         .addOrderBy('distance', 'ASC');
     } else if (sortBy === 'newest') {
-      qb.orderBy("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'ASC')
+      qb.orderBy('status_rank', 'ASC')
         .addOrderBy('provider.createdAt', 'DESC');
     } else if (sortBy === 'rating') {
-      qb.orderBy("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'ASC')
+      qb.orderBy('status_rank', 'ASC')
         .addOrderBy('avg_rating', 'DESC', 'NULLS LAST')
         .addOrderBy('distance', 'ASC');
     } else if (sortBy === 'reviews') {
-      qb.orderBy("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'ASC')
+      qb.orderBy('status_rank', 'ASC')
         .addOrderBy('review_count', 'DESC', 'NULLS LAST')
         .addOrderBy('avg_rating', 'DESC', 'NULLS LAST')
         .addOrderBy('distance', 'ASC');
     } else {
-      qb.orderBy("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'ASC')
+      qb.orderBy('status_rank', 'ASC')
         .addOrderBy('distance', 'ASC');
     }
 
@@ -823,7 +826,8 @@ export class ProvidersService {
       .andWhere('provider.isFeatured = :featured', { featured: true })
       .andWhere(`${haversine} <= :radius`)
       .setParameters({ lat, lng, radius })
-      .orderBy("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'ASC')
+      .addSelect("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'status_rank')
+      .orderBy('status_rank', 'ASC')
       .addOrderBy('distance', 'ASC')
       .limit(10)
       .getRawAndEntities();
@@ -839,7 +843,8 @@ export class ProvidersService {
         .andWhere('provider.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
         .andWhere(`${haversine} <= :radius`)
         .setParameters({ lat, lng, radius })
-        .orderBy("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'ASC')
+        .addSelect("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'status_rank')
+        .orderBy('status_rank', 'ASC')
         .addOrderBy('distance', 'ASC')
         .limit(10)
         .getRawAndEntities());

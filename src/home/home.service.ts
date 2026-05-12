@@ -271,11 +271,13 @@ export class HomeService {
       if (city) {
         qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
       }
-      qb.orderBy("CASE WHEN p.status = 'active' THEN 0 ELSE 1 END", 'ASC')
+      qb.addSelect("CASE WHEN p.status = 'active' THEN 0 ELSE 1 END", 'status_rank');
+      qb.orderBy('status_rank', 'ASC')
         .addOrderBy('distance', 'ASC');
     } else if (city) {
       qb.andWhere('p.city ILIKE :city', { city: `%${city}%` })
-        .orderBy("CASE WHEN p.status = 'active' THEN 0 ELSE 1 END", 'ASC')
+        .addSelect("CASE WHEN p.status = 'active' THEN 0 ELSE 1 END", 'status_rank')
+        .orderBy('status_rank', 'ASC')
         .addOrderBy('p.is_featured', 'DESC')
         .addOrderBy('p.created_at', 'DESC');
     } else {
@@ -297,7 +299,8 @@ export class HomeService {
       this.withReviewStats(fallbackQb);
       this.withCategoryServices(fallbackQb);
       this.withGeo(fallbackQb, lat!, lng!, 100);
-      fallbackQb.orderBy("CASE WHEN p.status = 'active' THEN 0 ELSE 1 END", 'ASC')
+      fallbackQb.addSelect("CASE WHEN p.status = 'active' THEN 0 ELSE 1 END", 'status_rank');
+      fallbackQb.orderBy('status_rank', 'ASC')
         .addOrderBy('distance', 'ASC')
         .limit(limit);
       raw = await fallbackQb.getRawMany();
@@ -1436,7 +1439,7 @@ export class HomeService {
         FROM reviews r
         JOIN providers p ON p.id = r.provider_id
         WHERE r.status = 'active'
-          AND r.created_at >= $${paramOffset + 1}
+          AND r.posted_at >= $${paramOffset + 1}
           ${cityCondition}
       `, [...cityParam, weekAgo]).catch(() => fallback),
 
