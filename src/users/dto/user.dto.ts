@@ -9,7 +9,7 @@ export class UpdateUserDto {
   @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @MinLength(2, { message: 'Name must be at least 2 characters' })
   @MaxLength(100, { message: 'Name must not exceed 100 characters' })
-  @Matches(/[a-zA-Z]/, { message: 'Name must contain at least one letter' })
+  @Matches(/^[a-zA-Z\s.'\-]+$/, { message: 'Name should only contain letters' })
   name?: string;
 
   @ApiPropertyOptional({ enum: ['male', 'female', 'other'] })

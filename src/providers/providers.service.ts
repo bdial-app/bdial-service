@@ -53,6 +53,13 @@ export class ProvidersService {
     }
     const mobile = mobileNumber.trim();
 
+    // Check if this number is already used by another provider
+    const formatted = `+91${mobile}`;
+    const existing = await this.providerRepo.findOneBy({ contactNumber: formatted });
+    if (existing) {
+      throw new ConflictException('This phone number is already registered with another provider');
+    }
+
     const result = await this.otpService.sendOtpWithKey(`provider_${mobile}`, mobile);
     return { message: 'OTP sent successfully', data: { mobileNumber: mobile, expiresIn: result.expiresIn, ...(result.otp ? { otp: result.otp } : {}) } };
   }
@@ -135,6 +142,14 @@ export class ProvidersService {
 
     const existingProvider = await this.providerRepo.findOneBy({ userId });
     if (existingProvider) throw new ConflictException(`Provider already exists for user with ID '${userId}'`);
+
+    // Check if this contact number is already used by another provider
+    if (providerData.contactNumber) {
+      const phoneInUse = await this.providerRepo.findOneBy({ contactNumber: providerData.contactNumber });
+      if (phoneInUse) {
+        throw new ConflictException('This phone number is already registered with another provider');
+      }
+    }
 
     return this.dataSource.transaction(async (manager) => {
       const { latitude, longitude, file: _file, bannerImage: _bi, profileImage: _pi, bannerImageUrl: _biu, profilePhotoUrl: _ppu, ...cleanData } = providerData as any;
