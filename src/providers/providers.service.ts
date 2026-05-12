@@ -490,21 +490,19 @@ export class ProvidersService {
 
   /**
    * Find providers near a lat/lng using the Haversine formula.
+   * When lat/lng are omitted, falls back to city-based or global browsing.
    * Optionally enriches with Google Distance Matrix (road distance + travel time).
    * Flow 1-c: Location-based provider discovery.
    */
   async findNearby(dto: NearbyProvidersDto) {
     const { lat, lng, radius = 10, page = 1, limit = 10, search, city, sortBy = 'distance', categoryIds, minRating, verifiedOnly, womenLedOnly } = dto;
     const offset = (page - 1) * limit;
+    const hasLocation = lat != null && lng != null;
 
-    // Haversine formula in SQL (returns distance in km)
-    const haversine = `
-      6371 * acos(
-        LEAST(1.0, cos(radians(:lat)) * cos(radians(provider.latitude))
-        * cos(radians(provider.longitude) - radians(:lng))
-        + sin(radians(:lat)) * sin(radians(provider.latitude)))
-      )
-    `;
+    // Haversine formula in SQL (returns distance in km) — only used when coords are present
+    const haversine = hasLocation
+      ? `6371 * acos(LEAST(1.0, cos(radians(:lat)) * cos(radians(provider.latitude)) * cos(radians(provider.longitude) - radians(:lng)) + sin(radians(:lat)) * sin(radians(provider.latitude))))`
+      : null;
 
     const qb = this.providerRepo
       .createQueryBuilder('provider')
@@ -520,18 +518,26 @@ export class ProvidersService {
         'rs',
         'rs.provider_id = provider.id',
       )
-      .addSelect(haversine, 'distance')
       .addSelect('rs.avg_rating', 'avg_rating')
       .addSelect('COALESCE(rs.review_count, 0)', 'review_count')
       .addSelect(
         `(SELECT string_agg(DISTINCT cat.name, ', ' ORDER BY cat.name) FROM categories cat JOIN provider_categories pcat ON pcat.category_id = cat.id WHERE pcat.provider_id = provider.id)`,
         'services',
       )
-      .where('provider.latitude IS NOT NULL')
-      .andWhere('provider.longitude IS NOT NULL')
-      .andWhere('provider.status IN (:...statuses)', { statuses: verifiedOnly ? ['active'] : ['active', 'unverified'] })
-      .andWhere(`${haversine} <= :radius`, { lat, lng, radius })
-      .setParameters({ lat, lng, radius });
+      .andWhere('provider.status IN (:...statuses)', { statuses: verifiedOnly ? ['active'] : ['active', 'unverified'] });
+
+    // ── Location-based mode: Haversine distance + radius filter ──
+    if (hasLocation) {
+      qb.addSelect(haversine!, 'distance')
+        .where('provider.latitude IS NOT NULL')
+        .andWhere('provider.longitude IS NOT NULL')
+        .andWhere('provider.status IN (:...statuses)', { statuses: verifiedOnly ? ['active'] : ['active', 'unverified'] })
+        .andWhere(`${haversine} <= :radius`, { lat, lng, radius })
+        .setParameters({ lat, lng, radius });
+    } else {
+      // City-only / global mode — no distance filtering
+      qb.addSelect('NULL::float', 'distance');
+    }
 
     if (city) qb.andWhere('provider.city ILIKE :city', { city: `%${city}%` });
     if (search) {
@@ -567,24 +573,45 @@ export class ProvidersService {
     qb.addSelect("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'status_rank');
 
     // Sort - verified (active) providers always rank above unverified
-    if (sortBy === 'distance') {
-      qb.orderBy('status_rank', 'ASC')
-        .addOrderBy('distance', 'ASC');
-    } else if (sortBy === 'newest') {
-      qb.orderBy('status_rank', 'ASC')
-        .addOrderBy('provider.createdAt', 'DESC');
-    } else if (sortBy === 'rating') {
-      qb.orderBy('status_rank', 'ASC')
-        .addOrderBy('avg_rating', 'DESC', 'NULLS LAST')
-        .addOrderBy('distance', 'ASC');
-    } else if (sortBy === 'reviews') {
-      qb.orderBy('status_rank', 'ASC')
-        .addOrderBy('review_count', 'DESC', 'NULLS LAST')
-        .addOrderBy('avg_rating', 'DESC', 'NULLS LAST')
-        .addOrderBy('distance', 'ASC');
+    if (hasLocation) {
+      if (sortBy === 'distance') {
+        qb.orderBy('status_rank', 'ASC')
+          .addOrderBy('distance', 'ASC');
+      } else if (sortBy === 'newest') {
+        qb.orderBy('status_rank', 'ASC')
+          .addOrderBy('provider.createdAt', 'DESC');
+      } else if (sortBy === 'rating') {
+        qb.orderBy('status_rank', 'ASC')
+          .addOrderBy('avg_rating', 'DESC', 'NULLS LAST')
+          .addOrderBy('distance', 'ASC');
+      } else if (sortBy === 'reviews') {
+        qb.orderBy('status_rank', 'ASC')
+          .addOrderBy('review_count', 'DESC', 'NULLS LAST')
+          .addOrderBy('avg_rating', 'DESC', 'NULLS LAST')
+          .addOrderBy('distance', 'ASC');
+      } else {
+        qb.orderBy('status_rank', 'ASC')
+          .addOrderBy('distance', 'ASC');
+      }
     } else {
-      qb.orderBy('status_rank', 'ASC')
-        .addOrderBy('distance', 'ASC');
+      // No location — cannot sort by distance; use featured → newest fallback
+      if (sortBy === 'rating') {
+        qb.orderBy('status_rank', 'ASC')
+          .addOrderBy('avg_rating', 'DESC', 'NULLS LAST')
+          .addOrderBy('provider.isFeatured', 'DESC');
+      } else if (sortBy === 'newest') {
+        qb.orderBy('status_rank', 'ASC')
+          .addOrderBy('provider.createdAt', 'DESC');
+      } else if (sortBy === 'reviews') {
+        qb.orderBy('status_rank', 'ASC')
+          .addOrderBy('review_count', 'DESC', 'NULLS LAST')
+          .addOrderBy('avg_rating', 'DESC', 'NULLS LAST');
+      } else {
+        // distance / relevance — fall back to featured → newest
+        qb.orderBy('status_rank', 'ASC')
+          .addOrderBy('provider.isFeatured', 'DESC')
+          .addOrderBy('provider.createdAt', 'DESC');
+      }
     }
 
     // Get total before pagination
@@ -596,7 +623,7 @@ export class ProvidersService {
     // Merge Haversine distance + review stats into entities
     let data = entities.map((provider, i) => ({
       ...provider,
-      distance: parseFloat(parseFloat(raw[i]?.distance ?? '0').toFixed(2)),
+      distance: raw[i]?.distance != null ? parseFloat(parseFloat(raw[i].distance).toFixed(2)) : null,
       rating: raw[i]?.avg_rating ? parseFloat(parseFloat(raw[i].avg_rating).toFixed(1)) : null,
       reviewCount: parseInt(raw[i]?.review_count ?? '0', 10),
       services: raw[i]?.services || null,
@@ -606,34 +633,36 @@ export class ProvidersService {
       travelTimeSeconds: null as number | null,
     }));
 
-    // Enrich with Distance Matrix (road distance + travel time)
-    try {
-      const destinations = data
-        .filter((p) => p.latitude && p.longitude)
-        .map((p) => ({ lat: Number(p.latitude), lng: Number(p.longitude) }));
+    // Enrich with Distance Matrix (road distance + travel time) — only when coordinates are available
+    if (hasLocation) {
+      try {
+        const destinations = data
+          .filter((p) => p.latitude && p.longitude)
+          .map((p) => ({ lat: Number(p.latitude), lng: Number(p.longitude) }));
 
-      if (destinations.length > 0) {
-        const matrix = await this.geocodeService.getDistanceMatrix(
-          { lat, lng },
-          destinations,
-        );
-        let mi = 0;
-        data = data.map((p) => {
-          if (p.latitude && p.longitude && mi < matrix.length) {
-            const m = matrix[mi++];
-            return {
-              ...p,
-              roadDistance: m.distanceText,
-              roadDistanceMeters: m.distanceValue,
-              travelTime: m.durationText,
-              travelTimeSeconds: m.durationValue,
-            };
-          }
-          return p;
-        });
+        if (destinations.length > 0) {
+          const matrix = await this.geocodeService.getDistanceMatrix(
+            { lat: lat!, lng: lng! },
+            destinations,
+          );
+          let mi = 0;
+          data = data.map((p) => {
+            if (p.latitude && p.longitude && mi < matrix.length) {
+              const m = matrix[mi++];
+              return {
+                ...p,
+                roadDistance: m.distanceText,
+                roadDistanceMeters: m.distanceValue,
+                travelTime: m.durationText,
+                travelTimeSeconds: m.durationValue,
+              };
+            }
+            return p;
+          });
+        }
+      } catch {
+        // Distance Matrix unavailable — Haversine distance still present
       }
-    } catch {
-      // Distance Matrix unavailable — Haversine distance still present
     }
 
     return {

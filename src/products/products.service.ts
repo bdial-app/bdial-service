@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Logger, InternalServerErrorException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Not, Repository } from 'typeorm';
 import { Product, Provider, Review, Photo, ProviderCategory } from '../entities';
@@ -9,6 +9,8 @@ import { compressImage } from '../common/image-processor';
 
 @Injectable()
 export class ProductsService {
+  private readonly logger = new Logger(ProductsService.name);
+
   constructor(
     @InjectRepository(Product) private productRepo: Repository<Product>,
     @InjectRepository(Provider) private providerRepo: Repository<Provider>,
@@ -45,13 +47,25 @@ export class ProductsService {
         ? [dto.photoUrl]
         : [];
 
+    // Strip undefined keys so TypeORM doesn't send NULL for NOT-NULL columns
+    const cleanDto = Object.fromEntries(
+      Object.entries(dto).filter(([, v]) => v !== undefined),
+    );
+
     const product = this.productRepo.create({
-      ...dto,
+      ...cleanDto,
       photoUrl: photoUrls[0] ?? null,
       photoUrls,
+      productType: dto.productType ?? 'product',
       isActive: true,
     });
-    return this.productRepo.save(product);
+
+    try {
+      return await this.productRepo.save(product);
+    } catch (err) {
+      this.logger.error(`Failed to save product: ${err.message}`, err.stack);
+      throw new InternalServerErrorException(`Failed to create product: ${err.message}`);
+    }
   }
 
   async update(userId: string, productId: string, dto: UpdateProductDto) {
@@ -69,8 +83,18 @@ export class ProductsService {
       dto.photoUrls = dto.photoUrl ? [dto.photoUrl] : [];
     }
 
-    Object.assign(product, dto);
-    return this.productRepo.save(product);
+    // Strip undefined keys so TypeORM doesn't overwrite with NULL
+    const cleanDto = Object.fromEntries(
+      Object.entries(dto).filter(([, v]) => v !== undefined),
+    );
+    Object.assign(product, cleanDto);
+
+    try {
+      return await this.productRepo.save(product);
+    } catch (err) {
+      this.logger.error(`Failed to update product ${productId}: ${err.message}`, err.stack);
+      throw new InternalServerErrorException(`Failed to update product: ${err.message}`);
+    }
   }
 
   async remove(userId: string, productId: string) {
