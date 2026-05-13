@@ -1383,6 +1383,7 @@ export class ProvidersService {
     // Check if they had a verified status before — restore accordingly
     const verification = await this.verRepo.findOneBy({ userId });
     provider.status = verification?.status === 'approved' ? 'active' : 'unverified';
+    provider.isAvailable = true;
     provider.disabledAt = null;
     await this.providerRepo.save(provider);
 
