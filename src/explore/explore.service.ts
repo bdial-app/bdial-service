@@ -930,7 +930,7 @@ export class ExploreService {
 
     await this.adEventRepo.save(event);
 
-    // If click on sponsored listing, increment clicks + spend
+    // If click on sponsored listing, increment clicks + spend (with budget/active/date guards)
     if (dto.eventType === 'click' && dto.entityType === 'sponsored_listing') {
       await this.sponsoredRepo
         .createQueryBuilder()
@@ -940,6 +940,9 @@ export class ExploreService {
           spentAmount: () => 'spent_amount + cost_per_click',
         })
         .where('id = :id', { id: dto.entityId })
+        .andWhere('is_active = true')
+        .andWhere('spent_amount + cost_per_click <= budget_amount')
+        .andWhere('ends_at > NOW()')
         .execute();
     }
 
@@ -953,6 +956,9 @@ export class ExploreService {
           spentAmount: () => 'spent_amount + cost_per_impression',
         })
         .where('id = :id', { id: dto.entityId })
+        .andWhere('is_active = true')
+        .andWhere('spent_amount + cost_per_impression <= budget_amount')
+        .andWhere('ends_at > NOW()')
         .execute();
     }
   }

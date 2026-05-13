@@ -151,16 +151,34 @@ export class UsersService {
 
       // 2. Delete Supabase auth user (prevents SSO ghost re-login)
       if (user.supabaseId) {
-        await this.supabaseAuthService.deleteSupabaseUser(user.supabaseId);
+        try {
+          await this.supabaseAuthService.deleteSupabaseUser(user.supabaseId);
+        } catch (e: any) {
+          // Ignore "user not found" — already deleted or never synced
+          if (e?.code !== 'user_not_found' && e?.status !== 404) throw e;
+        }
       }
 
-      // 3. Soft-delete provider if exists (keeps provider products/sponsorships intact)
+      // 3. Remove provider child records that lack ON DELETE CASCADE at DB level
       if (user.provider) {
-        await queryRunner.manager.update(Provider, user.provider.id, {
-          status: 'disabled',
-          isAvailable: false,
-          deletedAt: new Date(),
-        });
+        const providerId = user.provider.id;
+        await queryRunner.query(
+          `DELETE FROM provider_categories WHERE provider_id = $1`,
+          [providerId],
+        );
+        await queryRunner.query(
+          `DELETE FROM photos WHERE provider_id = $1`,
+          [providerId],
+        );
+        await queryRunner.query(
+          `DELETE FROM products WHERE provider_id = $1`,
+          [providerId],
+        );
+        // Nullify reviews so historical data is preserved
+        await queryRunner.query(
+          `UPDATE reviews SET provider_id = NULL WHERE provider_id = $1`,
+          [providerId],
+        );
       }
 
       // 4. Deactivate chat participations before deletion
@@ -172,7 +190,7 @@ export class UsersService {
 
       // 5. Hard-delete user row — CASCADE deletes owned data (notifications,
       //    device tokens, saved items, etc.), SET NULL preserves business records
-      //    (bookings, messages, reviews, reports)
+      //    (bookings, messages, reviews, reports). Provider is also cascade-deleted.
       await queryRunner.manager.delete(User, userId);
 
       await queryRunner.commitTransaction();
@@ -213,10 +231,12 @@ export class UsersService {
         await this.supabaseAuthService.banUser(user.supabaseId);
       }
 
-      // 3. Hide provider if exists
+      // 3. Disable provider if exists (hidden from search + all public APIs)
       if (user.provider) {
         await queryRunner.manager.update(Provider, user.provider.id, {
           isAvailable: false,
+          status: 'disabled',
+          disabledAt: new Date(),
         });
       }
 
@@ -239,7 +259,8 @@ export class UsersService {
 
   /**
    * Resume a paused account.
-   * Unbans Supabase user, restores provider visibility, reactivates chats.
+   * Unbans Supabase user, reactivates chats.
+   * Provider stays disabled — provider must manually re-enable from their dashboard.
    */
   async resumeAccount(userId: string) {
     const user = await this.userRepo.findOne({
@@ -265,10 +286,12 @@ export class UsersService {
         await this.supabaseAuthService.unbanUser(user.supabaseId);
       }
 
-      // 3. Restore provider visibility if exists
+      // 3. Ensure provider is explicitly disabled (in case it wasn't from pause)
+      //    Provider must manually re-enable from their dashboard.
       if (user.provider) {
         await queryRunner.manager.update(Provider, user.provider.id, {
-          isAvailable: true,
+          status: 'disabled',
+          isAvailable: false,
         });
       }
 
@@ -280,7 +303,7 @@ export class UsersService {
       );
 
       await queryRunner.commitTransaction();
-      return this.userRepo.findOneBy({ id: userId });
+      return this.userRepo.findOne({ where: { id: userId }, relations: ['provider'] });
     } catch (error) {
       await queryRunner.rollbackTransaction();
       throw error;

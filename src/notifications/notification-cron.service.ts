@@ -194,6 +194,25 @@ export class NotificationCronService {
   }
 
   // ─────────────────────────────────────────────────────────────
+  // Every 5 min — Auto-deactivate expired & budget-exhausted sponsorships
+  // ─────────────────────────────────────────────────────────────
+  @Cron('*/5 * * * *')
+  async deactivateExhaustedSponsorships(): Promise<void> {
+    // Deactivate listings where budget is exhausted or end date has passed
+    const result = await this.sponsoredRepo
+      .createQueryBuilder()
+      .update(SponsoredListing)
+      .set({ isActive: false })
+      .where('is_active = true')
+      .andWhere('(ends_at <= NOW() OR spent_amount >= budget_amount)')
+      .execute();
+
+    if (result.affected && result.affected > 0) {
+      this.logger.log(`Auto-deactivated ${result.affected} sponsorships (expired/exhausted)`);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
   // Daily 11 AM — Inactive User Re-engagement (14 days no activity)
   // ─────────────────────────────────────────────────────────────
   @Cron('0 11 * * *')

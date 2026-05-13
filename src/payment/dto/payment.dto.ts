@@ -1,4 +1,4 @@
-import { IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString, IsUUID, Min } from 'class-validator';
+import { IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString, IsUUID, Min, IsDateString } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateSponsorshipCheckoutDto {
@@ -23,12 +23,12 @@ export class CreateSponsorshipCheckoutDto {
 
   @ApiProperty()
   @IsNotEmpty()
-  @IsString()
+  @IsDateString()
   startsAt: string;
 
   @ApiProperty()
   @IsNotEmpty()
-  @IsString()
+  @IsDateString()
   endsAt: string;
 
   @ApiPropertyOptional()

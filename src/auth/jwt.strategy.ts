@@ -37,6 +37,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     if (user.status === 'suspended') {
       throw new UnauthorizedException('User account is inactive');
     }
+    if (user.status === 'paused') {
+      throw new UnauthorizedException('User account is paused');
+    }
     return user;
   }
 }

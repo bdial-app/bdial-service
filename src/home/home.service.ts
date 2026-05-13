@@ -1009,7 +1009,7 @@ export class HomeService {
 
     const results = deduplicated.slice(0, limit);
 
-    // Fire-and-forget: increment impressions + deduct cost_per_impression for each shown listing
+    // Fire-and-forget: increment impressions + deduct cost_per_impression (budget-guarded)
     if (results.length > 0) {
       const listingIds = results.map((r) => r.sponsoredListingId);
       this.sponsoredRepo
@@ -1020,6 +1020,9 @@ export class HomeService {
           spentAmount: () => 'spent_amount + cost_per_impression',
         })
         .where('id IN (:...ids)', { ids: listingIds })
+        .andWhere('is_active = true')
+        .andWhere('spent_amount + cost_per_impression <= budget_amount')
+        .andWhere('ends_at > NOW()')
         .execute()
         .catch(() => {}); // non-blocking
     }

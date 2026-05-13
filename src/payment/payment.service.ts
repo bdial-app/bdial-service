@@ -86,6 +86,35 @@ export class PaymentService {
     const provider = await this.providerRepo.findOneBy({ userId });
     if (!provider) throw new NotFoundException('Provider not found');
 
+    // ── Date validation ──
+    const startsAt = new Date(dto.startsAt);
+    const endsAt = new Date(dto.endsAt);
+    if (isNaN(startsAt.getTime()) || isNaN(endsAt.getTime())) {
+      throw new BadRequestException('Invalid date format');
+    }
+    if (endsAt <= startsAt) {
+      throw new BadRequestException('End date must be after start date');
+    }
+    const durationDays = (endsAt.getTime() - startsAt.getTime()) / (1000 * 60 * 60 * 24);
+    if (durationDays > 31) {
+      throw new BadRequestException('Sponsorship duration cannot exceed 31 days');
+    }
+
+    // ── Plan price validation (prevent amount bypass) ──
+    // Read min prices from plans setting, fallback to ₹499
+    let minPrice = 499;
+    const plansSetting = await this.settingsRepo.findOneBy({ key: 'sponsorship_plans' });
+    if (plansSetting) {
+      try {
+        const plans = JSON.parse(plansSetting.value);
+        const matching = plans.find((p: any) => p.type === dto.type);
+        if (matching?.price) minPrice = matching.price;
+      } catch { /* use default */ }
+    }
+    if (dto.budgetAmount < minPrice) {
+      throw new BadRequestException(`Minimum budget for ${dto.type} sponsorship is ₹${minPrice}`);
+    }
+
     let amount = dto.budgetAmount;
     let discountAmount = 0;
     let voucherId: string | null = null;
@@ -114,8 +143,8 @@ export class PaymentService {
       costPerImpression,
       targetCategoryIds: dto.targetCategoryIds ?? null,
       targetCities: dto.targetCities ?? null,
-      startsAt: new Date(dto.startsAt),
-      endsAt: new Date(dto.endsAt),
+      startsAt,
+      endsAt,
       isActive: false,
       approvalStatus: 'approved',
     });
@@ -474,7 +503,7 @@ export class PaymentService {
       throw new BadRequestException('Invalid payment signature');
     }
 
-    // Find and fulfill payment
+    // Find and fulfill payment (atomic check to prevent double-fulfillment race with webhook)
     const payment = await this.paymentRepo.findOneBy({ gatewayOrderId: razorpay_order_id });
     if (!payment) throw new NotFoundException('Payment not found');
 
@@ -482,10 +511,22 @@ export class PaymentService {
       return { status: 'succeeded', paymentId: payment.id };
     }
 
+    // Atomic conditional update — only one of verify/webhook will succeed
+    const result = await this.paymentRepo
+      .createQueryBuilder()
+      .update()
+      .set({ status: 'succeeded' as PaymentStatus, gatewayPaymentId: razorpay_payment_id })
+      .where('id = :id', { id: payment.id })
+      .andWhere('status != :s', { s: 'succeeded' })
+      .execute();
+
+    // If 0 rows affected, another process already fulfilled it
+    if (result.affected === 0) {
+      return { status: 'succeeded', paymentId: payment.id };
+    }
+
     payment.status = 'succeeded';
     payment.gatewayPaymentId = razorpay_payment_id;
-    await this.paymentRepo.save(payment);
-
     await this.fulfillPayment(payment);
 
     return { status: 'succeeded', paymentId: payment.id };
@@ -770,10 +811,19 @@ export class PaymentService {
     const payment = await this.paymentRepo.findOneBy({ gatewayOrderId: orderId });
     if (!payment || payment.status === 'succeeded') return;
 
+    // Atomic conditional update — prevents double-fulfillment race with frontend verify
+    const result = await this.paymentRepo
+      .createQueryBuilder()
+      .update()
+      .set({ status: 'succeeded' as PaymentStatus, gatewayPaymentId: rzpPayment.id })
+      .where('id = :id', { id: payment.id })
+      .andWhere('status != :s', { s: 'succeeded' })
+      .execute();
+
+    if (result.affected === 0) return;
+
     payment.status = 'succeeded';
     payment.gatewayPaymentId = rzpPayment.id;
-    await this.paymentRepo.save(payment);
-
     await this.fulfillPayment(payment);
   }
 
@@ -1027,6 +1077,19 @@ export class PaymentService {
       throw new BadRequestException(result.message);
     }
 
+    // Atomic reservation: increment usedCount only if still under maxUses (prevents TOCTOU race)
+    const atomicResult = await this.voucherRepo
+      .createQueryBuilder()
+      .update()
+      .set({ usedCount: () => 'used_count + 1' })
+      .where('id = :id', { id: result.voucherId })
+      .andWhere('(max_uses IS NULL OR used_count < max_uses)')
+      .execute();
+
+    if (atomicResult.affected === 0) {
+      throw new BadRequestException('Voucher has reached its usage limit');
+    }
+
     return {
       voucherId: result.voucherId!,
       discountAmount: result.discount!,
@@ -1060,7 +1123,8 @@ export class PaymentService {
     });
     await this.redemptionRepo.save(redemption);
 
-    await this.voucherRepo.increment({ id: payment.voucherId }, 'usedCount', 1);
+    // Note: usedCount was already atomically incremented in applyVoucher()
+    // No second increment needed here
 
     const voucher = await this.voucherRepo.findOneBy({ id: payment.voucherId });
     const provider = await this.providerRepo.findOneBy({ id: payment.providerId });

@@ -1202,19 +1202,38 @@ export class ProvidersService {
     if (!listing) throw new NotFoundException('Sponsorship not found');
     if (listing.providerId !== provider.id) throw new BadRequestException('You do not own this sponsorship');
 
-    if (dto.budgetAmount !== undefined) listing.budgetAmount = dto.budgetAmount;
-    if (dto.isActive !== undefined) listing.isActive = dto.isActive;
-    if (dto.endsAt !== undefined) {
-      if (new Date(dto.endsAt) <= listing.startsAt) {
-        throw new BadRequestException('End date must be after start date');
+    // Providers can only toggle isActive (pause/resume) — not modify budget/dates
+    // Budget and date changes require admin or a new purchase
+    if (dto.budgetAmount !== undefined || dto.endsAt !== undefined) {
+      throw new BadRequestException('Budget and date changes are not allowed. Please create a new sponsorship.');
+    }
+
+    if (dto.isActive !== undefined) {
+      // Block resume if expired
+      if (dto.isActive && new Date(listing.endsAt) <= new Date()) {
+        throw new BadRequestException('Cannot resume an expired sponsorship');
       }
-      listing.endsAt = new Date(dto.endsAt);
+      // Block resume if budget exhausted
+      if (dto.isActive && Number(listing.spentAmount) >= Number(listing.budgetAmount)) {
+        throw new BadRequestException('Cannot resume — budget is fully exhausted');
+      }
+      listing.isActive = dto.isActive;
     }
 
     return this.sponsorRepo.save(listing);
   }
 
   async getSponsorshipPlans() {
+    // Read plan configuration from system settings (JSON), fallback to defaults
+    const plansSetting = await this.settingRepo.findOneBy({ key: 'sponsorship_plans' });
+
+    if (plansSetting) {
+      try {
+        const plans = JSON.parse(plansSetting.value);
+        if (Array.isArray(plans) && plans.length > 0) return plans;
+      } catch { /* fall through to defaults */ }
+    }
+
     return [
       {
         id: 'basic',

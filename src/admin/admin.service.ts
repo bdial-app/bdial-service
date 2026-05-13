@@ -2658,12 +2658,8 @@ export class AdminService {
         await this.supabaseAuthService.unbanUser(user.supabaseId);
       }
 
-      // 3. Restore provider visibility if exists
-      if (user.provider) {
-        await queryRunner.manager.update(Provider, user.provider.id, {
-          isAvailable: true,
-        });
-      }
+      // 3. Provider stays disabled — disabledAt timestamp preserved.
+      //    Cron job auto-enables 48h after disabledAt.
 
       // 4. Reactivate chat participations
       await queryRunner.manager.update(
