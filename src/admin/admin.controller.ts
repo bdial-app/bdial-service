@@ -197,6 +197,13 @@ export class AdminController {
     return this.adminService.getProviderWarnings(req.user, id);
   }
 
+  @Patch('providers/:id/confirm-suspension')
+  @ApiOperation({ summary: 'Confirm a provider suspension (prevents auto-lift after 48h)' })
+  @ApiParam({ name: 'id', description: 'Provider ID' })
+  confirmSuspension(@Param('id') id: string, @Request() req) {
+    return this.adminService.confirmSuspension(req.user, id);
+  }
+
   // ============================================
   // Users Management
   // ============================================

@@ -6,19 +6,24 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, MoreThan } from 'typeorm';
+import { Repository, In, MoreThan, Not, IsNull } from 'typeorm';
 import { Report } from '../entities/report.entity';
 import { Provider, Product, Message, User } from '../entities';
 import { CreateReportDto, REASONS_BY_ENTITY_TYPE } from './dto/create-report.dto';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { ContentSanitizerService } from '../common/content-sanitizer';
+import { Logger } from '@nestjs/common';
 
 const MAX_REPORTS_PER_DAY = 5;
 const DISMISSAL_COOLDOWN_DAYS = 30;
 const ACCOUNT_MIN_AGE_HOURS = 24;
+const HIGH_SEVERITY_REASONS = ['fraud_scam', 'fraud', 'fake_business', 'fake_product', 'counterfeit'];
+const FRAUD_SCORE_THRESHOLD = 3.0;
 
 @Injectable()
 export class ReportsService {
+  private readonly logger = new Logger(ReportsService.name);
+
   constructor(
     @InjectRepository(Report) private reportRepo: Repository<Report>,
     @InjectRepository(Provider) private providerRepo: Repository<Provider>,
@@ -120,7 +125,91 @@ export class ReportsService {
     // Notify reporter: report received confirmation
     this.notificationDispatch.sendTemplated(reporter.id, 'report_submitted', {}).catch(() => {});
 
+    // 8. Fraud score check — flag for admin if threshold exceeded
+    if (HIGH_SEVERITY_REASONS.includes(dto.reason)) {
+      this.computeFraudScoreAndNotify(dto.entityType, dto.entityId).catch((err) =>
+        this.logger.error(`Fraud score computation failed: ${err.message}`),
+      );
+    }
+
     return { message: 'Report received. Our team will review it shortly.' };
+  }
+
+  /**
+   * Compute a credibility-weighted fraud score for an entity.
+   * If score >= threshold, mark pending reports as under_review and notify all admins.
+   */
+  private async computeFraudScoreAndNotify(entityType: string, entityId: string) {
+    // Get all high-severity reports on this entity from unique reporters
+    const highSeverityReports = await this.reportRepo.find({
+      where: {
+        entityType: entityType as any,
+        entityId,
+        reason: In(HIGH_SEVERITY_REASONS as any[]),
+      },
+      select: ['reporterId'],
+    });
+
+    // Deduplicate by reporterId
+    const uniqueReporterIds = [...new Set(
+      highSeverityReports.map((r) => r.reporterId).filter(Boolean),
+    )] as string[];
+
+    if (uniqueReporterIds.length < 2) return; // Need at least 2 unique reporters
+
+    // Compute credibility weight for each reporter
+    let fraudScore = 0;
+    for (const reporterId of uniqueReporterIds) {
+      const [totalFiled, dismissedCount] = await Promise.all([
+        this.reportRepo.count({ where: { reporterId } }),
+        this.reportRepo.count({ where: { reporterId, status: 'dismissed' as any } }),
+      ]);
+
+      let weight = 1.0;
+      if (totalFiled >= 3) {
+        const credibilityRatio = (totalFiled - dismissedCount) / totalFiled;
+        if (credibilityRatio >= 0.7) weight = 1.5;
+        else if (credibilityRatio < 0.4) weight = 0.5;
+      }
+      fraudScore += weight;
+    }
+
+    if (fraudScore < FRAUD_SCORE_THRESHOLD) return;
+
+    this.logger.warn(
+      `Fraud score ${fraudScore.toFixed(1)} for ${entityType}:${entityId} — flagging for admin review`,
+    );
+
+    // Mark all pending reports on this entity as under_review
+    await this.reportRepo.update(
+      { entityType: entityType as any, entityId, status: 'pending' as any },
+      { status: 'under_review' },
+    );
+
+    // Resolve target name for notification
+    let targetName = `${entityType} ${entityId.slice(0, 8)}`;
+    try {
+      if (entityType === 'provider') {
+        const provider = await this.providerRepo.findOne({ where: { id: entityId }, select: ['brandName'] });
+        if (provider?.brandName) targetName = provider.brandName;
+      } else if (entityType === 'product') {
+        const product = await this.providerRepo.manager.getRepository('Product')
+          .findOne({ where: { id: entityId }, select: ['name'] });
+        if ((product as any)?.name) targetName = (product as any).name;
+      }
+    } catch {}
+
+    // Notify all admin users
+    const admins = await this.userRepo.find({ where: { role: 'admin' as any, status: 'active' as any } });
+    for (const admin of admins) {
+      this.notificationDispatch.sendToUser(
+        admin.id,
+        'system_announcement',
+        '⚠️ Suspected Fraud Alert',
+        `"${targetName}" has ${uniqueReporterIds.length} fraud reports from credible users (score: ${fraudScore.toFixed(1)}). Immediate review recommended.`,
+        { route: '/reports' },
+      ).catch(() => {});
+    }
   }
 
   private async validateTargetAndOwnership(

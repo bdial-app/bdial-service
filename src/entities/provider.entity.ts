@@ -119,6 +119,12 @@ export class Provider {
   @Column({ name: 'disabled_at', type: 'timestamptz', nullable: true })
   disabledAt: Date | null;
 
+  @Column({ name: 'suspended_at', type: 'timestamptz', nullable: true })
+  suspendedAt: Date | null;
+
+  @Column({ name: 'suspension_confirmed', type: 'boolean', default: false })
+  suspensionConfirmed: boolean;
+
   @OneToOne(() => User, (u) => u.provider, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })
   user: User;

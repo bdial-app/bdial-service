@@ -38,9 +38,11 @@ CREATE INDEX IF NOT EXISTS idx_categories_active
   ON categories(is_active) WHERE is_active = true;
 
 -- Composite index for active offers lookup (used in deals section)
-CREATE INDEX IF NOT EXISTS idx_provider_offers_active_dates
-  ON provider_offers(provider_id)
-  WHERE is_active = true AND starts_at <= NOW() AND ends_at >= NOW();
+-- Note: NOW() cannot be used in index predicates (not IMMUTABLE).
+-- Date filtering belongs in queries, not index definitions.
+CREATE INDEX IF NOT EXISTS idx_provider_offers_active
+  ON provider_offers(provider_id, starts_at, ends_at)
+  WHERE is_active = true;
 
 -- ╔══════════════════════════════════════════════════════════════════════════╗
 -- ║  3. MATERIALIZED VIEW — provider_rating_stats                           ║

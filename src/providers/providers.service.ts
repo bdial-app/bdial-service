@@ -281,7 +281,21 @@ export class ProvidersService {
     if (provider.deletedAt) {
       providerStatus = 'deleted';
     } else if (provider.status === 'suspended') {
-      providerStatus = 'suspended';
+      // Auto-lift check: if suspended > 48h and not confirmed by admin, auto-unsuspend
+      if (
+        provider.suspendedAt &&
+        !provider.suspensionConfirmed &&
+        Date.now() - new Date(provider.suspendedAt).getTime() > 48 * 60 * 60 * 1000
+      ) {
+        await this.providerRepo.update(provider.id, {
+          status: 'active',
+          suspendedAt: null,
+          suspensionConfirmed: false,
+        });
+        providerStatus = 'approved';
+      } else {
+        providerStatus = 'suspended';
+      }
     } else if (provider.status === 'disabled') {
       providerStatus = 'disabled';
     } else if (provider.status === 'active' || verificationStatus === 'approved') {

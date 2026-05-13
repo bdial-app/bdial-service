@@ -453,9 +453,52 @@ export class AdminService {
       take: pageSize,
     });
 
+    // Hydrate each report with target entity summary
+    const hydratedReports = await Promise.all(
+      reports.map(async (report) => {
+        let targetSummary: { name: string; imageUrl?: string; status?: string; totalReports: number } | null = null;
+        try {
+          const totalReports = await this.entityReportRepo.count({
+            where: { entityType: report.entityType, entityId: report.entityId },
+          });
+          if (report.entityType === 'provider') {
+            const provider = await this.providerRepo.findOne({
+              where: { id: report.entityId },
+              select: ['id', 'brandName', 'profilePhotoUrl', 'status'],
+            });
+            if (provider) {
+              targetSummary = {
+                name: provider.brandName || 'Unknown Provider',
+                imageUrl: provider.profilePhotoUrl || undefined,
+                status: provider.status,
+                totalReports,
+              };
+            }
+          } else if (report.entityType === 'product') {
+            const product: any = await this.providerRepo.manager
+              .getRepository('Product')
+              .findOne({ where: { id: report.entityId }, relations: ['provider'] });
+            if (product) {
+              targetSummary = {
+                name: product.name || 'Unknown Product',
+                imageUrl: product.photos?.[0]?.url || undefined,
+                status: product.isActive ? 'active' : 'inactive',
+                totalReports,
+              };
+            }
+          } else if (report.entityType === 'message') {
+            targetSummary = { name: 'Message', totalReports };
+          }
+        } catch {
+          // Silently ignore hydration errors — target may have been deleted
+        }
+        return { ...report, targetSummary };
+      }),
+    );
+
     const totalPages = Math.ceil(totalCount / pageSize);
     return {
-      data: reports,
+      data: hydratedReports,
       pagination: {
         currentPage,
         pageSize,
@@ -579,14 +622,14 @@ export class AdminService {
         });
         // Suspend the provider
         if (report.entityType === 'provider') {
-          await this.providerRepo.update(report.entityId, { status: 'suspended' });
+          await this.providerRepo.update(report.entityId, { status: 'suspended', suspendedAt: new Date(), suspensionConfirmed: false });
           await this.createProviderWarning(report.entityId, reportId, admin.id, report.reason, adminNotes, true);
         } else if (report.entityType === 'product') {
           const product = await this.providerRepo.manager
             .getRepository('Product')
             .findOne({ where: { id: report.entityId }, relations: ['provider'] });
           if (product?.provider?.id) {
-            await this.providerRepo.update(product.provider.id, { status: 'suspended' });
+            await this.providerRepo.update(product.provider.id, { status: 'suspended', suspendedAt: new Date(), suspensionConfirmed: false });
             await this.createProviderWarning(product.provider.id, reportId, admin.id, report.reason, adminNotes, true);
           }
         }
@@ -605,7 +648,7 @@ export class AdminService {
         if (report.entityType === 'provider') {
           const provider = await this.providerRepo.findOneBy({ id: report.entityId });
           if (provider) {
-            await this.providerRepo.update(report.entityId, { status: 'suspended' });
+            await this.providerRepo.update(report.entityId, { status: 'suspended', suspendedAt: new Date(), suspensionConfirmed: true });
             await this.userRepo.update(provider.userId, { status: 'suspended' });
             await this.createProviderWarning(report.entityId, reportId, admin.id, report.reason, adminNotes, true);
             // Notify the user about account suspension
@@ -621,7 +664,7 @@ export class AdminService {
             .getRepository('Product')
             .findOne({ where: { id: report.entityId }, relations: ['provider'] });
           if (product?.provider) {
-            await this.providerRepo.update(product.provider.id, { status: 'suspended' });
+            await this.providerRepo.update(product.provider.id, { status: 'suspended', suspendedAt: new Date(), suspensionConfirmed: true });
             await this.userRepo.update(product.provider.userId, { status: 'suspended' });
             await this.createProviderWarning(product.provider.id, reportId, admin.id, report.reason, adminNotes, true);
             // Notify the user about account suspension
@@ -641,7 +684,7 @@ export class AdminService {
     if (report.reporterId) {
       this.notificationDispatch.sendTemplated(report.reporterId, 'report_resolved', {
         outcome: action === 'dismiss' ? 'dismissed' : 'action taken',
-      }).catch(() => {});
+      }, undefined, 'customer').catch(() => {});
     }
 
     return this.entityReportRepo.findOne({
@@ -725,7 +768,7 @@ export class AdminService {
     if (provider) {
       this.notificationDispatch.sendTemplated(provider.userId, 'warning_issued', {
         reason: reasonLabel,
-      }).catch(() => {});
+      }, undefined, 'provider').catch(() => {});
     }
 
     return warning;
@@ -737,6 +780,18 @@ export class AdminService {
       where: { providerId },
       order: { createdAt: 'DESC' },
     });
+  }
+
+  async confirmSuspension(admin: any, providerId: string) {
+    this.assertAdmin(admin);
+    const provider = await this.providerRepo.findOneBy({ id: providerId });
+    if (!provider) throw new NotFoundException('Provider not found');
+    if (provider.status !== 'suspended') {
+      throw new BadRequestException('Provider is not currently suspended');
+    }
+    await this.providerRepo.update(providerId, { suspensionConfirmed: true });
+    await this.createAuditLog(admin.id, 'confirm_suspension', 'provider', providerId, null, { confirmed: true });
+    return { message: 'Suspension confirmed. Auto-lift is now disabled for this provider.' };
   }
 
   // ============================================
