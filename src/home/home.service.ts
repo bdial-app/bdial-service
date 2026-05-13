@@ -261,7 +261,8 @@ export class HomeService {
         `(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`,
         'listingPhoto',
       )
-      .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] });
+      .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
+      .andWhere('p.is_available = true');
 
     this.withReviewStats(qb);
     this.withCategoryServices(qb);
@@ -295,7 +296,8 @@ export class HomeService {
         .createQueryBuilder('p')
         .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"', 'p.description AS description', 'p.city AS city', 'p.area AS area', 'p.status AS status', 'p.is_featured AS "isFeatured"', 'p.is_available AS "isAvailable"', 'p.latitude AS latitude', 'p.longitude AS longitude'])
         .addSelect(`(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`, 'listingPhoto')
-        .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] });
+        .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
+        .andWhere('p.is_available = true');
       this.withReviewStats(fallbackQb);
       this.withCategoryServices(fallbackQb);
       this.withGeo(fallbackQb, lat!, lng!, 100);
@@ -336,6 +338,7 @@ export class HomeService {
 
     const conditions: string[] = [
       `p.status IN ('active', 'unverified')`,
+      `p.is_available = true`,
       `p.id IN (SELECT pc.provider_id FROM provider_categories pc WHERE pc.category_id = ANY($1))`,
     ];
 
@@ -445,7 +448,8 @@ export class HomeService {
         `(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`,
         'listingPhoto',
       )
-      .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] });
+      .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
+      .andWhere('p.is_available = true');
 
     this.withReviewStats(qb);
     this.withCategoryServices(qb);
@@ -474,7 +478,8 @@ export class HomeService {
         .createQueryBuilder('p')
         .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"', 'p.description AS description', 'p.city AS city', 'p.area AS area', 'p.status AS status', 'p.is_featured AS "isFeatured"', 'p.is_available AS "isAvailable"'])
         .addSelect(`(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`, 'listingPhoto')
-        .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] });
+        .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
+        .andWhere('p.is_available = true');
       this.withReviewStats(fallbackQb);
       this.withCategoryServices(fallbackQb);
       this.withGeo(fallbackQb, lat!, lng!, 100);
@@ -492,7 +497,8 @@ export class HomeService {
         .createQueryBuilder('p')
         .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"', 'p.description AS description', 'p.city AS city', 'p.area AS area', 'p.status AS status', 'p.is_featured AS "isFeatured"', 'p.is_available AS "isAvailable"'])
         .addSelect(`(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`, 'listingPhoto')
-        .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] });
+        .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
+        .andWhere('p.is_available = true');
       this.withReviewStats(globalQb);
       this.withCategoryServices(globalQb);
       globalQb.orderBy('COALESCE(rs.avg_rating, 0)', 'DESC')
@@ -538,6 +544,7 @@ export class HomeService {
         'listingPhoto',
       )
       .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
+      .andWhere('p.is_available = true')
       .andWhere('p.city ILIKE :city', { city: `%${city}%` });
 
     this.withReviewStats(qb);
@@ -598,6 +605,7 @@ export class HomeService {
         'listingPhoto',
       )
       .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
+      .andWhere('p.is_available = true')
       .andWhere('p.created_at >= :since', { since: thirtyDaysAgo });
 
     this.withReviewStats(qb);
@@ -627,6 +635,7 @@ export class HomeService {
         .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"', 'p.description AS description', 'p.city AS city', 'p.area AS area', 'p.status AS status', 'p.created_at AS "createdAt"'])
         .addSelect(`(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`, 'listingPhoto')
         .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
+        .andWhere('p.is_available = true')
         .andWhere('p.created_at >= :since', { since: thirtyDaysAgo });
       this.withReviewStats(fallbackQb);
       this.withCategoryServices(fallbackQb);
@@ -810,6 +819,7 @@ export class HomeService {
         'listingPhoto',
       )
       .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
+      .andWhere('p.is_available = true')
       .andWhere("p.women_led_status = 'approved'");
 
     this.withReviewStats(qb);
@@ -843,6 +853,7 @@ export class HomeService {
         .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"', 'p.description AS description', 'p.city AS city', 'p.area AS area', 'p.status AS status', 'p.is_featured AS "isFeatured"', 'p.is_available AS "isAvailable"', 'p.latitude AS latitude', 'p.longitude AS longitude'])
         .addSelect(`(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`, 'listingPhoto')
         .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
+        .andWhere('p.is_available = true')
         .andWhere("p.women_led_status = 'approved'");
       this.withReviewStats(fallbackQb);
       this.withCategoryServices(fallbackQb);

@@ -456,6 +456,7 @@ export class SearchService implements OnModuleInit {
     // Build WHERE conditions
     const conditions: string[] = [
       `p.status IN ('active', 'unverified')`,
+      `p.is_available = true`,
     ];
 
     if (opts.hasGeo) {
@@ -692,6 +693,7 @@ export class SearchService implements OnModuleInit {
       let pi = allParams.length + 1;
       const conditions: string[] = [
         `p.status IN ('active', 'unverified')`,
+        `p.is_available = true`,
         `po.is_active = true`,
         `po.starts_at <= NOW()`,
         `po.ends_at >= NOW()`,

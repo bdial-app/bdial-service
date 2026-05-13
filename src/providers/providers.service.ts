@@ -538,7 +538,8 @@ export class ProvidersService {
         `(SELECT string_agg(DISTINCT cat.name, ', ' ORDER BY cat.name) FROM categories cat JOIN provider_categories pcat ON pcat.category_id = cat.id WHERE pcat.provider_id = provider.id)`,
         'services',
       )
-      .andWhere('provider.status IN (:...statuses)', { statuses: verifiedOnly ? ['active'] : ['active', 'unverified'] });
+      .andWhere('provider.status IN (:...statuses)', { statuses: verifiedOnly ? ['active'] : ['active', 'unverified'] })
+      .andWhere('provider.isAvailable = true');
 
     // ── Location-based mode: Haversine distance + radius filter ──
     if (hasLocation) {
@@ -546,6 +547,7 @@ export class ProvidersService {
         .where('provider.latitude IS NOT NULL')
         .andWhere('provider.longitude IS NOT NULL')
         .andWhere('provider.status IN (:...statuses)', { statuses: verifiedOnly ? ['active'] : ['active', 'unverified'] })
+        .andWhere('provider.isAvailable = true')
         .andWhere(`${haversine} <= :radius`, { lat, lng, radius })
         .setParameters({ lat, lng, radius });
     } else {
