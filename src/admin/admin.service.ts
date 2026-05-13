@@ -1550,6 +1550,70 @@ export class AdminService {
     };
   }
 
+  async getSponsorshipAnalytics(admin: any, id: string, period: string) {
+    this.assertAdmin(admin);
+
+    const listing = await this.sponsoredRepo.findOne({ where: { id } });
+    if (!listing) throw new Error('Sponsorship not found');
+
+    const days = period === '30d' ? 30 : period === '14d' ? 14 : 7;
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+
+    const dailyData = await this.adEventRepo
+      .createQueryBuilder('e')
+      .select("DATE(e.created_at)", 'date')
+      .addSelect("e.event_type", 'eventType')
+      .addSelect("COUNT(*)", 'count')
+      .where("e.entity_id = :id", { id })
+      .andWhere("e.entity_type = 'sponsored_listing'")
+      .andWhere("e.created_at >= :since", { since })
+      .groupBy("DATE(e.created_at)")
+      .addGroupBy("e.event_type")
+      .orderBy("DATE(e.created_at)", 'ASC')
+      .getRawMany();
+
+    // Build daily array with impressions and clicks per day
+    const dateMap = new Map<string, { impressions: number; clicks: number }>();
+    for (let i = 0; i < days; i++) {
+      const d = new Date(since);
+      d.setDate(d.getDate() + i + 1);
+      const key = d.toISOString().split('T')[0];
+      dateMap.set(key, { impressions: 0, clicks: 0 });
+    }
+
+    for (const row of dailyData) {
+      const dateKey = typeof row.date === 'string' ? row.date : new Date(row.date).toISOString().split('T')[0];
+      const entry = dateMap.get(dateKey);
+      if (entry) {
+        if (row.eventType === 'impression') entry.impressions = Number(row.count);
+        else if (row.eventType === 'click') entry.clicks = Number(row.count);
+      }
+    }
+
+    const daily = Array.from(dateMap.entries()).map(([date, data]) => ({
+      date,
+      impressions: data.impressions,
+      clicks: data.clicks,
+      spend: data.impressions * Number(listing.costPerImpression) + data.clicks * Number(listing.costPerClick),
+    }));
+
+    const totals = {
+      impressions: daily.reduce((s, d) => s + d.impressions, 0),
+      clicks: daily.reduce((s, d) => s + d.clicks, 0),
+      spend: daily.reduce((s, d) => s + d.spend, 0),
+      avgDailyImpressions: Math.round(daily.reduce((s, d) => s + d.impressions, 0) / days),
+      avgDailyClicks: Math.round(daily.reduce((s, d) => s + d.clicks, 0) / days),
+    };
+
+    // Projected exhaust date
+    const remainingBudget = Number(listing.budgetAmount) - Number(listing.spentAmount);
+    const avgDailySpend = totals.spend / days;
+    const projectedDaysLeft = avgDailySpend > 0 ? Math.ceil(remainingBudget / avgDailySpend) : null;
+
+    return { daily, totals, projectedDaysLeft, period: days };
+  }
+
   // ============================================
   // Provider Offers Management
   // ============================================

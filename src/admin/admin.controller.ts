@@ -574,6 +574,14 @@ export class AdminController {
     return this.adminService.getSponsoredStats(req.user);
   }
 
+  @Get('sponsorships/:id/analytics')
+  @ApiOperation({ summary: 'Sponsored listing time-series analytics' })
+  @ApiParam({ name: 'id', description: 'Sponsored listing ID' })
+  @ApiQuery({ name: 'period', required: false, description: '7d | 14d | 30d' })
+  getSponsorshipAnalytics(@Param('id') id: string, @Query('period') period: string, @Request() req) {
+    return this.adminService.getSponsorshipAnalytics(req.user, id, period || '7d');
+  }
+
   @Get('sponsorships/:id')
   @ApiOperation({ summary: 'Get sponsored listing detail' })
   @ApiParam({ name: 'id', description: 'Sponsored listing ID' })
