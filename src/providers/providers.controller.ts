@@ -330,6 +330,28 @@ export class ProvidersController {
     return this.providersService.submitVerification(req.user.id, file, docType);
   }
 
+  @Get('my-warnings')
+  @ApiOperation({ summary: 'Get warnings for the authenticated provider' })
+  getMyWarnings(@Request() req) {
+    return this.providersService.getMyWarnings(req.user.id);
+  }
+
+  @Get('my-warnings/unread-count')
+  @ApiOperation({ summary: 'Get unread warning count for the authenticated provider' })
+  getMyWarningsUnreadCount(@Request() req) {
+    return this.providersService.getMyWarningsUnreadCount(req.user.id);
+  }
+
+  @Patch('my-warnings/:warningId/read')
+  @ApiOperation({ summary: 'Mark a warning as read' })
+  @ApiParam({ name: 'warningId', description: 'Warning ID (UUID)' })
+  markWarningRead(
+    @Param('warningId', ParseUUIDPipe) warningId: string,
+    @Request() req,
+  ) {
+    return this.providersService.markWarningRead(req.user.id, warningId);
+  }
+
   @Get(':id')
   @Public()
   @ApiOperation({ summary: 'Get provider by ID' })
@@ -384,28 +406,6 @@ export class ProvidersController {
       throw new BadRequestException('You can select up to 2 categories');
     }
     return this.providersService.updateCategories(id, req.user.id, body.categoryIds);
-  }
-
-  @Get('my-warnings')
-  @ApiOperation({ summary: 'Get warnings for the authenticated provider' })
-  getMyWarnings(@Request() req) {
-    return this.providersService.getMyWarnings(req.user.id);
-  }
-
-  @Get('my-warnings/unread-count')
-  @ApiOperation({ summary: 'Get unread warning count for the authenticated provider' })
-  getMyWarningsUnreadCount(@Request() req) {
-    return this.providersService.getMyWarningsUnreadCount(req.user.id);
-  }
-
-  @Patch('my-warnings/:warningId/read')
-  @ApiOperation({ summary: 'Mark a warning as read' })
-  @ApiParam({ name: 'warningId', description: 'Warning ID (UUID)' })
-  markWarningRead(
-    @Param('warningId', ParseUUIDPipe) warningId: string,
-    @Request() req,
-  ) {
-    return this.providersService.markWarningRead(req.user.id, warningId);
   }
 
   // ─── Provider Disable / Enable / Delete ────────────────────────
