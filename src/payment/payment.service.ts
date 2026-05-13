@@ -97,12 +97,21 @@ export class PaymentService {
       voucherId = result.voucherId;
     }
 
+    // Read CPC/CPI from system settings (fallback to defaults)
+    const [cpcSetting, cpiSetting] = await Promise.all([
+      this.settingsRepo.findOneBy({ key: 'sponsorship_cost_per_click' }),
+      this.settingsRepo.findOneBy({ key: 'sponsorship_cost_per_impression' }),
+    ]);
+    const costPerClick = cpcSetting ? parseFloat(cpcSetting.value) : 5.0;
+    const costPerImpression = cpiSetting ? parseFloat(cpiSetting.value) : 0.10;
+
     // Create sponsored listing (pending payment)
     const listing = this.sponsoredListingRepo.create({
       providerId: provider.id,
       type: dto.type,
       budgetAmount: dto.budgetAmount,
-      costPerClick: 5.0,
+      costPerClick,
+      costPerImpression,
       targetCategoryIds: dto.targetCategoryIds ?? null,
       targetCities: dto.targetCities ?? null,
       startsAt: new Date(dto.startsAt),

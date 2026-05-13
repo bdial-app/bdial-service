@@ -943,12 +943,15 @@ export class ExploreService {
         .execute();
     }
 
-    // If impression on sponsored listing, increment impressions
+    // If impression on sponsored listing, increment impressions + deduct cost_per_impression
     if (dto.eventType === 'impression' && dto.entityType === 'sponsored_listing') {
       await this.sponsoredRepo
         .createQueryBuilder()
         .update(SponsoredListing)
-        .set({ impressions: () => 'impressions + 1' })
+        .set({
+          impressions: () => 'impressions + 1',
+          spentAmount: () => 'spent_amount + cost_per_impression',
+        })
         .where('id = :id', { id: dto.entityId })
         .execute();
     }

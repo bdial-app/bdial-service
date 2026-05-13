@@ -1009,13 +1009,16 @@ export class HomeService {
 
     const results = deduplicated.slice(0, limit);
 
-    // Fire-and-forget: increment impressions for each shown listing
+    // Fire-and-forget: increment impressions + deduct cost_per_impression for each shown listing
     if (results.length > 0) {
       const listingIds = results.map((r) => r.sponsoredListingId);
       this.sponsoredRepo
         .createQueryBuilder()
         .update()
-        .set({ impressions: () => 'impressions + 1' })
+        .set({
+          impressions: () => 'impressions + 1',
+          spentAmount: () => 'spent_amount + cost_per_impression',
+        })
         .where('id IN (:...ids)', { ids: listingIds })
         .execute()
         .catch(() => {}); // non-blocking

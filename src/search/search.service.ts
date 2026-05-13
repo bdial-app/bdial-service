@@ -997,10 +997,10 @@ export class SearchService implements OnModuleInit {
 
       const rows = await this.dataSource.query(sql, params);
 
-      // 3. Track impressions (fire and forget)
+      // 3. Track impressions + deduct cost_per_impression (fire and forget)
       for (const r of rows) {
         this.dataSource.query(
-          `UPDATE sponsored_listings SET impressions = impressions + 1 WHERE id = $1`,
+          `UPDATE sponsored_listings SET impressions = impressions + 1, spent_amount = spent_amount + cost_per_impression WHERE id = $1`,
           [r.sponsored_listing_id],
         ).catch(() => {});
       }

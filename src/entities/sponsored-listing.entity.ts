@@ -37,6 +37,9 @@ export class SponsoredListing {
   @Column({ name: 'cost_per_click', type: 'decimal', precision: 10, scale: 2, default: 5.0 })
   costPerClick: number;
 
+  @Column({ name: 'cost_per_impression', type: 'decimal', precision: 10, scale: 4, default: 0.10 })
+  costPerImpression: number;
+
   @Column({ type: 'int', default: 0 })
   impressions: number;
 

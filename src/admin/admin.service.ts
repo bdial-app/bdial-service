@@ -1520,7 +1520,7 @@ export class AdminService {
     const listing = await this.sponsoredRepo.findOneBy({ id });
     if (!listing) throw new NotFoundException('Sponsored listing not found');
 
-    const allowed = ['isActive', 'budgetAmount', 'costPerClick', 'startsAt', 'endsAt', 'targetCategoryIds', 'targetCities'];
+    const allowed = ['isActive', 'budgetAmount', 'costPerClick', 'costPerImpression', 'startsAt', 'endsAt', 'targetCategoryIds', 'targetCities'];
     const update: any = {};
     for (const key of allowed) {
       if ((body as any)[key] !== undefined) update[key] = (body as any)[key];
