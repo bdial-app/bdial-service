@@ -9,7 +9,7 @@ import {
 } from 'typeorm';
 import { User } from './user.entity';
 
-export type ReportEntityType = 'provider' | 'product' | 'message';
+export type ReportEntityType = 'provider' | 'product' | 'message' | 'deal' | 'review' | 'customer';
 
 export type ReportReason =
   // Provider reasons
@@ -27,6 +27,18 @@ export type ReportReason =
   // Message reasons
   | 'spam'
   | 'fraud'
+  // Deal reasons
+  | 'misleading_offer'
+  | 'expired_deal'
+  | 'fake_discount'
+  // Review reasons
+  | 'fake_review'
+  | 'offensive_language'
+  | 'irrelevant_content'
+  // Customer reasons
+  | 'abusive_behavior'
+  | 'fake_account'
+  | 'spam_messages'
   // Shared
   | 'other';
 
@@ -48,7 +60,7 @@ export class Report {
   @Column({
     name: 'entity_type',
     type: 'enum',
-    enum: ['provider', 'product', 'message'],
+    enum: ['provider', 'product', 'message', 'deal', 'review', 'customer'],
   })
   entityType: ReportEntityType;
 
@@ -70,6 +82,15 @@ export class Report {
       'wrong_price',
       'spam',
       'fraud',
+      'misleading_offer',
+      'expired_deal',
+      'fake_discount',
+      'fake_review',
+      'offensive_language',
+      'irrelevant_content',
+      'abusive_behavior',
+      'fake_account',
+      'spam_messages',
       'other',
     ],
   })

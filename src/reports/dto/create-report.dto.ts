@@ -6,6 +6,9 @@ export enum ReportEntityTypeDto {
   PROVIDER = 'provider',
   PRODUCT = 'product',
   MESSAGE = 'message',
+  DEAL = 'deal',
+  REVIEW = 'review',
+  CUSTOMER = 'customer',
 }
 
 export enum ReportReasonDto {
@@ -24,6 +27,18 @@ export enum ReportReasonDto {
   // Message reasons
   SPAM = 'spam',
   FRAUD = 'fraud',
+  // Deal reasons
+  MISLEADING_OFFER = 'misleading_offer',
+  EXPIRED_DEAL = 'expired_deal',
+  FAKE_DISCOUNT = 'fake_discount',
+  // Review reasons
+  FAKE_REVIEW = 'fake_review',
+  OFFENSIVE_LANGUAGE = 'offensive_language',
+  IRRELEVANT_CONTENT = 'irrelevant_content',
+  // Customer reasons
+  ABUSIVE_BEHAVIOR = 'abusive_behavior',
+  FAKE_ACCOUNT = 'fake_account',
+  SPAM_MESSAGES = 'spam_messages',
   // Shared
   OTHER = 'other',
 }
@@ -52,6 +67,26 @@ export const REASONS_BY_ENTITY_TYPE: Record<ReportEntityTypeDto, ReportReasonDto
     ReportReasonDto.SPAM,
     ReportReasonDto.INAPPROPRIATE_CONTENT,
     ReportReasonDto.FRAUD,
+    ReportReasonDto.OTHER,
+  ],
+  [ReportEntityTypeDto.DEAL]: [
+    ReportReasonDto.MISLEADING_OFFER,
+    ReportReasonDto.EXPIRED_DEAL,
+    ReportReasonDto.FAKE_DISCOUNT,
+    ReportReasonDto.INAPPROPRIATE_CONTENT,
+    ReportReasonDto.OTHER,
+  ],
+  [ReportEntityTypeDto.REVIEW]: [
+    ReportReasonDto.FAKE_REVIEW,
+    ReportReasonDto.OFFENSIVE_LANGUAGE,
+    ReportReasonDto.IRRELEVANT_CONTENT,
+    ReportReasonDto.OTHER,
+  ],
+  [ReportEntityTypeDto.CUSTOMER]: [
+    ReportReasonDto.ABUSIVE_BEHAVIOR,
+    ReportReasonDto.FAKE_ACCOUNT,
+    ReportReasonDto.SPAM_MESSAGES,
+    ReportReasonDto.HARASSMENT,
     ReportReasonDto.OTHER,
   ],
 };

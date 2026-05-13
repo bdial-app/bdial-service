@@ -8,7 +8,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, MoreThan, Not, IsNull } from 'typeorm';
 import { Report } from '../entities/report.entity';
-import { Provider, Product, Message, User } from '../entities';
+import { Provider, Product, Message, User, ProviderOffer, Review } from '../entities';
 import { CreateReportDto, REASONS_BY_ENTITY_TYPE } from './dto/create-report.dto';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { ContentSanitizerService } from '../common/content-sanitizer';
@@ -30,6 +30,8 @@ export class ReportsService {
     @InjectRepository(Product) private productRepo: Repository<Product>,
     @InjectRepository(Message) private messageRepo: Repository<Message>,
     @InjectRepository(User) private userRepo: Repository<User>,
+    @InjectRepository(ProviderOffer) private offerRepo: Repository<ProviderOffer>,
+    @InjectRepository(Review) private reviewRepo: Repository<Review>,
     private readonly notificationDispatch: NotificationDispatchService,
     private readonly contentSanitizer: ContentSanitizerService,
   ) {}
@@ -193,9 +195,17 @@ export class ReportsService {
         const provider = await this.providerRepo.findOne({ where: { id: entityId }, select: ['brandName'] });
         if (provider?.brandName) targetName = provider.brandName;
       } else if (entityType === 'product') {
-        const product = await this.providerRepo.manager.getRepository('Product')
-          .findOne({ where: { id: entityId }, select: ['name'] });
+        const product = await this.productRepo.findOne({ where: { id: entityId }, select: ['name'] });
         if ((product as any)?.name) targetName = (product as any).name;
+      } else if (entityType === 'deal') {
+        const offer = await this.offerRepo.findOne({ where: { id: entityId }, select: ['title'] });
+        if (offer?.title) targetName = offer.title;
+      } else if (entityType === 'review') {
+        const review = await this.reviewRepo.findOne({ where: { id: entityId }, select: ['reviewText'] });
+        if (review?.reviewText) targetName = review.reviewText.slice(0, 50);
+      } else if (entityType === 'customer') {
+        const user = await this.userRepo.findOne({ where: { id: entityId }, select: ['name'] });
+        if (user?.name) targetName = user.name;
       }
     } catch {}
 
@@ -247,6 +257,44 @@ export class ReportsService {
         }
         if (message.senderId === reporterId) {
           throw new BadRequestException('You cannot report your own message.');
+        }
+        break;
+      }
+      case 'deal': {
+        const offer = await this.offerRepo.findOne({
+          where: { id: dto.entityId },
+          relations: ['provider'],
+        });
+        if (!offer || !offer.isActive) {
+          throw new NotFoundException('Deal not found.');
+        }
+        if (offer.provider?.userId === reporterId) {
+          throw new BadRequestException('You cannot report your own deal.');
+        }
+        break;
+      }
+      case 'review': {
+        const review = await this.reviewRepo.findOneBy({ id: dto.entityId });
+        if (!review || review.status === 'removed') {
+          throw new NotFoundException('Review not found.');
+        }
+        if (review.reviewerId === reporterId) {
+          throw new BadRequestException('You cannot report your own review.');
+        }
+        break;
+      }
+      case 'customer': {
+        // Only providers can report customers
+        const reporterProvider = await this.providerRepo.findOneBy({ userId: reporterId });
+        if (!reporterProvider || reporterProvider.status !== 'active') {
+          throw new ForbiddenException('Only verified providers can report customers.');
+        }
+        const targetUser = await this.userRepo.findOneBy({ id: dto.entityId });
+        if (!targetUser || targetUser.status === 'suspended') {
+          throw new NotFoundException('Customer not found.');
+        }
+        if (targetUser.id === reporterId) {
+          throw new BadRequestException('You cannot report yourself.');
         }
         break;
       }
