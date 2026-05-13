@@ -1278,7 +1278,7 @@ export class HomeService {
 
     const [providerCount, reviewStats, categoryCount] = await Promise.all([
       this.providerRepo.count({
-        where: { status: In(['active', 'unverified']) },
+        where: { status: In(['active']) },
       }),
       this.reviewRepo
         .createQueryBuilder('r')

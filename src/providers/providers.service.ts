@@ -289,8 +289,8 @@ export class ProvidersService {
       providerStatus = 'approved';
     } else if (provider.status === 'unverified') {
       // Provider registered but never submitted verification docs
-      // They can still access the dashboard, just not verified
-      providerStatus = 'approved';
+      // They can access the dashboard but are NOT verified
+      providerStatus = 'unverified';
     } else if (verificationStatus === 'pending') {
       // Verification docs submitted, awaiting review
       providerStatus = 'pending';
