@@ -50,6 +50,12 @@ export class AdminPaymentController {
     return this.paymentService.getRevenueStats();
   }
 
+  @Get('payments/analytics')
+  @ApiOperation({ summary: 'Get detailed revenue analytics (admin)' })
+  getRevenueAnalytics() {
+    return this.paymentService.getRevenueAnalytics();
+  }
+
   // ─── Subscriptions ────────────────────
 
   @Get('subscriptions')

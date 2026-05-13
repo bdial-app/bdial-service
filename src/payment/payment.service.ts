@@ -1435,6 +1435,190 @@ export class PaymentService {
     };
   }
 
+  async getRevenueAnalytics() {
+    // ─── Overall Breakdown ───────────────────────────────────
+    const breakdown = await this.paymentRepo
+      .createQueryBuilder('p')
+      .select('p.type', 'type')
+      .addSelect('COUNT(*)', 'count')
+      .addSelect('COALESCE(SUM(p.amount), 0)', 'totalRevenue')
+      .where('p.status = :status', { status: 'succeeded' })
+      .groupBy('p.type')
+      .getRawMany();
+
+    const totalRevenue = breakdown.reduce((sum, r) => sum + Number(r.totalRevenue), 0);
+    const totalTransactions = breakdown.reduce((sum, r) => sum + Number(r.count), 0);
+
+    // ─── Plans Revenue Model ─────────────────────────────────
+    const activeSubscriptions = await this.subscriptionRepo
+      .createQueryBuilder('s')
+      .leftJoinAndSelect('s.plan', 'plan')
+      .where('s.status = :status', { status: 'active' })
+      .getMany();
+
+    const mrr = activeSubscriptions.reduce((sum, s) => {
+      const price = s.billingInterval === 'yearly'
+        ? Number(s.plan.priceYearly) / 12
+        : Number(s.plan.priceMonthly);
+      return sum + price;
+    }, 0);
+
+    const arr = mrr * 12;
+
+    // Revenue by plan
+    const revenueByPlan = await this.paymentRepo
+      .createQueryBuilder('p')
+      .select('plan.name', 'planName')
+      .addSelect('plan.slug', 'planSlug')
+      .addSelect('COUNT(*)', 'count')
+      .addSelect('COALESCE(SUM(p.amount), 0)', 'revenue')
+      .innerJoin('subscriptions', 's', "p.metadata->>'subscriptionId' = CAST(s.id AS TEXT)")
+      .innerJoin('subscription_plans', 'plan', 's.plan_id = plan.id')
+      .where('p.status = :status', { status: 'succeeded' })
+      .andWhere('p.type = :type', { type: 'subscription' })
+      .groupBy('plan.name')
+      .addGroupBy('plan.slug')
+      .orderBy('revenue', 'DESC')
+      .getRawMany();
+
+    // Subscribers by billing interval
+    const subsByInterval = await this.subscriptionRepo
+      .createQueryBuilder('s')
+      .select('s.billingInterval', 'interval')
+      .addSelect('COUNT(*)', 'count')
+      .where('s.status = :status', { status: 'active' })
+      .groupBy('s.billingInterval')
+      .getRawMany();
+
+    // Monthly subscription revenue (last 6 months)
+    const planMonthly = await this.paymentRepo
+      .createQueryBuilder('p')
+      .select("TO_CHAR(p.created_at, 'YYYY-MM')", 'month')
+      .addSelect('COUNT(*)', 'count')
+      .addSelect('COALESCE(SUM(p.amount), 0)', 'revenue')
+      .where('p.status = :status', { status: 'succeeded' })
+      .andWhere('p.type = :type', { type: 'subscription' })
+      .andWhere("p.created_at >= NOW() - INTERVAL '6 months'")
+      .groupBy("TO_CHAR(p.created_at, 'YYYY-MM')")
+      .orderBy('month', 'ASC')
+      .getRawMany();
+
+    // ─── Deals Revenue Model ─────────────────────────────────
+    const dealTypes = ['deal_unlock', 'deal_creation'];
+    const dealBreakdown = await this.paymentRepo
+      .createQueryBuilder('p')
+      .select('p.type', 'type')
+      .addSelect('COUNT(*)', 'count')
+      .addSelect('COALESCE(SUM(p.amount), 0)', 'revenue')
+      .where('p.status = :status', { status: 'succeeded' })
+      .andWhere('p.type IN (:...dealTypes)', { dealTypes })
+      .groupBy('p.type')
+      .getRawMany();
+
+    // Monthly deal revenue (last 6 months)
+    const dealMonthly = await this.paymentRepo
+      .createQueryBuilder('p')
+      .select("TO_CHAR(p.created_at, 'YYYY-MM')", 'month')
+      .addSelect('p.type', 'type')
+      .addSelect('COUNT(*)', 'count')
+      .addSelect('COALESCE(SUM(p.amount), 0)', 'revenue')
+      .where('p.status = :status', { status: 'succeeded' })
+      .andWhere('p.type IN (:...dealTypes)', { dealTypes })
+      .andWhere("p.created_at >= NOW() - INTERVAL '6 months'")
+      .groupBy("TO_CHAR(p.created_at, 'YYYY-MM')")
+      .addGroupBy('p.type')
+      .orderBy('month', 'ASC')
+      .getRawMany();
+
+    // Top providers by deal revenue
+    const topDealProviders = await this.paymentRepo
+      .createQueryBuilder('p')
+      .select('provider.brand_name', 'brandName')
+      .addSelect('provider.id', 'providerId')
+      .addSelect('COUNT(*)', 'count')
+      .addSelect('COALESCE(SUM(p.amount), 0)', 'revenue')
+      .innerJoin('p.provider', 'provider')
+      .where('p.status = :status', { status: 'succeeded' })
+      .andWhere('p.type IN (:...dealTypes)', { dealTypes })
+      .groupBy('provider.id')
+      .addGroupBy('provider.brand_name')
+      .orderBy('revenue', 'DESC')
+      .limit(10)
+      .getRawMany();
+
+    // ─── Recent Transactions ─────────────────────────────────
+    const recentPlanTxns = await this.paymentRepo.find({
+      where: { status: 'succeeded' as any, type: 'subscription' as any },
+      relations: ['provider'],
+      order: { createdAt: 'DESC' },
+      take: 5,
+    });
+
+    const recentDealTxns = await this.paymentRepo.find({
+      where: [
+        { status: 'succeeded' as any, type: 'deal_unlock' as any },
+        { status: 'succeeded' as any, type: 'deal_creation' as any },
+      ],
+      relations: ['provider'],
+      order: { createdAt: 'DESC' },
+      take: 5,
+    });
+
+    // ─── This Month vs Last Month ────────────────────────────
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+
+    const thisMonthRevenue = await this.paymentRepo
+      .createQueryBuilder('p')
+      .select('COALESCE(SUM(p.amount), 0)', 'revenue')
+      .where('p.status = :status', { status: 'succeeded' })
+      .andWhere('p.created_at >= :start', { start: startOfMonth.toISOString() })
+      .getRawOne();
+
+    const lastMonthRevenue = await this.paymentRepo
+      .createQueryBuilder('p')
+      .select('COALESCE(SUM(p.amount), 0)', 'revenue')
+      .where('p.status = :status', { status: 'succeeded' })
+      .andWhere('p.created_at >= :start', { start: startOfLastMonth.toISOString() })
+      .andWhere('p.created_at < :end', { end: startOfMonth.toISOString() })
+      .getRawOne();
+
+    const planTotalRevenue = breakdown.find(b => b.type === 'subscription')
+      ? Number(breakdown.find(b => b.type === 'subscription').totalRevenue) : 0;
+    const dealTotalRevenue = dealBreakdown.reduce((sum, r) => sum + Number(r.revenue), 0);
+
+    return {
+      overview: {
+        totalRevenue,
+        totalTransactions,
+        mrr,
+        arr,
+        activeSubscriptions: activeSubscriptions.length,
+        thisMonthRevenue: Number(thisMonthRevenue?.revenue ?? 0),
+        lastMonthRevenue: Number(lastMonthRevenue?.revenue ?? 0),
+        breakdown,
+      },
+      plans: {
+        totalRevenue: planTotalRevenue,
+        mrr,
+        arr,
+        activeSubscriptions: activeSubscriptions.length,
+        revenueByPlan,
+        subsByInterval,
+        monthlyTrend: planMonthly,
+        recentTransactions: recentPlanTxns,
+      },
+      deals: {
+        totalRevenue: dealTotalRevenue,
+        breakdown: dealBreakdown,
+        monthlyTrend: dealMonthly,
+        topProviders: topDealProviders,
+        recentTransactions: recentDealTxns,
+      },
+    };
+  }
+
   async getAdminSubscriptions(filters: {
     page?: number;
     limit?: number;
