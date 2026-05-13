@@ -25,13 +25,17 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
     const request = context.switchToHttp().getRequest();
     const user = request.user;
 
+    if (user?.status === 'suspended') {
+      throw new ForbiddenException({ statusCode: 403, message: 'User account is suspended', code: 'ACCOUNT_SUSPENDED' });
+    }
+
     if (user?.status === 'paused') {
       const allowPaused = this.reflector.getAllAndOverride<boolean>(ALLOW_PAUSED_KEY, [
         context.getHandler(),
         context.getClass(),
       ]);
       if (!allowPaused) {
-        throw new ForbiddenException({ message: 'Account is paused', code: 'ACCOUNT_PAUSED' });
+        throw new ForbiddenException({ statusCode: 403, message: 'Account is paused', code: 'ACCOUNT_PAUSED' });
       }
     }
 
