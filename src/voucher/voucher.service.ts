@@ -49,8 +49,8 @@ export class VoucherService {
     return saved;
   }
 
-  async findAll(filters: { page?: number; limit?: number; isActive?: boolean }) {
-    const { page = 1, limit = 20, isActive } = filters;
+  async findAll(filters: { page?: number; limit?: number; isActive?: boolean; search?: string; discountType?: string; dateFrom?: string; dateTo?: string }) {
+    const { page = 1, limit = 25, isActive, search, discountType, dateFrom, dateTo } = filters;
     const qb = this.voucherRepo.createQueryBuilder('v')
       .orderBy('v.createdAt', 'DESC')
       .take(limit)
@@ -59,9 +59,25 @@ export class VoucherService {
     if (isActive !== undefined) {
       qb.andWhere('v.isActive = :isActive', { isActive });
     }
+    if (search) {
+      qb.andWhere('(v.code ILIKE :search OR v.description ILIKE :search)', { search: `%${search}%` });
+    }
+    if (discountType) {
+      qb.andWhere('v.discountType = :discountType', { discountType });
+    }
+    if (dateFrom) {
+      qb.andWhere('v.createdAt >= :dateFrom', { dateFrom });
+    }
+    if (dateTo) {
+      qb.andWhere('v.createdAt <= :dateTo', { dateTo: `${dateTo}T23:59:59.999Z` });
+    }
 
     const [vouchers, total] = await qb.getManyAndCount();
-    return { vouchers, total, page, limit };
+    return {
+      vouchers,
+      total,
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) || 1 },
+    };
   }
 
   async findOne(id: string) {

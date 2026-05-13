@@ -32,15 +32,27 @@ export class VoucherController {
   @ApiQuery({ name: 'page', required: false })
   @ApiQuery({ name: 'limit', required: false })
   @ApiQuery({ name: 'isActive', required: false })
+  @ApiQuery({ name: 'search', required: false })
+  @ApiQuery({ name: 'discountType', required: false })
+  @ApiQuery({ name: 'dateFrom', required: false })
+  @ApiQuery({ name: 'dateTo', required: false })
   findAll(
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Query('limit', new DefaultValuePipe(25), ParseIntPipe) limit: number,
     @Query('isActive') isActive?: string,
+    @Query('search') search?: string,
+    @Query('discountType') discountType?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
   ) {
     return this.voucherService.findAll({
       page,
       limit,
       isActive: isActive === 'true' ? true : isActive === 'false' ? false : undefined,
+      search,
+      discountType,
+      dateFrom,
+      dateTo,
     });
   }
 
