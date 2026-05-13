@@ -1206,6 +1206,10 @@ export class AdminService {
     limit?: number,
     providerId?: string,
     warningType?: string,
+    search?: string,
+    isRead?: string,
+    dateFrom?: string,
+    dateTo?: string,
   ) {
     this.assertAdmin(admin);
     const currentPage = Math.max(1, page || 1);
@@ -1218,6 +1222,16 @@ export class AdminService {
 
     if (providerId) qb.andWhere('w.provider_id = :providerId', { providerId });
     if (warningType) qb.andWhere('w.warning_type = :warningType', { warningType });
+    if (isRead === 'true') qb.andWhere('w.is_read = true');
+    if (isRead === 'false') qb.andWhere('w.is_read = false');
+    if (dateFrom) qb.andWhere('w.created_at >= :dateFrom', { dateFrom });
+    if (dateTo) qb.andWhere('w.created_at <= :dateTo', { dateTo: `${dateTo}T23:59:59.999Z` });
+    if (search) {
+      qb.andWhere(
+        '(w.title ILIKE :search OR w.message ILIKE :search OR provider.brand_name ILIKE :search)',
+        { search: `%${search}%` },
+      );
+    }
 
     qb.orderBy('w.createdAt', 'DESC').skip(skip).take(pageSize);
 
@@ -1286,6 +1300,10 @@ export class AdminService {
     limit?: number,
     status?: string,
     search?: string,
+    type?: string,
+    dateFrom?: string,
+    dateTo?: string,
+    hasRedacted?: string,
   ) {
     this.assertAdmin(admin);
     const currentPage = Math.max(1, page || 1);
@@ -1297,8 +1315,25 @@ export class AdminService {
       .leftJoinAndSelect('p.user', 'u');
 
     if (status) qb.andWhere('c.status = :status', { status });
+    if (type) qb.andWhere('c.type = :type', { type });
+    if (dateFrom) qb.andWhere('c.lastMessageAt >= :dateFrom', { dateFrom });
+    if (dateTo) qb.andWhere('c.lastMessageAt <= :dateTo', { dateTo: `${dateTo}T23:59:59.999Z` });
     if (search) {
-      qb.andWhere('(u.name ILIKE :search OR u.mobile_number ILIKE :search)', { search: `%${search}%` });
+      qb.andWhere(
+        '(u.name ILIKE :search OR u.mobile_number ILIKE :search OR c.context_title ILIKE :search OR c.last_message_preview ILIKE :search)',
+        { search: `%${search}%` },
+      );
+    }
+    if (hasRedacted === 'true') {
+      qb.andWhere((subQb) => {
+        const subQuery = subQb.subQuery()
+          .select('1')
+          .from('messages', 'm')
+          .where('m.conversation_id = c.id')
+          .andWhere('m.deleted_at IS NOT NULL')
+          .getQuery();
+        return `EXISTS ${subQuery}`;
+      });
     }
 
     qb.orderBy('c.lastMessageAt', 'DESC').skip(skip).take(pageSize);

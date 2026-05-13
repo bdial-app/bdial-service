@@ -393,14 +393,22 @@ export class AdminController {
   @ApiQuery({ name: 'limit', required: false, type: Number })
   @ApiQuery({ name: 'providerId', required: false, type: String })
   @ApiQuery({ name: 'warningType', required: false, type: String })
+  @ApiQuery({ name: 'search', required: false, type: String })
+  @ApiQuery({ name: 'isRead', required: false, type: String })
+  @ApiQuery({ name: 'dateFrom', required: false, type: String })
+  @ApiQuery({ name: 'dateTo', required: false, type: String })
   getWarnings(
     @Request() req,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
     @Query('providerId') providerId?: string,
     @Query('warningType') warningType?: string,
+    @Query('search') search?: string,
+    @Query('isRead') isRead?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
   ) {
-    return this.adminService.getWarnings(req.user, page, limit, providerId, warningType);
+    return this.adminService.getWarnings(req.user, page, limit, providerId, warningType, search, isRead, dateFrom, dateTo);
   }
 
   @Get('warnings/:id')
@@ -433,14 +441,22 @@ export class AdminController {
   @ApiQuery({ name: 'limit', required: false, type: Number })
   @ApiQuery({ name: 'status', required: false, type: String })
   @ApiQuery({ name: 'search', required: false, type: String })
+  @ApiQuery({ name: 'type', required: false, type: String })
+  @ApiQuery({ name: 'dateFrom', required: false, type: String })
+  @ApiQuery({ name: 'dateTo', required: false, type: String })
+  @ApiQuery({ name: 'hasRedacted', required: false, type: String })
   getChatConversations(
     @Request() req,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
     @Query('status') status?: string,
     @Query('search') search?: string,
+    @Query('type') type?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+    @Query('hasRedacted') hasRedacted?: string,
   ) {
-    return this.adminService.getChatConversations(req.user, page, limit, status, search);
+    return this.adminService.getChatConversations(req.user, page, limit, status, search, type, dateFrom, dateTo, hasRedacted);
   }
 
   @Get('chat/conversations/:id/messages')

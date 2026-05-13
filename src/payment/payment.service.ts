@@ -1376,8 +1376,8 @@ export class PaymentService {
   // Admin Methods
   // ──────────────────────────────────────────
 
-  async getAdminPayments(filters: { page?: number; limit?: number; status?: PaymentStatus; type?: string }) {
-    const { page = 1, limit = 20, status, type } = filters;
+  async getAdminPayments(filters: { page?: number; limit?: number; status?: PaymentStatus; type?: string; search?: string; dateFrom?: string; dateTo?: string; gateway?: string }) {
+    const { page = 1, limit = 20, status, type, search, dateFrom, dateTo, gateway } = filters;
     const qb = this.paymentRepo.createQueryBuilder('p')
       .leftJoinAndSelect('p.provider', 'provider')
       .orderBy('p.createdAt', 'DESC')
@@ -1386,9 +1386,18 @@ export class PaymentService {
 
     if (status) qb.andWhere('p.status = :status', { status });
     if (type) qb.andWhere('p.type = :type', { type });
+    if (gateway) qb.andWhere('p.payment_gateway = :gateway', { gateway });
+    if (dateFrom) qb.andWhere('p.created_at >= :dateFrom', { dateFrom });
+    if (dateTo) qb.andWhere('p.created_at <= :dateTo', { dateTo: `${dateTo}T23:59:59.999Z` });
+    if (search) {
+      qb.andWhere(
+        '(provider.brand_name ILIKE :search OR p.gateway_payment_id ILIKE :search OR p.gateway_order_id ILIKE :search OR CAST(p.id AS TEXT) ILIKE :search)',
+        { search: `%${search}%` },
+      );
+    }
 
     const [payments, total] = await qb.getManyAndCount();
-    return { payments, total, page, limit };
+    return { payments, total, page, limit, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
   }
 
   async getRevenueStats() {
@@ -1426,8 +1435,17 @@ export class PaymentService {
     };
   }
 
-  async getAdminSubscriptions(filters: { page?: number; limit?: number; status?: string }) {
-    const { page = 1, limit = 20, status } = filters;
+  async getAdminSubscriptions(filters: {
+    page?: number;
+    limit?: number;
+    status?: string;
+    search?: string;
+    planId?: string;
+    billingInterval?: string;
+    dateFrom?: string;
+    dateTo?: string;
+  }) {
+    const { page = 1, limit = 25, status, search, planId, billingInterval, dateFrom, dateTo } = filters;
     const qb = this.subscriptionRepo.createQueryBuilder('s')
       .leftJoinAndSelect('s.plan', 'plan')
       .leftJoinAndSelect('s.provider', 'provider')
@@ -1436,9 +1454,62 @@ export class PaymentService {
       .skip((page - 1) * limit);
 
     if (status) qb.andWhere('s.status = :status', { status });
+    if (planId) qb.andWhere('s.planId = :planId', { planId });
+    if (billingInterval) qb.andWhere('s.billingInterval = :billingInterval', { billingInterval });
+    if (dateFrom) qb.andWhere('s.createdAt >= :dateFrom', { dateFrom });
+    if (dateTo) qb.andWhere('s.createdAt <= :dateTo', { dateTo: `${dateTo}T23:59:59.999Z` });
+    if (search) {
+      qb.andWhere(
+        '(provider.brand_name ILIKE :search OR s.gatewaySubscriptionId ILIKE :search OR CAST(s.id AS TEXT) ILIKE :search)',
+        { search: `%${search}%` },
+      );
+    }
 
     const [subscriptions, total] = await qb.getManyAndCount();
-    return { subscriptions, total, page, limit };
+    return {
+      subscriptions,
+      total,
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) || 1 },
+    };
+  }
+
+  async getSubscriptionStats() {
+    const qb = this.subscriptionRepo.createQueryBuilder('s')
+      .leftJoin('s.plan', 'plan');
+
+    const total = await qb.getCount();
+    const active = await this.subscriptionRepo.count({ where: { status: 'active' as any } });
+    const trialing = await this.subscriptionRepo.count({ where: { status: 'trialing' as any } });
+    const pastDue = await this.subscriptionRepo.count({ where: { status: 'past_due' as any } });
+    const canceled = await this.subscriptionRepo.count({ where: { status: 'canceled' as any } });
+    const paused = await this.subscriptionRepo.count({ where: { status: 'paused' as any } });
+    const cancelingCount = await this.subscriptionRepo.count({ where: { cancelAtPeriodEnd: true, status: 'active' as any } });
+
+    // Breakdown by plan
+    const byPlan = await this.subscriptionRepo.createQueryBuilder('s')
+      .leftJoin('s.plan', 'plan')
+      .select('plan.name', 'planName')
+      .addSelect('plan.id', 'planId')
+      .addSelect('s.status', 'status')
+      .addSelect('COUNT(*)', 'count')
+      .groupBy('plan.name')
+      .addGroupBy('plan.id')
+      .addGroupBy('s.status')
+      .getRawMany();
+
+    // Billing interval breakdown
+    const byInterval = await this.subscriptionRepo.createQueryBuilder('s')
+      .select('s.billingInterval', 'interval')
+      .addSelect('COUNT(*)', 'count')
+      .where('s.status = :status', { status: 'active' })
+      .groupBy('s.billingInterval')
+      .getRawMany();
+
+    return { total, active, trialing, pastDue, canceled, paused, cancelingCount, byPlan, byInterval };
+  }
+
+  async getAdminSubscriptionPlans() {
+    return this.planRepo.find({ order: { sortOrder: 'ASC' } });
   }
 
   async createSubscriptionPlan(dto: {

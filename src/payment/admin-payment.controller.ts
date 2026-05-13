@@ -27,13 +27,21 @@ export class AdminPaymentController {
   @ApiQuery({ name: 'limit', required: false })
   @ApiQuery({ name: 'status', required: false })
   @ApiQuery({ name: 'type', required: false })
+  @ApiQuery({ name: 'search', required: false })
+  @ApiQuery({ name: 'dateFrom', required: false })
+  @ApiQuery({ name: 'dateTo', required: false })
+  @ApiQuery({ name: 'gateway', required: false })
   listPayments(
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
     @Query('status') status?: string,
     @Query('type') type?: string,
+    @Query('search') search?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+    @Query('gateway') gateway?: string,
   ) {
-    return this.paymentService.getAdminPayments({ page, limit, status: status as any, type });
+    return this.paymentService.getAdminPayments({ page, limit, status: status as any, type, search, dateFrom, dateTo, gateway });
   }
 
   @Get('payments/stats')
@@ -49,20 +57,36 @@ export class AdminPaymentController {
   @ApiQuery({ name: 'page', required: false })
   @ApiQuery({ name: 'limit', required: false })
   @ApiQuery({ name: 'status', required: false })
+  @ApiQuery({ name: 'search', required: false })
+  @ApiQuery({ name: 'planId', required: false })
+  @ApiQuery({ name: 'billingInterval', required: false })
+  @ApiQuery({ name: 'dateFrom', required: false })
+  @ApiQuery({ name: 'dateTo', required: false })
   listSubscriptions(
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Query('limit', new DefaultValuePipe(25), ParseIntPipe) limit: number,
     @Query('status') status?: string,
+    @Query('search') search?: string,
+    @Query('planId') planId?: string,
+    @Query('billingInterval') billingInterval?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
   ) {
-    return this.paymentService.getAdminSubscriptions({ page, limit, status: status as any });
+    return this.paymentService.getAdminSubscriptions({ page, limit, status: status as any, search, planId, billingInterval, dateFrom, dateTo });
+  }
+
+  @Get('subscriptions/stats')
+  @ApiOperation({ summary: 'Get subscription stats (admin)' })
+  getSubscriptionStats() {
+    return this.paymentService.getSubscriptionStats();
   }
 
   // ─── Subscription Plans ───────────────
 
   @Get('subscription-plans')
-  @ApiOperation({ summary: 'List all subscription plans (admin)' })
+  @ApiOperation({ summary: 'List all subscription plans (admin, including inactive)' })
   listPlans() {
-    return this.paymentService.getSubscriptionPlans();
+    return this.paymentService.getAdminSubscriptionPlans();
   }
 
   @Post('subscription-plans')
