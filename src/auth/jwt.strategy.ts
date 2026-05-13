@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException, InternalServerErrorException, Logger } from '@nestjs/common';
+import { Injectable, UnauthorizedException, ForbiddenException, InternalServerErrorException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -35,10 +35,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException('User not found');
     }
     if (user.status === 'suspended') {
-      throw new UnauthorizedException('User account is inactive');
+      throw new ForbiddenException({ statusCode: 403, message: 'User account is suspended', code: 'ACCOUNT_SUSPENDED' });
     }
     if (user.status === 'paused') {
-      throw new UnauthorizedException('User account is paused');
+      throw new ForbiddenException({ statusCode: 403, message: 'User account is paused', code: 'ACCOUNT_PAUSED' });
     }
     return user;
   }
