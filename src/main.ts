@@ -21,15 +21,35 @@ async function bootstrap() {
   // Global prefix
   app.setGlobalPrefix('api');
 
-  // CORS — must be FIRST so error responses also get CORS headers
+  // CORS — must be FIRST so error responses also get CORS headers.
+  // Mobile carriers often proxy requests, modifying headers. We must be explicit
+  // about allowed methods/headers to survive transparent proxy interference.
   const corsOrigin = configService.get<string>('CORS_ORIGIN', '*');
   app.enableCors({
-    origin: corsOrigin === '*' ? '*' : corsOrigin.split(',').map((o) => o.trim()),
+    origin: corsOrigin === '*'
+      ? true  // reflect request origin (works with credentials, unlike literal '*')
+      : corsOrigin.split(',').map((o) => o.trim()),
     credentials: true,
+    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'Accept',
+      'Origin',
+      'X-Requested-With',
+      'Cache-Control',
+      'Pragma',
+    ],
+    exposedHeaders: ['Content-Disposition'],
+    maxAge: 86400, // Cache preflight for 24h — reduces OPTIONS calls on mobile
   });
 
-  // Security headers
-  app.use(helmet());
+  // Security headers — crossOriginResourcePolicy loosened so API responses
+  // aren't blocked by the browser when loaded from a different origin
+  app.use(helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    crossOriginOpenerPolicy: false,
+  }));
 
   // Response compression
   app.use(compression());
