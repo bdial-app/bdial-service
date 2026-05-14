@@ -999,6 +999,12 @@ export class AdminService {
     search?: string,
     providerId?: string,
     isActive?: string,
+    productType?: string,
+    priceMin?: string,
+    priceMax?: string,
+    hasImages?: string,
+    sortBy?: string,
+    sortOrder?: string,
   ) {
     this.assertAdmin(admin);
     const currentPage = Math.max(1, Number(page) || 1);
@@ -1015,8 +1021,16 @@ export class AdminService {
       if (providerId) qb.andWhere('prod.provider_id = :providerId', { providerId });
       if (isActive === 'true') qb.andWhere('prod.is_active = true');
       if (isActive === 'false') qb.andWhere('prod.is_active = false');
+      if (productType) qb.andWhere('prod.product_type = :productType', { productType });
+      if (priceMin) qb.andWhere('prod.price >= :priceMin', { priceMin: Number(priceMin) });
+      if (priceMax) qb.andWhere('prod.price <= :priceMax', { priceMax: Number(priceMax) });
+      if (hasImages === 'true') qb.andWhere("prod.photo_urls != '{}'");
+      if (hasImages === 'false') qb.andWhere("prod.photo_urls = '{}'");
 
-      qb.orderBy('prod.display_order', 'ASC').skip(skip).take(pageSize);
+      const validSortFields: Record<string, string> = { name: 'prod.name', price: 'prod.price', createdAt: 'prod.createdAt', displayOrder: 'prod.display_order' };
+      const sortField = (sortBy && validSortFields[sortBy]) || 'prod.display_order';
+      const order = sortOrder?.toUpperCase() === 'DESC' ? 'DESC' : 'ASC';
+      qb.orderBy(sortField, order).skip(skip).take(pageSize);
 
       const [items, total] = await qb.getManyAndCount();
       return {
@@ -1052,6 +1066,17 @@ export class AdminService {
         },
       };
     }
+  }
+
+  async getProductStats(admin: any) {
+    this.assertAdmin(admin);
+    const [total, active, products, services] = await Promise.all([
+      this.productRepo.count(),
+      this.productRepo.count({ where: { isActive: true } }),
+      this.productRepo.count({ where: { productType: 'product' as any } }),
+      this.productRepo.count({ where: { productType: 'service' as any } }),
+    ]);
+    return { total, active, inactive: total - active, products, services };
   }
 
   async getProductById(admin: any, productId: string) {
@@ -1206,6 +1231,10 @@ export class AdminService {
     limit?: number,
     providerId?: string,
     warningType?: string,
+    search?: string,
+    isRead?: string,
+    dateFrom?: string,
+    dateTo?: string,
   ) {
     this.assertAdmin(admin);
     const currentPage = Math.max(1, page || 1);
@@ -1218,6 +1247,11 @@ export class AdminService {
 
     if (providerId) qb.andWhere('w.provider_id = :providerId', { providerId });
     if (warningType) qb.andWhere('w.warning_type = :warningType', { warningType });
+    if (search) qb.andWhere('(w.title ILIKE :search OR w.message ILIKE :search)', { search: `%${search}%` });
+    if (isRead === 'true') qb.andWhere('w.is_read = true');
+    if (isRead === 'false') qb.andWhere('w.is_read = false');
+    if (dateFrom) qb.andWhere('w.createdAt >= :dateFrom', { dateFrom });
+    if (dateTo) qb.andWhere('w.createdAt <= :dateTo', { dateTo });
 
     qb.orderBy('w.createdAt', 'DESC').skip(skip).take(pageSize);
 
@@ -1286,6 +1320,10 @@ export class AdminService {
     limit?: number,
     status?: string,
     search?: string,
+    type?: string,
+    dateFrom?: string,
+    dateTo?: string,
+    hasRedacted?: string,
   ) {
     this.assertAdmin(admin);
     const currentPage = Math.max(1, page || 1);
@@ -1300,6 +1338,10 @@ export class AdminService {
     if (search) {
       qb.andWhere('(u.name ILIKE :search OR u.mobile_number ILIKE :search)', { search: `%${search}%` });
     }
+    if (type) qb.andWhere('c.type = :type', { type });
+    if (dateFrom) qb.andWhere('c.createdAt >= :dateFrom', { dateFrom });
+    if (dateTo) qb.andWhere('c.createdAt <= :dateTo', { dateTo });
+    if (hasRedacted === 'true') qb.andWhere('c.hasRedactedMessages = true');
 
     qb.orderBy('c.lastMessageAt', 'DESC').skip(skip).take(pageSize);
 
@@ -1548,6 +1590,30 @@ export class AdminService {
       totalImpressions: Number(totalImpressions?.val || 0),
       totalClicks: Number(totalClicks?.val || 0),
     };
+  }
+
+  async getSponsorshipAnalytics(admin: any, id: string, period: string) {
+    this.assertAdmin(admin);
+    const listing = await this.sponsoredRepo.findOne({ where: { id }, relations: ['provider'] });
+    if (!listing) throw new NotFoundException('Sponsored listing not found');
+
+    const days = period === '30d' ? 30 : period === '14d' ? 14 : 7;
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+
+    const events = await this.adEventRepo
+      .createQueryBuilder('e')
+      .select("DATE(e.created_at)", 'date')
+      .addSelect("e.event_type", 'eventType')
+      .addSelect("COUNT(*)", 'count')
+      .where('e.sponsored_listing_id = :id', { id })
+      .andWhere('e.created_at >= :since', { since })
+      .groupBy("DATE(e.created_at)")
+      .addGroupBy("e.event_type")
+      .orderBy("date", 'ASC')
+      .getRawMany();
+
+    return { listing, period, events };
   }
 
   // ============================================
@@ -2058,7 +2124,7 @@ export class AdminService {
     return this.auditLogRepo.save(log);
   }
 
-  async getAuditLogs(admin: any, page = 1, rows = 25, filters?: { adminId?: string; action?: string; entityType?: string; startDate?: string; endDate?: string }) {
+  async getAuditLogs(admin: any, page = 1, rows = 25, filters?: { adminId?: string; action?: string; entityType?: string; startDate?: string; endDate?: string; search?: string }) {
     this.assertAdmin(admin);
     const qb = this.auditLogRepo
       .createQueryBuilder('al')
@@ -2070,6 +2136,7 @@ export class AdminService {
     if (filters?.entityType) qb.andWhere('al.entityType = :et', { et: filters.entityType });
     if (filters?.startDate) qb.andWhere('al.createdAt >= :sd', { sd: filters.startDate });
     if (filters?.endDate) qb.andWhere('al.createdAt <= :ed', { ed: filters.endDate });
+    if (filters?.search) qb.andWhere('(al.action ILIKE :search OR al.entityType ILIKE :search OR al.details::text ILIKE :search)', { search: `%${filters.search}%` });
 
     qb.skip((page - 1) * rows).take(rows);
     const [items, total] = await qb.getManyAndCount();
