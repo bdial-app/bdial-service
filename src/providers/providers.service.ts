@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   ConflictException,
   BadRequestException,
@@ -25,6 +26,8 @@ import { WebsiteMetaService } from './website-meta.service';
 
 @Injectable()
 export class ProvidersService {
+  private readonly logger = new Logger(ProvidersService.name);
+
   constructor(
     @InjectRepository(Provider) private providerRepo: Repository<Provider>,
     @InjectRepository(User) private userRepo: Repository<User>,
@@ -244,11 +247,18 @@ export class ProvidersService {
   // Trigger async website logo fetch after becomeProvider if websiteUrl provided
   private scheduleWebsiteLogoFetch(providerId: string, websiteUrl: string | undefined) {
     if (!websiteUrl) return;
+    this.logger.log(`Fetching website logo for provider ${providerId}, url: ${websiteUrl}`);
     this.websiteMetaService.fetchWebsiteMeta(websiteUrl).then((meta) => {
+      this.logger.log(`Website meta result for ${websiteUrl}: logoUrl=${meta.logoUrl}, title=${meta.title}`);
       if (meta.logoUrl) {
         this.providerRepo.update(providerId, { websiteLogoUrl: meta.logoUrl });
+        this.logger.log(`Saved website logo for provider ${providerId}: ${meta.logoUrl}`);
+      } else {
+        this.logger.warn(`No logo found for ${websiteUrl}`);
       }
-    }).catch(() => { /* best-effort */ });
+    }).catch((err) => {
+      this.logger.error(`Failed to fetch website logo for ${websiteUrl}: ${err.message}`, err.stack);
+    });
   }
 
   async submitVerification(userId: string, file: Express.Multer.File, docType?: string) {
@@ -490,11 +500,7 @@ export class ProvidersService {
 
     // Async logo re-fetch when website URL changes
     if (updateProviderDto.websiteUrl && updateProviderDto.websiteUrl !== existingProvider.websiteUrl) {
-      this.websiteMetaService.fetchWebsiteMeta(updateProviderDto.websiteUrl).then((meta) => {
-        if (meta.logoUrl) {
-          this.providerRepo.update(id, { websiteLogoUrl: meta.logoUrl });
-        }
-      }).catch(() => { /* best-effort, ignore failures */ });
+      this.scheduleWebsiteLogoFetch(id, updateProviderDto.websiteUrl);
     }
 
     return this.providerRepo.findOne({ where: { id }, relations: ['user'] });
