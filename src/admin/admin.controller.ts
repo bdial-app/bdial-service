@@ -295,6 +295,12 @@ export class AdminController {
   @ApiQuery({ name: 'search', required: false, type: String })
   @ApiQuery({ name: 'providerId', required: false, type: String })
   @ApiQuery({ name: 'isActive', required: false, type: String })
+  @ApiQuery({ name: 'productType', required: false, type: String })
+  @ApiQuery({ name: 'priceMin', required: false, type: String })
+  @ApiQuery({ name: 'priceMax', required: false, type: String })
+  @ApiQuery({ name: 'hasImages', required: false, type: String })
+  @ApiQuery({ name: 'sortBy', required: false, type: String })
+  @ApiQuery({ name: 'sortOrder', required: false, type: String })
   getProducts(
     @Request() req,
     @Query('page') page?: number,
@@ -302,8 +308,20 @@ export class AdminController {
     @Query('search') search?: string,
     @Query('providerId') providerId?: string,
     @Query('isActive') isActive?: string,
+    @Query('productType') productType?: string,
+    @Query('priceMin') priceMin?: string,
+    @Query('priceMax') priceMax?: string,
+    @Query('hasImages') hasImages?: string,
+    @Query('sortBy') sortBy?: string,
+    @Query('sortOrder') sortOrder?: string,
   ) {
-    return this.adminService.getProducts(req.user, page, limit, search, providerId, isActive);
+    return this.adminService.getProducts(req.user, page, limit, search, providerId, isActive, productType, priceMin, priceMax, hasImages, sortBy, sortOrder);
+  }
+
+  @Get('products/stats')
+  @ApiOperation({ summary: 'Get product statistics' })
+  getProductStats(@Request() req) {
+    return this.adminService.getProductStats(req.user);
   }
 
   @Get('products/:id')
@@ -788,6 +806,7 @@ export class AdminController {
   @ApiQuery({ name: 'entityType', required: false, type: String })
   @ApiQuery({ name: 'startDate', required: false, type: String })
   @ApiQuery({ name: 'endDate', required: false, type: String })
+  @ApiQuery({ name: 'search', required: false, type: String })
   getAuditLogs(
     @Request() req,
     @Query('page') page?: number,
@@ -797,8 +816,9 @@ export class AdminController {
     @Query('entityType') entityType?: string,
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
+    @Query('search') search?: string,
   ) {
-    return this.adminService.getAuditLogs(req.user, page, rows, { adminId, action, entityType, startDate, endDate });
+    return this.adminService.getAuditLogs(req.user, page, rows, { adminId, action, entityType, startDate, endDate, search });
   }
 
   @Get('audit-logs/stats')

@@ -999,10 +999,16 @@ export class AdminService {
     search?: string,
     providerId?: string,
     isActive?: string,
+    productType?: string,
+    priceMin?: string,
+    priceMax?: string,
+    hasImages?: string,
+    sortBy?: string,
+    sortOrder?: string,
   ) {
     this.assertAdmin(admin);
     const currentPage = Math.max(1, Number(page) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number(limit) || 10));
+    const pageSize = Math.min(100, Math.max(1, Number(limit) || 25));
     const skip = (currentPage - 1) * pageSize;
 
     try {
@@ -1010,13 +1016,22 @@ export class AdminService {
         .leftJoinAndSelect('prod.provider', 'provider');
 
       if (search) {
-        qb.andWhere('(prod.name ILIKE :search OR prod.description ILIKE :search)', { search: `%${search}%` });
+        qb.andWhere('(prod.name ILIKE :search OR prod.description ILIKE :search OR provider.brand_name ILIKE :search)', { search: `%${search}%` });
       }
       if (providerId) qb.andWhere('prod.provider_id = :providerId', { providerId });
       if (isActive === 'true') qb.andWhere('prod.is_active = true');
       if (isActive === 'false') qb.andWhere('prod.is_active = false');
+      if (productType) qb.andWhere('prod.product_type = :productType', { productType });
+      if (priceMin) qb.andWhere('prod.price >= :priceMin', { priceMin: Number(priceMin) });
+      if (priceMax) qb.andWhere('prod.price <= :priceMax', { priceMax: Number(priceMax) });
+      if (hasImages === 'true') qb.andWhere("array_length(prod.photo_urls, 1) > 0");
+      if (hasImages === 'false') qb.andWhere("(prod.photo_urls IS NULL OR array_length(prod.photo_urls, 1) IS NULL OR array_length(prod.photo_urls, 1) = 0)");
 
-      qb.orderBy('prod.display_order', 'ASC').skip(skip).take(pageSize);
+      // Sorting
+      const validSorts: Record<string, string> = { name: 'prod.name', price: 'prod.price', displayOrder: 'prod.display_order', createdAt: 'prod.id' };
+      const orderCol = validSorts[sortBy ?? ''] ?? 'prod.display_order';
+      const orderDir = sortOrder === 'DESC' ? 'DESC' : 'ASC';
+      qb.orderBy(orderCol, orderDir).skip(skip).take(pageSize);
 
       const [items, total] = await qb.getManyAndCount();
       return {
@@ -1029,7 +1044,6 @@ export class AdminService {
         },
       };
     } catch (err) {
-      // Fallback: try simpler find approach if QueryBuilder fails
       const where: any = {};
       if (providerId) where.providerId = providerId;
       if (isActive === 'true') where.isActive = true;
@@ -1052,6 +1066,62 @@ export class AdminService {
         },
       };
     }
+  }
+
+  async getProductStats(admin: any) {
+    this.assertAdmin(admin);
+    const total = await this.productRepo.count();
+    const active = await this.productRepo.count({ where: { isActive: true } });
+    const inactive = total - active;
+
+    const withImages = await this.productRepo
+      .createQueryBuilder('prod')
+      .where("array_length(prod.photo_urls, 1) > 0")
+      .getCount();
+
+    const withPrice = await this.productRepo
+      .createQueryBuilder('prod')
+      .where("prod.price IS NOT NULL AND prod.price > 0")
+      .getCount();
+
+    const typeBreakdown = await this.productRepo
+      .createQueryBuilder('prod')
+      .select('prod.product_type', 'productType')
+      .addSelect('COUNT(*)', 'count')
+      .groupBy('prod.product_type')
+      .getRawMany();
+
+    const avgPrice = await this.productRepo
+      .createQueryBuilder('prod')
+      .select('AVG(prod.price)', 'avg')
+      .where('prod.price IS NOT NULL AND prod.price > 0')
+      .getRawOne();
+
+    const topProviders = await this.productRepo
+      .createQueryBuilder('prod')
+      .select('provider.brand_name', 'brandName')
+      .addSelect('provider.id', 'providerId')
+      .addSelect('COUNT(*)', 'count')
+      .innerJoin('prod.provider', 'provider')
+      .where('prod.is_active = true')
+      .groupBy('provider.id')
+      .addGroupBy('provider.brand_name')
+      .orderBy('count', 'DESC')
+      .limit(5)
+      .getRawMany();
+
+    return {
+      total,
+      active,
+      inactive,
+      withImages,
+      withoutImages: total - withImages,
+      withPrice,
+      withoutPrice: total - withPrice,
+      avgPrice: Number(avgPrice?.avg ?? 0),
+      typeBreakdown: typeBreakdown.map(r => ({ type: r.productType, count: Number(r.count) })),
+      topProviders: topProviders.map(r => ({ brandName: r.brandName, providerId: r.providerId, count: Number(r.count) })),
+    };
   }
 
   async getProductById(admin: any, productId: string) {
@@ -2157,7 +2227,7 @@ export class AdminService {
     return this.auditLogRepo.save(log);
   }
 
-  async getAuditLogs(admin: any, page = 1, rows = 25, filters?: { adminId?: string; action?: string; entityType?: string; startDate?: string; endDate?: string }) {
+  async getAuditLogs(admin: any, page = 1, rows = 25, filters?: { adminId?: string; action?: string; entityType?: string; startDate?: string; endDate?: string; search?: string }) {
     this.assertAdmin(admin);
     const qb = this.auditLogRepo
       .createQueryBuilder('al')
@@ -2169,6 +2239,12 @@ export class AdminService {
     if (filters?.entityType) qb.andWhere('al.entityType = :et', { et: filters.entityType });
     if (filters?.startDate) qb.andWhere('al.createdAt >= :sd', { sd: filters.startDate });
     if (filters?.endDate) qb.andWhere('al.createdAt <= :ed', { ed: filters.endDate });
+    if (filters?.search) {
+      qb.andWhere(
+        '(al.description ILIKE :search OR al.action ILIKE :search OR al.entityType ILIKE :search OR CAST(al.entityId AS TEXT) ILIKE :search OR admin.name ILIKE :search)',
+        { search: `%${filters.search}%` },
+      );
+    }
 
     qb.skip((page - 1) * rows).take(rows);
     const [items, total] = await qb.getManyAndCount();
@@ -2185,16 +2261,37 @@ export class AdminService {
     this.assertAdmin(admin);
     const total = await this.auditLogRepo.count();
     const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const thisWeek = await this.auditLogRepo.count({ where: { createdAt: MoreThan(oneWeekAgo) } });
+    const today = await this.auditLogRepo.count({ where: { createdAt: MoreThan(oneDayAgo) } });
     const actionBreakdown = await this.auditLogRepo
       .createQueryBuilder('al')
       .select('al.action', 'action')
       .addSelect('COUNT(*)', 'count')
       .groupBy('al.action')
       .orderBy('count', 'DESC')
+      .limit(15)
+      .getRawMany();
+    const entityBreakdown = await this.auditLogRepo
+      .createQueryBuilder('al')
+      .select('al.entityType', 'entityType')
+      .addSelect('COUNT(*)', 'count')
+      .groupBy('al.entityType')
+      .orderBy('count', 'DESC')
       .limit(10)
       .getRawMany();
-    return { total, thisWeek, actionBreakdown: actionBreakdown.map(r => ({ action: r.action, count: Number(r.count) })) };
+    const uniqueAdmins = await this.auditLogRepo
+      .createQueryBuilder('al')
+      .select('COUNT(DISTINCT al.adminId)', 'count')
+      .getRawOne();
+    return {
+      total,
+      thisWeek,
+      today,
+      uniqueAdmins: Number(uniqueAdmins?.count ?? 0),
+      actionBreakdown: actionBreakdown.map(r => ({ action: r.action, count: Number(r.count) })),
+      entityBreakdown: entityBreakdown.map(r => ({ entityType: r.entityType, count: Number(r.count) })),
+    };
   }
 
   // ── System Settings ───────────────────────────────────
