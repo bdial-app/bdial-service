@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { StorageService } from '../storage/storage.service';
 
-interface WebsiteMeta {
+export interface WebsiteMeta {
   logoUrl: string | null;
   title: string | null;
 }
