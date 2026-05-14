@@ -29,6 +29,7 @@ import {
 } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import { ProvidersService } from './providers.service';
+import { WebsiteMetaService } from './website-meta.service';
 import { CreateProviderDto } from './dto/create-provider.dto';
 import { UpdateProviderDto } from './dto/update-provider.dto';
 import { ProviderPaginationDto } from './dto/provider-pagination.dto';
@@ -43,7 +44,10 @@ import { Throttle } from '@nestjs/throttler';
 @ApiTags('Providers')
 @Controller('providers')
 export class ProvidersController {
-  constructor(private readonly providersService: ProvidersService) {}
+  constructor(
+    private readonly providersService: ProvidersService,
+    private readonly websiteMetaService: WebsiteMetaService,
+  ) {}
 
   @Post()
   @Public()
@@ -74,6 +78,21 @@ export class ProvidersController {
   @ApiResponse({ status: 200, description: 'OTP verified successfully' })
   verifyProviderOtp(@Body() body: { mobileNumber: string; otp: string }) {
     return this.providersService.verifyProviderOtp(body.mobileNumber, body.otp);
+  }
+
+  @Post('website-meta')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @Throttle({ default: { ttl: 60000, limit: 5 } })
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Fetch website logo and title from a domain (for provider profile)' })
+  @ApiResponse({ status: 200, description: 'Website metadata fetched' })
+  @ApiResponse({ status: 400, description: 'Invalid domain' })
+  async fetchWebsiteMeta(@Body() body: { domain: string }) {
+    if (!body.domain || typeof body.domain !== 'string' || body.domain.trim().length < 3) {
+      throw new BadRequestException('A valid domain is required');
+    }
+    return this.websiteMetaService.fetchWebsiteMeta(body.domain);
   }
 
   @Post('become-provider')

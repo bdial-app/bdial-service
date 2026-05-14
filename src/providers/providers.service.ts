@@ -21,6 +21,7 @@ import { UpdateOfferDto } from './dto/update-offer.dto';
 import { CreateSponsorshipDto, UpdateSponsorshipDto } from './dto/sponsorship.dto';
 import { ContentSanitizerService } from '../common/content-sanitizer';
 import { compressImage, compressImages } from '../common/image-processor';
+import { WebsiteMetaService } from './website-meta.service';
 
 @Injectable()
 export class ProvidersService {
@@ -45,6 +46,7 @@ export class ProvidersService {
     private geocodeService: GeocodeService,
     private contentSanitizer: ContentSanitizerService,
     private otpService: OtpService,
+    private websiteMetaService: WebsiteMetaService,
   ) {}
 
   async sendProviderOtp(mobileNumber: string) {
@@ -151,7 +153,7 @@ export class ProvidersService {
       }
     }
 
-    return this.dataSource.transaction(async (manager) => {
+    const result = await this.dataSource.transaction(async (manager) => {
       const { latitude, longitude, file: _file, bannerImage: _bi, profileImage: _pi, bannerImageUrl: _biu, profilePhotoUrl: _ppu, ...cleanData } = providerData as any;
       const declaredWomenLed = providerData.isWomenLed != null ? providerData.isWomenLed : user.gender === 'female';
       const provider = manager.create(Provider, {
@@ -232,6 +234,21 @@ export class ProvidersService {
 
       return { provider: savedProvider, verification: savedVerification, products: savedProducts };
     });
+
+    // Trigger async website logo fetch after transaction
+    this.scheduleWebsiteLogoFetch(result.provider.id, becomeProviderDto.websiteUrl);
+
+    return result;
+  }
+
+  // Trigger async website logo fetch after becomeProvider if websiteUrl provided
+  private scheduleWebsiteLogoFetch(providerId: string, websiteUrl: string | undefined) {
+    if (!websiteUrl) return;
+    this.websiteMetaService.fetchWebsiteMeta(websiteUrl).then((meta) => {
+      if (meta.logoUrl) {
+        this.providerRepo.update(providerId, { websiteLogoUrl: meta.logoUrl });
+      }
+    }).catch(() => { /* best-effort */ });
   }
 
   async submitVerification(userId: string, file: Express.Multer.File, docType?: string) {
@@ -470,6 +487,16 @@ export class ProvidersService {
     if (latitude !== undefined) updateData.latitude = latitude ? parseFloat(latitude) : null;
     if (longitude !== undefined) updateData.longitude = longitude ? parseFloat(longitude) : null;
     await this.providerRepo.update(id, updateData);
+
+    // Async logo re-fetch when website URL changes
+    if (updateProviderDto.websiteUrl && updateProviderDto.websiteUrl !== existingProvider.websiteUrl) {
+      this.websiteMetaService.fetchWebsiteMeta(updateProviderDto.websiteUrl).then((meta) => {
+        if (meta.logoUrl) {
+          this.providerRepo.update(id, { websiteLogoUrl: meta.logoUrl });
+        }
+      }).catch(() => { /* best-effort, ignore failures */ });
+    }
+
     return this.providerRepo.findOne({ where: { id }, relations: ['user'] });
   }
 

@@ -11,7 +11,6 @@ import { compressImage, compressImages } from '../common/image-processor';
 import { SupabaseAuthService } from '../supabase/supabase-auth.service';
 import { ServiceableCitiesService } from '../serviceable-cities/serviceable-cities.service';
 import { ContentSanitizerService } from '../common/content-sanitizer';
-import { ADMIN_ROLES, ROLE_HIERARCHY } from '../common/enums/admin-role.enum';
 
 @Injectable()
 export class AdminService {
@@ -53,7 +52,7 @@ export class AdminService {
   ) {}
 
   private assertAdmin(user: any) {
-    if (!ADMIN_ROLES.includes(user.role)) throw new ForbiddenException('Admin access required');
+    if (user.role !== 'admin') throw new ForbiddenException('Admin access required');
   }
 
   async getDashboard(admin: any) {
@@ -976,7 +975,7 @@ export class AdminService {
 
   async updateProviderAdmin(admin: any, providerId: string, body: Partial<Provider>) {
     this.assertAdmin(admin);
-    const allowed: string[] = ['status', 'isFeatured', 'communityVerified', 'brandName', 'description', 'isAvailable'];
+    const allowed: string[] = ['status', 'isFeatured', 'communityVerified', 'brandName', 'description', 'isAvailable', 'websiteUrl', 'instagramHandle', 'facebookHandle', 'youtubeHandle', 'whatsappNumber'];
     const update: any = {};
     for (const key of allowed) {
       if ((body as any)[key] !== undefined) update[key] = (body as any)[key];
@@ -1000,16 +999,10 @@ export class AdminService {
     search?: string,
     providerId?: string,
     isActive?: string,
-    productType?: string,
-    priceMin?: string,
-    priceMax?: string,
-    hasImages?: string,
-    sortBy?: string,
-    sortOrder?: string,
   ) {
     this.assertAdmin(admin);
     const currentPage = Math.max(1, Number(page) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number(limit) || 25));
+    const pageSize = Math.min(100, Math.max(1, Number(limit) || 10));
     const skip = (currentPage - 1) * pageSize;
 
     try {
@@ -1017,22 +1010,13 @@ export class AdminService {
         .leftJoinAndSelect('prod.provider', 'provider');
 
       if (search) {
-        qb.andWhere('(prod.name ILIKE :search OR prod.description ILIKE :search OR provider.brand_name ILIKE :search)', { search: `%${search}%` });
+        qb.andWhere('(prod.name ILIKE :search OR prod.description ILIKE :search)', { search: `%${search}%` });
       }
       if (providerId) qb.andWhere('prod.provider_id = :providerId', { providerId });
       if (isActive === 'true') qb.andWhere('prod.is_active = true');
       if (isActive === 'false') qb.andWhere('prod.is_active = false');
-      if (productType) qb.andWhere('prod.product_type = :productType', { productType });
-      if (priceMin) qb.andWhere('prod.price >= :priceMin', { priceMin: Number(priceMin) });
-      if (priceMax) qb.andWhere('prod.price <= :priceMax', { priceMax: Number(priceMax) });
-      if (hasImages === 'true') qb.andWhere("array_length(prod.photo_urls, 1) > 0");
-      if (hasImages === 'false') qb.andWhere("(prod.photo_urls IS NULL OR array_length(prod.photo_urls, 1) IS NULL OR array_length(prod.photo_urls, 1) = 0)");
 
-      // Sorting
-      const validSorts: Record<string, string> = { name: 'prod.name', price: 'prod.price', displayOrder: 'prod.display_order', createdAt: 'prod.id' };
-      const orderCol = validSorts[sortBy ?? ''] ?? 'prod.display_order';
-      const orderDir = sortOrder === 'DESC' ? 'DESC' : 'ASC';
-      qb.orderBy(orderCol, orderDir).skip(skip).take(pageSize);
+      qb.orderBy('prod.display_order', 'ASC').skip(skip).take(pageSize);
 
       const [items, total] = await qb.getManyAndCount();
       return {
@@ -1045,6 +1029,7 @@ export class AdminService {
         },
       };
     } catch (err) {
+      // Fallback: try simpler find approach if QueryBuilder fails
       const where: any = {};
       if (providerId) where.providerId = providerId;
       if (isActive === 'true') where.isActive = true;
@@ -1067,62 +1052,6 @@ export class AdminService {
         },
       };
     }
-  }
-
-  async getProductStats(admin: any) {
-    this.assertAdmin(admin);
-    const total = await this.productRepo.count();
-    const active = await this.productRepo.count({ where: { isActive: true } });
-    const inactive = total - active;
-
-    const withImages = await this.productRepo
-      .createQueryBuilder('prod')
-      .where("array_length(prod.photo_urls, 1) > 0")
-      .getCount();
-
-    const withPrice = await this.productRepo
-      .createQueryBuilder('prod')
-      .where("prod.price IS NOT NULL AND prod.price > 0")
-      .getCount();
-
-    const typeBreakdown = await this.productRepo
-      .createQueryBuilder('prod')
-      .select('prod.product_type', 'productType')
-      .addSelect('COUNT(*)', 'count')
-      .groupBy('prod.product_type')
-      .getRawMany();
-
-    const avgPrice = await this.productRepo
-      .createQueryBuilder('prod')
-      .select('AVG(prod.price)', 'avg')
-      .where('prod.price IS NOT NULL AND prod.price > 0')
-      .getRawOne();
-
-    const topProviders = await this.productRepo
-      .createQueryBuilder('prod')
-      .select('provider.brand_name', 'brandName')
-      .addSelect('provider.id', 'providerId')
-      .addSelect('COUNT(*)', 'count')
-      .innerJoin('prod.provider', 'provider')
-      .where('prod.is_active = true')
-      .groupBy('provider.id')
-      .addGroupBy('provider.brand_name')
-      .orderBy('count', 'DESC')
-      .limit(5)
-      .getRawMany();
-
-    return {
-      total,
-      active,
-      inactive,
-      withImages,
-      withoutImages: total - withImages,
-      withPrice,
-      withoutPrice: total - withPrice,
-      avgPrice: Number(avgPrice?.avg ?? 0),
-      typeBreakdown: typeBreakdown.map(r => ({ type: r.productType, count: Number(r.count) })),
-      topProviders: topProviders.map(r => ({ brandName: r.brandName, providerId: r.providerId, count: Number(r.count) })),
-    };
   }
 
   async getProductById(admin: any, productId: string) {
@@ -1277,10 +1206,6 @@ export class AdminService {
     limit?: number,
     providerId?: string,
     warningType?: string,
-    search?: string,
-    isRead?: string,
-    dateFrom?: string,
-    dateTo?: string,
   ) {
     this.assertAdmin(admin);
     const currentPage = Math.max(1, page || 1);
@@ -1293,16 +1218,6 @@ export class AdminService {
 
     if (providerId) qb.andWhere('w.provider_id = :providerId', { providerId });
     if (warningType) qb.andWhere('w.warning_type = :warningType', { warningType });
-    if (isRead === 'true') qb.andWhere('w.is_read = true');
-    if (isRead === 'false') qb.andWhere('w.is_read = false');
-    if (dateFrom) qb.andWhere('w.created_at >= :dateFrom', { dateFrom });
-    if (dateTo) qb.andWhere('w.created_at <= :dateTo', { dateTo: `${dateTo}T23:59:59.999Z` });
-    if (search) {
-      qb.andWhere(
-        '(w.title ILIKE :search OR w.message ILIKE :search OR provider.brand_name ILIKE :search)',
-        { search: `%${search}%` },
-      );
-    }
 
     qb.orderBy('w.createdAt', 'DESC').skip(skip).take(pageSize);
 
@@ -1371,10 +1286,6 @@ export class AdminService {
     limit?: number,
     status?: string,
     search?: string,
-    type?: string,
-    dateFrom?: string,
-    dateTo?: string,
-    hasRedacted?: string,
   ) {
     this.assertAdmin(admin);
     const currentPage = Math.max(1, page || 1);
@@ -1386,25 +1297,8 @@ export class AdminService {
       .leftJoinAndSelect('p.user', 'u');
 
     if (status) qb.andWhere('c.status = :status', { status });
-    if (type) qb.andWhere('c.type = :type', { type });
-    if (dateFrom) qb.andWhere('c.lastMessageAt >= :dateFrom', { dateFrom });
-    if (dateTo) qb.andWhere('c.lastMessageAt <= :dateTo', { dateTo: `${dateTo}T23:59:59.999Z` });
     if (search) {
-      qb.andWhere(
-        '(u.name ILIKE :search OR u.mobile_number ILIKE :search OR c.context_title ILIKE :search OR c.last_message_preview ILIKE :search)',
-        { search: `%${search}%` },
-      );
-    }
-    if (hasRedacted === 'true') {
-      qb.andWhere((subQb) => {
-        const subQuery = subQb.subQuery()
-          .select('1')
-          .from('messages', 'm')
-          .where('m.conversation_id = c.id')
-          .andWhere('m.deleted_at IS NOT NULL')
-          .getQuery();
-        return `EXISTS ${subQuery}`;
-      });
+      qb.andWhere('(u.name ILIKE :search OR u.mobile_number ILIKE :search)', { search: `%${search}%` });
     }
 
     qb.orderBy('c.lastMessageAt', 'DESC').skip(skip).take(pageSize);
@@ -1626,7 +1520,7 @@ export class AdminService {
     const listing = await this.sponsoredRepo.findOneBy({ id });
     if (!listing) throw new NotFoundException('Sponsored listing not found');
 
-    const allowed = ['isActive', 'budgetAmount', 'costPerClick', 'costPerImpression', 'startsAt', 'endsAt', 'targetCategoryIds', 'targetCities'];
+    const allowed = ['isActive', 'budgetAmount', 'costPerClick', 'startsAt', 'endsAt', 'targetCategoryIds', 'targetCities'];
     const update: any = {};
     for (const key of allowed) {
       if ((body as any)[key] !== undefined) update[key] = (body as any)[key];
@@ -1654,70 +1548,6 @@ export class AdminService {
       totalImpressions: Number(totalImpressions?.val || 0),
       totalClicks: Number(totalClicks?.val || 0),
     };
-  }
-
-  async getSponsorshipAnalytics(admin: any, id: string, period: string) {
-    this.assertAdmin(admin);
-
-    const listing = await this.sponsoredRepo.findOne({ where: { id } });
-    if (!listing) throw new Error('Sponsorship not found');
-
-    const days = period === '30d' ? 30 : period === '14d' ? 14 : 7;
-    const since = new Date();
-    since.setDate(since.getDate() - days);
-
-    const dailyData = await this.adEventRepo
-      .createQueryBuilder('e')
-      .select("DATE(e.created_at)", 'date')
-      .addSelect("e.event_type", 'eventType')
-      .addSelect("COUNT(*)", 'count')
-      .where("e.entity_id = :id", { id })
-      .andWhere("e.entity_type = 'sponsored_listing'")
-      .andWhere("e.created_at >= :since", { since })
-      .groupBy("DATE(e.created_at)")
-      .addGroupBy("e.event_type")
-      .orderBy("DATE(e.created_at)", 'ASC')
-      .getRawMany();
-
-    // Build daily array with impressions and clicks per day
-    const dateMap = new Map<string, { impressions: number; clicks: number }>();
-    for (let i = 0; i < days; i++) {
-      const d = new Date(since);
-      d.setDate(d.getDate() + i + 1);
-      const key = d.toISOString().split('T')[0];
-      dateMap.set(key, { impressions: 0, clicks: 0 });
-    }
-
-    for (const row of dailyData) {
-      const dateKey = typeof row.date === 'string' ? row.date : new Date(row.date).toISOString().split('T')[0];
-      const entry = dateMap.get(dateKey);
-      if (entry) {
-        if (row.eventType === 'impression') entry.impressions = Number(row.count);
-        else if (row.eventType === 'click') entry.clicks = Number(row.count);
-      }
-    }
-
-    const daily = Array.from(dateMap.entries()).map(([date, data]) => ({
-      date,
-      impressions: data.impressions,
-      clicks: data.clicks,
-      spend: data.impressions * Number(listing.costPerImpression) + data.clicks * Number(listing.costPerClick),
-    }));
-
-    const totals = {
-      impressions: daily.reduce((s, d) => s + d.impressions, 0),
-      clicks: daily.reduce((s, d) => s + d.clicks, 0),
-      spend: daily.reduce((s, d) => s + d.spend, 0),
-      avgDailyImpressions: Math.round(daily.reduce((s, d) => s + d.impressions, 0) / days),
-      avgDailyClicks: Math.round(daily.reduce((s, d) => s + d.clicks, 0) / days),
-    };
-
-    // Projected exhaust date
-    const remainingBudget = Number(listing.budgetAmount) - Number(listing.spentAmount);
-    const avgDailySpend = totals.spend / days;
-    const projectedDaysLeft = avgDailySpend > 0 ? Math.ceil(remainingBudget / avgDailySpend) : null;
-
-    return { daily, totals, projectedDaysLeft, period: days };
   }
 
   // ============================================
@@ -2152,7 +1982,7 @@ export class AdminService {
     this.assertAdmin(admin);
     const qb = this.userRepo
       .createQueryBuilder('u')
-      .where('u.role IN (:...roles)', { roles: ADMIN_ROLES });
+      .where('u.role = :role', { role: 'admin' });
 
     if (search) {
       qb.andWhere('(u.name ILIKE :s OR u.mobileNumber ILIKE :s OR u.email ILIKE :s)', { s: `%${search}%` });
@@ -2166,27 +1996,14 @@ export class AdminService {
     return { items, meta: { total, page: +page, limit: +rows, totalPages: Math.ceil(total / rows) } };
   }
 
-  async createAdminUser(admin: any, body: { mobileNumber: string; name: string; email?: string; gender?: string; adminRole?: string }) {
+  async createAdminUser(admin: any, body: { mobileNumber: string; name: string; email?: string; gender?: string }) {
     this.assertAdmin(admin);
-    const targetRole = body.adminRole || 'associate';
-    // Validate role
-    if (!ADMIN_ROLES.includes(targetRole as any)) throw new BadRequestException('Invalid admin role');
-    // Cannot assign a role higher than own
-    if ((ROLE_HIERARCHY[targetRole] || 0) > (ROLE_HIERARCHY[admin.role] || 0)) {
-      throw new ForbiddenException('Cannot assign a role higher than your own');
-    }
-    // Only super_admin can create admin or super_admin level users
-    if ((ROLE_HIERARCHY[targetRole] || 0) >= ROLE_HIERARCHY['admin'] && admin.role !== 'super_admin') {
-      throw new ForbiddenException('Only super admins can assign admin-level or higher roles');
-    }
-
     const existing = await this.userRepo.findOne({ where: { mobileNumber: body.mobileNumber } });
     if (existing) {
-      if (ADMIN_ROLES.includes(existing.role as any)) throw new BadRequestException('User already has admin access');
-      const prevRole = existing.role;
-      existing.role = targetRole;
+      if (existing.role === 'admin') throw new BadRequestException('User is already an admin');
+      existing.role = 'admin';
       const updated = await this.userRepo.save(existing);
-      await this.createAuditLog(admin.id, 'promote_to_admin', 'user', existing.id, { role: prevRole }, { role: targetRole });
+      await this.createAuditLog(admin.id, 'promote_to_admin', 'user', existing.id, { role: 'customer' }, { role: 'admin' });
       return updated;
     }
     const user = this.userRepo.create({
@@ -2194,56 +2011,35 @@ export class AdminService {
       name: body.name,
       email: body.email || null,
       gender: body.gender || 'other',
-      role: targetRole,
+      role: 'admin',
       status: 'active',
     });
     const saved = await this.userRepo.save(user);
-    await this.createAuditLog(admin.id, 'create_admin', 'user', saved.id, null, { name: saved.name, role: targetRole });
+    await this.createAuditLog(admin.id, 'create_admin', 'user', saved.id, null, { name: saved.name, role: 'admin' });
     return saved;
   }
 
-  async updateAdminUser(admin: any, id: string, body: { name?: string; status?: string; adminRole?: string }) {
+  async updateAdminUser(admin: any, id: string, body: { name?: string; status?: string }) {
     this.assertAdmin(admin);
-    const user = await this.userRepo.findOne({ where: { id, role: In(ADMIN_ROLES) } });
+    const user = await this.userRepo.findOneBy({ id, role: 'admin' });
     if (!user) throw new NotFoundException('Admin user not found');
     if (id === admin.id) throw new BadRequestException('Cannot modify own account');
-    const prev = { name: user.name, status: user.status, role: user.role };
-
+    const prev = { name: user.name, status: user.status };
     if (body.name) user.name = body.name;
     if (body.status) user.status = body.status;
-
-    // Role change — hierarchy enforced: cannot change role of equal/higher users, cannot assign >= own level (unless super_admin)
-    if (body.adminRole && body.adminRole !== user.role) {
-      if (!ADMIN_ROLES.includes(body.adminRole as any)) throw new BadRequestException('Invalid admin role');
-      // Cannot modify someone of equal or higher role
-      if ((ROLE_HIERARCHY[user.role] || 0) >= (ROLE_HIERARCHY[admin.role] || 0) && admin.role !== 'super_admin') {
-        throw new ForbiddenException('Cannot change role of a user with equal or higher role');
-      }
-      // Cannot assign role >= own level (except super_admin can assign anything)
-      if ((ROLE_HIERARCHY[body.adminRole] || 0) >= (ROLE_HIERARCHY[admin.role] || 0) && admin.role !== 'super_admin') {
-        throw new ForbiddenException('Cannot assign a role equal to or higher than your own');
-      }
-      user.role = body.adminRole;
-    }
-
     const updated = await this.userRepo.save(user);
-    await this.createAuditLog(admin.id, 'update_admin', 'user', id, prev, { name: updated.name, status: updated.status, role: updated.role });
+    await this.createAuditLog(admin.id, 'update_admin', 'user', id, prev, { name: updated.name, status: updated.status });
     return updated;
   }
 
   async removeAdminUser(admin: any, id: string) {
     this.assertAdmin(admin);
     if (id === admin.id) throw new BadRequestException('Cannot remove own admin access');
-    const user = await this.userRepo.findOne({ where: { id, role: In(ADMIN_ROLES) } });
+    const user = await this.userRepo.findOneBy({ id, role: 'admin' });
     if (!user) throw new NotFoundException('Admin user not found');
-    // Cannot demote someone of equal or higher role unless you're super_admin
-    if ((ROLE_HIERARCHY[user.role] || 0) >= (ROLE_HIERARCHY[admin.role] || 0) && admin.role !== 'super_admin') {
-      throw new ForbiddenException('Cannot remove admin access from a user with equal or higher role');
-    }
-    const prevRole = user.role;
     user.role = 'customer';
     await this.userRepo.save(user);
-    await this.createAuditLog(admin.id, 'demote_admin', 'user', id, { role: prevRole }, { role: 'customer' });
+    await this.createAuditLog(admin.id, 'demote_admin', 'user', id, { role: 'admin' }, { role: 'customer' });
     return { message: 'Admin access removed' };
   }
 
@@ -2262,7 +2058,7 @@ export class AdminService {
     return this.auditLogRepo.save(log);
   }
 
-  async getAuditLogs(admin: any, page = 1, rows = 25, filters?: { adminId?: string; action?: string; entityType?: string; startDate?: string; endDate?: string; search?: string }) {
+  async getAuditLogs(admin: any, page = 1, rows = 25, filters?: { adminId?: string; action?: string; entityType?: string; startDate?: string; endDate?: string }) {
     this.assertAdmin(admin);
     const qb = this.auditLogRepo
       .createQueryBuilder('al')
@@ -2274,12 +2070,6 @@ export class AdminService {
     if (filters?.entityType) qb.andWhere('al.entityType = :et', { et: filters.entityType });
     if (filters?.startDate) qb.andWhere('al.createdAt >= :sd', { sd: filters.startDate });
     if (filters?.endDate) qb.andWhere('al.createdAt <= :ed', { ed: filters.endDate });
-    if (filters?.search) {
-      qb.andWhere(
-        '(al.description ILIKE :search OR al.action ILIKE :search OR al.entityType ILIKE :search OR CAST(al.entityId AS TEXT) ILIKE :search OR admin.name ILIKE :search)',
-        { search: `%${filters.search}%` },
-      );
-    }
 
     qb.skip((page - 1) * rows).take(rows);
     const [items, total] = await qb.getManyAndCount();
@@ -2296,37 +2086,16 @@ export class AdminService {
     this.assertAdmin(admin);
     const total = await this.auditLogRepo.count();
     const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const thisWeek = await this.auditLogRepo.count({ where: { createdAt: MoreThan(oneWeekAgo) } });
-    const today = await this.auditLogRepo.count({ where: { createdAt: MoreThan(oneDayAgo) } });
     const actionBreakdown = await this.auditLogRepo
       .createQueryBuilder('al')
       .select('al.action', 'action')
       .addSelect('COUNT(*)', 'count')
       .groupBy('al.action')
       .orderBy('count', 'DESC')
-      .limit(15)
-      .getRawMany();
-    const entityBreakdown = await this.auditLogRepo
-      .createQueryBuilder('al')
-      .select('al.entityType', 'entityType')
-      .addSelect('COUNT(*)', 'count')
-      .groupBy('al.entityType')
-      .orderBy('count', 'DESC')
       .limit(10)
       .getRawMany();
-    const uniqueAdmins = await this.auditLogRepo
-      .createQueryBuilder('al')
-      .select('COUNT(DISTINCT al.adminId)', 'count')
-      .getRawOne();
-    return {
-      total,
-      thisWeek,
-      today,
-      uniqueAdmins: Number(uniqueAdmins?.count ?? 0),
-      actionBreakdown: actionBreakdown.map(r => ({ action: r.action, count: Number(r.count) })),
-      entityBreakdown: entityBreakdown.map(r => ({ entityType: r.entityType, count: Number(r.count) })),
-    };
+    return { total, thisWeek, actionBreakdown: actionBreakdown.map(r => ({ action: r.action, count: Number(r.count) })) };
   }
 
   // ── System Settings ───────────────────────────────────
@@ -2889,8 +2658,12 @@ export class AdminService {
         await this.supabaseAuthService.unbanUser(user.supabaseId);
       }
 
-      // 3. Provider stays disabled — disabledAt timestamp preserved.
-      //    Cron job auto-enables 48h after disabledAt.
+      // 3. Restore provider visibility if exists
+      if (user.provider) {
+        await queryRunner.manager.update(Provider, user.provider.id, {
+          isAvailable: true,
+        });
+      }
 
       // 4. Reactivate chat participations
       await queryRunner.manager.update(

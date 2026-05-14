@@ -125,6 +125,24 @@ export class Provider {
   @Column({ name: 'suspension_confirmed', type: 'boolean', default: false })
   suspensionConfirmed: boolean;
 
+  @Column({ name: 'website_url', type: 'varchar', length: 512, nullable: true })
+  websiteUrl: string | null;
+
+  @Column({ name: 'website_logo_url', type: 'varchar', length: 512, nullable: true })
+  websiteLogoUrl: string | null;
+
+  @Column({ name: 'instagram_handle', type: 'varchar', length: 64, nullable: true })
+  instagramHandle: string | null;
+
+  @Column({ name: 'facebook_handle', type: 'varchar', length: 128, nullable: true })
+  facebookHandle: string | null;
+
+  @Column({ name: 'youtube_handle', type: 'varchar', length: 128, nullable: true })
+  youtubeHandle: string | null;
+
+  @Column({ name: 'whatsapp_number', type: 'varchar', length: 20, nullable: true })
+  whatsappNumber: string | null;
+
   @OneToOne(() => User, (u) => u.provider, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })
   user: User;
