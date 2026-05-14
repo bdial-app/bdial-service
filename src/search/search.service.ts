@@ -26,6 +26,7 @@ export interface SearchSuggestion {
   imageUrl?: string;
   isSponsored?: boolean;
   hasActiveOffer?: boolean;
+  productType?: 'product' | 'service';
 }
 
 export interface ProviderSearchResult {
@@ -1336,6 +1337,7 @@ export class SearchService implements OnModuleInit {
         prod.photo_url,
         prod.price,
         prod.currency,
+        prod.product_type,
         prov.brand_name AS provider_name,
         GREATEST(
           similarity(prod.name, $1),
@@ -1368,6 +1370,7 @@ export class SearchService implements OnModuleInit {
           .filter(Boolean)
           .join(' · '),
         imageUrl: r.photo_url,
+        productType: r.product_type || 'product',
       }));
     } catch {
       return [];
