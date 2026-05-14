@@ -12,10 +12,12 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { PaymentService } from './payment.service';
+import { Roles } from '../common/decorators/roles.decorator';
 
 @ApiTags('Admin — Payments')
 @Controller('admin')
 @ApiBearerAuth()
+@Roles('associate') // Base: read access for any admin role
 export class AdminPaymentController {
   constructor(private readonly paymentService: PaymentService) {}
 
@@ -50,6 +52,7 @@ export class AdminPaymentController {
     return this.paymentService.getRevenueStats();
   }
 
+  @Roles('admin')
   @Get('payments/analytics')
   @ApiOperation({ summary: 'Get detailed revenue analytics (admin)' })
   getRevenueAnalytics() {
@@ -95,12 +98,14 @@ export class AdminPaymentController {
     return this.paymentService.getAdminSubscriptionPlans();
   }
 
+  @Roles('admin')
   @Post('subscription-plans')
   @ApiOperation({ summary: 'Create a subscription plan' })
   createPlan(@Body() body: any) {
     return this.paymentService.createSubscriptionPlan(body);
   }
 
+  @Roles('admin')
   @Patch('subscription-plans/:id')
   @ApiOperation({ summary: 'Update a subscription plan' })
   updatePlan(@Param('id', ParseUUIDPipe) id: string, @Body() body: any) {

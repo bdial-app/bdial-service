@@ -5,10 +5,12 @@ import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { AdminService } from './admin.service';
 import { AdminCreateUserDto, AdminCreateProviderWithUserDto, AdminSendOtpDto, AdminVerifyOtpDto } from './dto/admin-create-user.dto';
+import { Roles } from '../common/decorators/roles.decorator';
 
 @ApiTags('Admin')
 @ApiBearerAuth()
 @UseGuards(AuthGuard('jwt'))
+@Roles('associate') // Base minimum: any admin role can access read endpoints
 @Controller('admin')
 export class AdminController {
   constructor(private readonly adminService: AdminService) {}
@@ -25,18 +27,21 @@ export class AdminController {
     return this.adminService.getPendingProviders(req.user);
   }
 
+  @Roles('moderator')
   @Patch('providers/:id/approve')
   @ApiOperation({ summary: 'Approve a provider' })
   approveProvider(@Param('id') id: string, @Request() req) {
     return this.adminService.approveProvider(req.user, id);
   }
 
+  @Roles('admin')
   @Patch('providers/:id/suspend')
   @ApiOperation({ summary: 'Suspend a provider' })
   suspendProvider(@Param('id') id: string, @Request() req) {
     return this.adminService.suspendProvider(req.user, id);
   }
 
+  @Roles('admin')
   @Patch('providers/:id/unsuspend')
   @ApiOperation({ summary: 'Revoke suspension of a provider' })
   unsuspendProvider(@Param('id') id: string, @Request() req) {
@@ -74,6 +79,7 @@ export class AdminController {
     return this.adminService.getVerificationById(req.user, id);
   }
 
+  @Roles('moderator')
   @Patch('verifications/:id/review')
   @ApiOperation({ summary: 'Approve or reject a verification' })
   @ApiBody({
@@ -96,6 +102,7 @@ export class AdminController {
   }
 
   //update verification status by id
+  @Roles('moderator')
   @Patch('verifications/:id/status')
   @ApiOperation({ summary: 'Update verification status' })
   @ApiParam({ name: 'id', description: 'Verification ID' })
@@ -124,12 +131,14 @@ export class AdminController {
     return this.adminService.getPendingReports(req.user);
   }
 
+  @Roles('moderator')
   @Patch('reviews/:id/remove')
   @ApiOperation({ summary: 'Remove a review' })
   removeReview(@Param('id') id: string, @Request() req) {
     return this.adminService.removeReview(req.user, id);
   }
 
+  @Roles('moderator')
   @Patch('users/:id/pause')
   @ApiOperation({ summary: 'Pause a user (blocks login, hides provider, deactivates chats)' })
   pauseUser(@Param('id') id: string, @Request() req) {
@@ -169,6 +178,7 @@ export class AdminController {
     return this.adminService.getReportDetail(req.user, id);
   }
 
+  @Roles('moderator')
   @Patch('reports/:id/review')
   @ApiOperation({ summary: 'Review a report: dismiss, warn, suspend, or ban' })
   @ApiParam({ name: 'id', description: 'Report ID' })
@@ -197,6 +207,7 @@ export class AdminController {
     return this.adminService.getProviderWarnings(req.user, id);
   }
 
+  @Roles('admin')
   @Patch('providers/:id/confirm-suspension')
   @ApiOperation({ summary: 'Confirm a provider suspension (prevents auto-lift after 48h)' })
   @ApiParam({ name: 'id', description: 'Provider ID' })
@@ -237,6 +248,7 @@ export class AdminController {
     return this.adminService.getUserById(req.user, id);
   }
 
+  @Roles('admin')
   @Patch('users/:id')
   @ApiOperation({ summary: 'Admin update user fields' })
   @ApiParam({ name: 'id', description: 'User ID' })
@@ -277,6 +289,7 @@ export class AdminController {
     return this.adminService.getProviderDetail(req.user, id);
   }
 
+  @Roles('admin')
   @Patch('providers/:id')
   @ApiOperation({ summary: 'Admin update provider fields' })
   @ApiParam({ name: 'id', description: 'Provider ID' })
@@ -331,6 +344,7 @@ export class AdminController {
     return this.adminService.getProductById(req.user, id);
   }
 
+  @Roles('admin')
   @Patch('products/:id')
   @ApiOperation({ summary: 'Admin update product' })
   @ApiParam({ name: 'id', description: 'Product ID' })
@@ -338,6 +352,7 @@ export class AdminController {
     return this.adminService.updateProductAdmin(req.user, id, body);
   }
 
+  @Roles('admin')
   @Patch('products/:id/delete')
   @ApiOperation({ summary: 'Admin soft-delete product' })
   @ApiParam({ name: 'id', description: 'Product ID' })
@@ -345,6 +360,7 @@ export class AdminController {
     return this.adminService.deleteProductAdmin(req.user, id);
   }
 
+  @Roles('admin')
   @Post('products/:id/images')
   @ApiOperation({ summary: 'Upload images for a product (max 5 files, 10MB each)' })
   @ApiParam({ name: 'id', description: 'Product ID' })
@@ -389,6 +405,7 @@ export class AdminController {
     return this.adminService.getReviewById(req.user, id);
   }
 
+  @Roles('moderator')
   @Patch('reviews/:id/status')
   @ApiOperation({ summary: 'Update review status (active/removed)' })
   @ApiParam({ name: 'id', description: 'Review ID' })
@@ -436,12 +453,14 @@ export class AdminController {
     return this.adminService.getWarningById(req.user, id);
   }
 
+  @Roles('moderator')
   @Post('warnings')
   @ApiOperation({ summary: 'Manually issue a warning to a provider' })
   createWarning(@Request() req, @Body() body: { providerId: string; warningType: string; title: string; message: string }) {
     return this.adminService.createWarning(req.user, body);
   }
 
+  @Roles('moderator')
   @Patch('warnings/:id')
   @ApiOperation({ summary: 'Update a warning' })
   @ApiParam({ name: 'id', description: 'Warning ID' })
@@ -491,6 +510,7 @@ export class AdminController {
     return this.adminService.getChatMessages(req.user, id, page, limit);
   }
 
+  @Roles('moderator')
   @Patch('chat/messages/:id/remove')
   @ApiOperation({ summary: 'Redact a message' })
   @ApiParam({ name: 'id', description: 'Message ID' })
@@ -498,6 +518,7 @@ export class AdminController {
     return this.adminService.redactMessage(req.user, id);
   }
 
+  @Roles('moderator')
   @Patch('chat/conversations/:id/close')
   @ApiOperation({ summary: 'Force close a conversation' })
   @ApiParam({ name: 'id', description: 'Conversation ID' })
@@ -536,6 +557,7 @@ export class AdminController {
     return this.adminService.getBannerById(req.user, id);
   }
 
+  @Roles('admin')
   @Post('banners')
   @ApiOperation({ summary: 'Create a new banner' })
   @ApiConsumes('multipart/form-data')
@@ -546,6 +568,7 @@ export class AdminController {
     return this.adminService.createBanner(req.user, parsed, file);
   }
 
+  @Roles('admin')
   @Patch('banners/:id')
   @ApiOperation({ summary: 'Update a banner' })
   @ApiParam({ name: 'id', description: 'Banner ID' })
@@ -568,6 +591,7 @@ export class AdminController {
     return parsed;
   }
 
+  @Roles('admin')
   @Delete('banners/:id')
   @ApiOperation({ summary: 'Delete a banner' })
   @ApiParam({ name: 'id', description: 'Banner ID' })
@@ -575,6 +599,7 @@ export class AdminController {
     return this.adminService.deleteBanner(req.user, id);
   }
 
+  @Roles('admin')
   @Patch('banners/reorder')
   @ApiOperation({ summary: 'Batch reorder banners' })
   @ApiBody({ schema: { properties: { items: { type: 'array', items: { properties: { id: { type: 'string' }, displayOrder: { type: 'number' } } } } } } })
@@ -623,6 +648,7 @@ export class AdminController {
     return this.adminService.getSponsoredById(req.user, id);
   }
 
+  @Roles('admin')
   @Patch('sponsorships/:id')
   @ApiOperation({ summary: 'Update a sponsored listing' })
   @ApiParam({ name: 'id', description: 'Sponsored listing ID' })
@@ -663,6 +689,7 @@ export class AdminController {
     return this.adminService.getOfferById(req.user, id);
   }
 
+  @Roles('admin')
   @Patch('offers/:id')
   @ApiOperation({ summary: 'Update an offer' })
   @ApiParam({ name: 'id', description: 'Offer ID' })
@@ -670,6 +697,7 @@ export class AdminController {
     return this.adminService.updateOffer(req.user, id, body);
   }
 
+  @Roles('admin')
   @Delete('offers/:id')
   @ApiOperation({ summary: 'Deactivate an offer' })
   @ApiParam({ name: 'id', description: 'Offer ID' })
@@ -704,12 +732,14 @@ export class AdminController {
     return this.adminService.getBadgeById(req.user, id);
   }
 
+  @Roles('admin')
   @Post('badges')
   @ApiOperation({ summary: 'Manually award a badge to a provider' })
   createBadge(@Request() req, @Body() body: { providerId: string; type: string; source?: string; expiresAt?: string }) {
     return this.adminService.createBadge(req.user, body);
   }
 
+  @Roles('admin')
   @Patch('badges/:id')
   @ApiOperation({ summary: 'Update a badge' })
   @ApiParam({ name: 'id', description: 'Badge ID' })
@@ -717,6 +747,7 @@ export class AdminController {
     return this.adminService.updateBadge(req.user, id, body);
   }
 
+  @Roles('admin')
   @Delete('badges/:id')
   @ApiOperation({ summary: 'Revoke a badge' })
   @ApiParam({ name: 'id', description: 'Badge ID' })
@@ -739,12 +770,14 @@ export class AdminController {
   // Analytics
   // ============================================
 
+  @Roles('admin')
   @Get('analytics/overview')
   @ApiOperation({ summary: 'Analytics overview: events, leads, search, ad performance' })
   getAnalyticsOverview(@Request() req) {
     return this.adminService.getAnalyticsOverview(req.user);
   }
 
+  @Roles('admin')
   @Get('analytics/search-trends')
   @ApiOperation({ summary: 'Search query analytics: top queries, zero-result queries, volume by day' })
   @ApiQuery({ name: 'days', required: false, type: Number })
@@ -753,6 +786,7 @@ export class AdminController {
     return this.adminService.getSearchTrends(req.user, days ? Number(days) : 30, limit ? Number(limit) : 50);
   }
 
+  @Roles('admin')
   @Get('analytics/geographic')
   @ApiOperation({ summary: 'Geographic distribution: users, providers, searches by city' })
   getGeographicStats(@Request() req) {
@@ -772,20 +806,23 @@ export class AdminController {
     return this.adminService.getAdminUsers(req.user, page, rows, search);
   }
 
+  @Roles('moderator')
   @Post('admins')
-  @ApiOperation({ summary: 'Create or promote admin user' })
-  @ApiBody({ schema: { type: 'object', properties: { mobileNumber: { type: 'string' }, name: { type: 'string' }, email: { type: 'string' }, gender: { type: 'string' } } } })
+  @ApiOperation({ summary: 'Create or promote admin user (hierarchy enforced)' })
+  @ApiBody({ schema: { type: 'object', properties: { mobileNumber: { type: 'string' }, name: { type: 'string' }, email: { type: 'string' }, gender: { type: 'string' }, adminRole: { type: 'string', enum: ['associate', 'moderator', 'admin', 'super_admin'] } } } })
   createAdminUser(@Request() req, @Body() body: any) {
     return this.adminService.createAdminUser(req.user, body);
   }
 
+  @Roles('admin')
   @Patch('admins/:id')
-  @ApiOperation({ summary: 'Update admin user' })
+  @ApiOperation({ summary: 'Update admin user (hierarchy enforced)' })
   @ApiParam({ name: 'id', description: 'Admin user ID' })
   updateAdminUser(@Param('id') id: string, @Request() req, @Body() body: any) {
     return this.adminService.updateAdminUser(req.user, id, body);
   }
 
+  @Roles('admin')
   @Delete('admins/:id')
   @ApiOperation({ summary: 'Remove admin access (demote to customer)' })
   @ApiParam({ name: 'id', description: 'Admin user ID' })
@@ -797,6 +834,7 @@ export class AdminController {
   // Audit Logs
   // ============================================
 
+  @Roles('admin')
   @Get('audit-logs')
   @ApiOperation({ summary: 'Get audit logs with filters' })
   @ApiQuery({ name: 'page', required: false, type: Number })
@@ -821,6 +859,7 @@ export class AdminController {
     return this.adminService.getAuditLogs(req.user, page, rows, { adminId, action, entityType, startDate, endDate, search });
   }
 
+  @Roles('admin')
   @Get('audit-logs/stats')
   @ApiOperation({ summary: 'Get audit log statistics' })
   getAuditLogStats(@Request() req) {
@@ -831,12 +870,14 @@ export class AdminController {
   // System Settings
   // ============================================
 
+  @Roles('super_admin')
   @Get('settings')
   @ApiOperation({ summary: 'Get all system settings' })
   getSettings(@Request() req) {
     return this.adminService.getSettings(req.user);
   }
 
+  @Roles('super_admin')
   @Patch('settings')
   @ApiOperation({ summary: 'Update settings in batch' })
   @ApiBody({ schema: { type: 'object', properties: { settings: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, value: { type: 'string' } } } } } } })
@@ -844,12 +885,14 @@ export class AdminController {
     return this.adminService.updateSettings(req.user, body.settings);
   }
 
+  @Roles('super_admin')
   @Post('settings')
   @ApiOperation({ summary: 'Create a new system setting' })
   createSetting(@Request() req, @Body() body: any) {
     return this.adminService.createSetting(req.user, body);
   }
 
+  @Roles('super_admin')
   @Delete('settings/:id')
   @ApiOperation({ summary: 'Delete a system setting' })
   @ApiParam({ name: 'id', description: 'Setting ID' })
@@ -908,12 +951,14 @@ export class AdminController {
   // Admin User & Provider Creation
   // ============================================
 
+  @Roles('admin')
   @Post('create-user')
   @ApiOperation({ summary: 'Admin creates a new user with all details (OTP optional)' })
   createUser(@Request() req, @Body() body: AdminCreateUserDto) {
     return this.adminService.adminCreateUser(req.user, body);
   }
 
+  @Roles('admin')
   @Post('create-provider-with-user')
   @ApiOperation({ summary: 'Admin creates user + provider + products in one atomic flow' })
   createProviderWithUser(@Request() req, @Body() body: AdminCreateProviderWithUserDto) {
@@ -927,12 +972,14 @@ export class AdminController {
     return this.adminService.adminCheckUser(req.user, mobileNumber);
   }
 
+  @Roles('admin')
   @Post('otp/send')
   @ApiOperation({ summary: 'Admin-triggered OTP send for user/business number verification' })
   adminSendOtp(@Request() req, @Body() body: AdminSendOtpDto) {
     return this.adminService.adminSendOtp(req.user, body.mobileNumber, body.purpose);
   }
 
+  @Roles('admin')
   @Post('otp/verify')
   @ApiOperation({ summary: 'Admin-triggered OTP verification' })
   adminVerifyOtp(@Request() req, @Body() body: AdminVerifyOtpDto & { purpose?: string }) {
@@ -943,6 +990,7 @@ export class AdminController {
   // Provider Lifecycle (Disable / Enable / Delete)
   // ============================================
 
+  @Roles('admin')
   @Patch('providers/:id/disable')
   @ApiOperation({ summary: 'Disable a provider (provider can re-enable)' })
   @ApiParam({ name: 'id', description: 'Provider ID' })
@@ -950,6 +998,7 @@ export class AdminController {
     return this.adminService.disableProvider(req.user, id);
   }
 
+  @Roles('admin')
   @Patch('providers/:id/enable')
   @ApiOperation({ summary: 'Re-enable a disabled provider' })
   @ApiParam({ name: 'id', description: 'Provider ID' })
@@ -957,6 +1006,7 @@ export class AdminController {
     return this.adminService.enableProvider(req.user, id);
   }
 
+  @Roles('admin')
   @Delete('providers/:id')
   @ApiOperation({ summary: 'Soft-delete a provider' })
   @ApiParam({ name: 'id', description: 'Provider ID' })
@@ -964,6 +1014,7 @@ export class AdminController {
     return this.adminService.softDeleteProvider(req.user, id);
   }
 
+  @Roles('admin')
   @Patch('providers/:id/feature')
   @ApiOperation({ summary: 'Toggle featured status of a provider' })
   @ApiParam({ name: 'id', description: 'Provider ID' })
@@ -988,6 +1039,7 @@ export class AdminController {
     return this.adminService.getWomenLedPending(req.user, page, limit);
   }
 
+  @Roles('moderator')
   @Patch('providers/:id/women-led/approve')
   @ApiOperation({ summary: 'Approve women-led status for a provider' })
   @ApiParam({ name: 'id', description: 'Provider ID' })
@@ -995,6 +1047,7 @@ export class AdminController {
     return this.adminService.reviewWomenLedStatus(req.user, id, 'approved');
   }
 
+  @Roles('moderator')
   @Patch('providers/:id/women-led/reject')
   @ApiOperation({ summary: 'Reject women-led status for a provider' })
   @ApiParam({ name: 'id', description: 'Provider ID' })
@@ -1012,6 +1065,7 @@ export class AdminController {
   // User Lifecycle (Unsuspend / Delete)
   // ============================================
 
+  @Roles('admin')
   @Patch('users/:id/unpause')
   @ApiOperation({ summary: 'Unpause a user (restores login, provider, chats)' })
   @ApiParam({ name: 'id', description: 'User ID' })
@@ -1019,6 +1073,7 @@ export class AdminController {
     return this.adminService.unpauseUser(req.user, id);
   }
 
+  @Roles('admin')
   @Delete('users/:id')
   @ApiOperation({ summary: 'Soft-delete a user' })
   @ApiParam({ name: 'id', description: 'User ID' })
@@ -1044,6 +1099,7 @@ export class AdminController {
     return this.adminService.getPhotosForModeration(req.user, page, limit, type);
   }
 
+  @Roles('moderator')
   @Delete('photos/:id')
   @ApiOperation({ summary: 'Remove a photo (provider gallery photo)' })
   @ApiParam({ name: 'id', description: 'Photo ID' })
@@ -1056,6 +1112,7 @@ export class AdminController {
   // Bulk Actions
   // ============================================
 
+  @Roles('admin')
   @Post('providers/bulk-action')
   @ApiOperation({ summary: 'Bulk action on providers (approve, suspend, unsuspend, disable)' })
   @ApiBody({
@@ -1075,6 +1132,7 @@ export class AdminController {
     return this.adminService.bulkProviderAction(req.user, ids, action);
   }
 
+  @Roles('admin')
   @Post('users/bulk-action')
   @ApiOperation({ summary: 'Bulk action on users (suspend, unsuspend)' })
   @ApiBody({
@@ -1094,6 +1152,7 @@ export class AdminController {
     return this.adminService.bulkUserAction(req.user, ids, action);
   }
 
+  @Roles('admin')
   @Post('products/bulk-action')
   @ApiOperation({ summary: 'Bulk action on products (activate, deactivate, delete)' })
   @ApiBody({
@@ -1129,6 +1188,7 @@ export class AdminController {
     return this.adminService.getPendingSponsorships(req.user, page, limit);
   }
 
+  @Roles('moderator')
   @Patch('sponsorships/:id/approve')
   @ApiOperation({ summary: 'Approve a sponsorship' })
   @ApiParam({ name: 'id', description: 'Sponsored listing ID' })
@@ -1136,6 +1196,7 @@ export class AdminController {
     return this.adminService.approveSponsorship(req.user, id);
   }
 
+  @Roles('moderator')
   @Patch('sponsorships/:id/reject')
   @ApiOperation({ summary: 'Reject a sponsorship' })
   @ApiParam({ name: 'id', description: 'Sponsored listing ID' })
@@ -1160,6 +1221,7 @@ export class AdminController {
     return this.adminService.getPendingOffers(req.user, page, limit);
   }
 
+  @Roles('moderator')
   @Patch('offers/:id/approve')
   @ApiOperation({ summary: 'Approve an offer' })
   @ApiParam({ name: 'id', description: 'Offer ID' })
@@ -1167,6 +1229,7 @@ export class AdminController {
     return this.adminService.approveOffer(req.user, id);
   }
 
+  @Roles('moderator')
   @Patch('offers/:id/reject')
   @ApiOperation({ summary: 'Reject an offer' })
   @ApiParam({ name: 'id', description: 'Offer ID' })
@@ -1179,12 +1242,14 @@ export class AdminController {
   // Feature Flags
   // ============================================
 
+  @Roles('super_admin')
   @Get('feature-flags')
   @ApiOperation({ summary: 'Get all feature flags (settings in feature_flags group)' })
   getFeatureFlags(@Request() req) {
     return this.adminService.getFeatureFlags(req.user);
   }
 
+  @Roles('super_admin')
   @Patch('feature-flags')
   @ApiOperation({ summary: 'Update feature flags in batch' })
   @ApiBody({
@@ -1202,6 +1267,7 @@ export class AdminController {
   // CSV Export
   // ============================================
 
+  @Roles('admin')
   @Get('export/:entity')
   @ApiOperation({ summary: 'Export entity data as CSV' })
   @ApiParam({ name: 'entity', description: 'Entity to export: users, providers, products, reviews, reports' })
@@ -1238,6 +1304,7 @@ export class AdminController {
     return this.adminService.getServiceableCities(req.user);
   }
 
+  @Roles('admin')
   @Patch('serviceable-cities/:id')
   @ApiOperation({ summary: 'Update a serviceable city status' })
   @ApiParam({ name: 'id', description: 'City ID' })

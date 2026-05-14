@@ -10,7 +10,6 @@ import {
   Query,
   Request,
   UseGuards,
-  ForbiddenException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiParam } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
@@ -19,10 +18,12 @@ import { NotificationDispatchService } from './notification-dispatch.service';
 import { NotificationTemplateService } from './notification-template.service';
 import { SendNotificationDto, GetBatchesQueryDto } from './dto/notification.dto';
 import { NotificationType } from '../entities/notification.entity';
+import { Roles } from '../common/decorators/roles.decorator';
 
 @ApiTags('Admin Notifications')
 @ApiBearerAuth()
 @UseGuards(AuthGuard('jwt'))
+@Roles('associate') // Base: read access for stats/batches/templates
 @Controller('admin/notifications')
 export class AdminNotificationsController {
   constructor(
@@ -31,11 +32,10 @@ export class AdminNotificationsController {
     private readonly templateService: NotificationTemplateService,
   ) {}
 
+  @Roles('admin')
   @Post('send')
   @ApiOperation({ summary: 'Send a notification (broadcast, segment, or individual)' })
   async sendNotification(@Request() req, @Body() dto: SendNotificationDto) {
-    this.assertAdmin(req.user);
-
     const result = await this.dispatchService.sendBroadcast(
       req.user.id,
       dto.title,
@@ -57,7 +57,6 @@ export class AdminNotificationsController {
   @Get('batches')
   @ApiOperation({ summary: 'List notification batches with stats' })
   getBatches(@Request() req, @Query() query: GetBatchesQueryDto) {
-    this.assertAdmin(req.user);
     return this.notificationsService.getBatches(query);
   }
 
@@ -65,14 +64,12 @@ export class AdminNotificationsController {
   @ApiOperation({ summary: 'Get batch detail' })
   @ApiParam({ name: 'id', description: 'Batch UUID' })
   getBatch(@Request() req, @Param('id') id: string) {
-    this.assertAdmin(req.user);
     return this.notificationsService.getBatchById(id);
   }
 
   @Get('stats')
   @ApiOperation({ summary: 'Get aggregate notification statistics' })
   getStats(@Request() req) {
-    this.assertAdmin(req.user);
     return this.notificationsService.getStats();
   }
 
@@ -83,31 +80,30 @@ export class AdminNotificationsController {
   @Get('templates')
   @ApiOperation({ summary: 'List all notification templates' })
   getTemplates(@Request() req, @Query('category') category?: string) {
-    this.assertAdmin(req.user);
     return this.templateService.findAll(category);
   }
 
   @Get('templates/:id')
   @ApiOperation({ summary: 'Get a notification template by ID' })
   getTemplate(@Request() req, @Param('id') id: string) {
-    this.assertAdmin(req.user);
     return this.templateService.findById(id);
   }
 
+  @Roles('admin')
   @Post('templates')
   @ApiOperation({ summary: 'Create a new notification template' })
   createTemplate(@Request() req, @Body() body: any) {
-    this.assertAdmin(req.user);
     return this.templateService.create(body);
   }
 
+  @Roles('admin')
   @Put('templates/:id')
   @ApiOperation({ summary: 'Update a notification template' })
   updateTemplate(@Request() req, @Param('id') id: string, @Body() body: any) {
-    this.assertAdmin(req.user);
     return this.templateService.update(id, body);
   }
 
+  @Roles('admin')
   @Patch('templates/:id/toggle')
   @ApiOperation({ summary: 'Toggle a notification template active/inactive' })
   toggleTemplate(
@@ -115,20 +111,13 @@ export class AdminNotificationsController {
     @Param('id') id: string,
     @Body() body: { isActive: boolean },
   ) {
-    this.assertAdmin(req.user);
     return this.templateService.toggleActive(id, body.isActive);
   }
 
+  @Roles('admin')
   @Delete('templates/:id')
   @ApiOperation({ summary: 'Delete a notification template' })
   deleteTemplate(@Request() req, @Param('id') id: string) {
-    this.assertAdmin(req.user);
     return this.templateService.delete(id);
-  }
-
-  private assertAdmin(user: any): void {
-    if (user.role !== 'admin') {
-      throw new ForbiddenException('Admin access required');
-    }
   }
 }

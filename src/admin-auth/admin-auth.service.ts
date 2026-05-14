@@ -9,6 +9,7 @@ import { JwtService } from '@nestjs/jwt';
 import { User } from '../entities';
 import { OtpService } from '../otp/otp.service';
 import { SendAdminOtpDto, VerifyAdminOtpDto } from './dto/admin-auth.dto';
+import { ADMIN_ROLES } from '../common/enums/admin-role.enum';
 
 @Injectable()
 export class AdminAuthService {
@@ -29,7 +30,7 @@ export class AdminAuthService {
     if (!user) {
       throw new NotFoundException('User not found with this mobile number');
     }
-    if (user.role !== 'admin') {
+    if (!ADMIN_ROLES.includes(user.role as any)) {
       throw new BadRequestException('User does not have admin privileges');
     }
     if (user.status !== 'active') {
@@ -48,7 +49,7 @@ export class AdminAuthService {
     await this.otpService.verifyOtpWithKey(`admin_${normalizedMobile}`, normalizedMobile, dto.otp);
 
     const user = await this.userRepo.findOneBy({ mobileNumber: normalizedMobile });
-    if (!user || user.role !== 'admin' || user.status !== 'active') {
+    if (!user || !ADMIN_ROLES.includes(user.role as any) || user.status !== 'active') {
       throw new BadRequestException('Admin access revoked or account inactive');
     }
 

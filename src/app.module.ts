@@ -35,6 +35,7 @@ import { HealthModule } from './health/health.module';
 import { ReportsModule } from './reports/reports.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import { RolesGuard } from './common/guards/roles.guard';
 import { ContentSanitizerModule } from './common/content-sanitizer';
 import { BugReportsModule } from './bug-reports/bug-reports.module';
 import { PaymentModule } from './payment/payment.module';
@@ -101,6 +102,8 @@ import { SystemSetting } from './entities';
     AppService,
     // Global JWT auth guard — all endpoints require auth unless marked @Public()
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+    // Global roles guard — checks @Roles() decorator metadata for admin role hierarchy
+    { provide: APP_GUARD, useClass: RolesGuard },
     // Global rate limiter guard
     { provide: APP_GUARD, useClass: ThrottlerGuard },
   ],

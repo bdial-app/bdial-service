@@ -11,6 +11,7 @@ import { compressImage, compressImages } from '../common/image-processor';
 import { SupabaseAuthService } from '../supabase/supabase-auth.service';
 import { ServiceableCitiesService } from '../serviceable-cities/serviceable-cities.service';
 import { ContentSanitizerService } from '../common/content-sanitizer';
+import { ADMIN_ROLES, ROLE_HIERARCHY } from '../common/enums/admin-role.enum';
 
 @Injectable()
 export class AdminService {
@@ -52,7 +53,7 @@ export class AdminService {
   ) {}
 
   private assertAdmin(user: any) {
-    if (user.role !== 'admin') throw new ForbiddenException('Admin access required');
+    if (!ADMIN_ROLES.includes(user.role)) throw new ForbiddenException('Admin access required');
   }
 
   async getDashboard(admin: any) {
@@ -2151,7 +2152,7 @@ export class AdminService {
     this.assertAdmin(admin);
     const qb = this.userRepo
       .createQueryBuilder('u')
-      .where('u.role = :role', { role: 'admin' });
+      .where('u.role IN (:...roles)', { roles: ADMIN_ROLES });
 
     if (search) {
       qb.andWhere('(u.name ILIKE :s OR u.mobileNumber ILIKE :s OR u.email ILIKE :s)', { s: `%${search}%` });
@@ -2165,14 +2166,27 @@ export class AdminService {
     return { items, meta: { total, page: +page, limit: +rows, totalPages: Math.ceil(total / rows) } };
   }
 
-  async createAdminUser(admin: any, body: { mobileNumber: string; name: string; email?: string; gender?: string }) {
+  async createAdminUser(admin: any, body: { mobileNumber: string; name: string; email?: string; gender?: string; adminRole?: string }) {
     this.assertAdmin(admin);
+    const targetRole = body.adminRole || 'associate';
+    // Validate role
+    if (!ADMIN_ROLES.includes(targetRole as any)) throw new BadRequestException('Invalid admin role');
+    // Cannot assign a role higher than own
+    if ((ROLE_HIERARCHY[targetRole] || 0) > (ROLE_HIERARCHY[admin.role] || 0)) {
+      throw new ForbiddenException('Cannot assign a role higher than your own');
+    }
+    // Only super_admin can create admin or super_admin level users
+    if ((ROLE_HIERARCHY[targetRole] || 0) >= ROLE_HIERARCHY['admin'] && admin.role !== 'super_admin') {
+      throw new ForbiddenException('Only super admins can assign admin-level or higher roles');
+    }
+
     const existing = await this.userRepo.findOne({ where: { mobileNumber: body.mobileNumber } });
     if (existing) {
-      if (existing.role === 'admin') throw new BadRequestException('User is already an admin');
-      existing.role = 'admin';
+      if (ADMIN_ROLES.includes(existing.role as any)) throw new BadRequestException('User already has admin access');
+      const prevRole = existing.role;
+      existing.role = targetRole;
       const updated = await this.userRepo.save(existing);
-      await this.createAuditLog(admin.id, 'promote_to_admin', 'user', existing.id, { role: 'customer' }, { role: 'admin' });
+      await this.createAuditLog(admin.id, 'promote_to_admin', 'user', existing.id, { role: prevRole }, { role: targetRole });
       return updated;
     }
     const user = this.userRepo.create({
@@ -2180,35 +2194,56 @@ export class AdminService {
       name: body.name,
       email: body.email || null,
       gender: body.gender || 'other',
-      role: 'admin',
+      role: targetRole,
       status: 'active',
     });
     const saved = await this.userRepo.save(user);
-    await this.createAuditLog(admin.id, 'create_admin', 'user', saved.id, null, { name: saved.name, role: 'admin' });
+    await this.createAuditLog(admin.id, 'create_admin', 'user', saved.id, null, { name: saved.name, role: targetRole });
     return saved;
   }
 
-  async updateAdminUser(admin: any, id: string, body: { name?: string; status?: string }) {
+  async updateAdminUser(admin: any, id: string, body: { name?: string; status?: string; adminRole?: string }) {
     this.assertAdmin(admin);
-    const user = await this.userRepo.findOneBy({ id, role: 'admin' });
+    const user = await this.userRepo.findOne({ where: { id, role: In(ADMIN_ROLES) } });
     if (!user) throw new NotFoundException('Admin user not found');
     if (id === admin.id) throw new BadRequestException('Cannot modify own account');
-    const prev = { name: user.name, status: user.status };
+    const prev = { name: user.name, status: user.status, role: user.role };
+
     if (body.name) user.name = body.name;
     if (body.status) user.status = body.status;
+
+    // Role change — hierarchy enforced: cannot change role of equal/higher users, cannot assign >= own level (unless super_admin)
+    if (body.adminRole && body.adminRole !== user.role) {
+      if (!ADMIN_ROLES.includes(body.adminRole as any)) throw new BadRequestException('Invalid admin role');
+      // Cannot modify someone of equal or higher role
+      if ((ROLE_HIERARCHY[user.role] || 0) >= (ROLE_HIERARCHY[admin.role] || 0) && admin.role !== 'super_admin') {
+        throw new ForbiddenException('Cannot change role of a user with equal or higher role');
+      }
+      // Cannot assign role >= own level (except super_admin can assign anything)
+      if ((ROLE_HIERARCHY[body.adminRole] || 0) >= (ROLE_HIERARCHY[admin.role] || 0) && admin.role !== 'super_admin') {
+        throw new ForbiddenException('Cannot assign a role equal to or higher than your own');
+      }
+      user.role = body.adminRole;
+    }
+
     const updated = await this.userRepo.save(user);
-    await this.createAuditLog(admin.id, 'update_admin', 'user', id, prev, { name: updated.name, status: updated.status });
+    await this.createAuditLog(admin.id, 'update_admin', 'user', id, prev, { name: updated.name, status: updated.status, role: updated.role });
     return updated;
   }
 
   async removeAdminUser(admin: any, id: string) {
     this.assertAdmin(admin);
     if (id === admin.id) throw new BadRequestException('Cannot remove own admin access');
-    const user = await this.userRepo.findOneBy({ id, role: 'admin' });
+    const user = await this.userRepo.findOne({ where: { id, role: In(ADMIN_ROLES) } });
     if (!user) throw new NotFoundException('Admin user not found');
+    // Cannot demote someone of equal or higher role unless you're super_admin
+    if ((ROLE_HIERARCHY[user.role] || 0) >= (ROLE_HIERARCHY[admin.role] || 0) && admin.role !== 'super_admin') {
+      throw new ForbiddenException('Cannot remove admin access from a user with equal or higher role');
+    }
+    const prevRole = user.role;
     user.role = 'customer';
     await this.userRepo.save(user);
-    await this.createAuditLog(admin.id, 'demote_admin', 'user', id, { role: 'admin' }, { role: 'customer' });
+    await this.createAuditLog(admin.id, 'demote_admin', 'user', id, { role: prevRole }, { role: 'customer' });
     return { message: 'Admin access removed' };
   }
 

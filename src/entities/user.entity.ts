@@ -31,7 +31,7 @@ export class User {
   @Column({ type: 'enum', enum: ['male', 'female', 'other'] })
   gender: string;
 
-  @Column({ type: 'enum', enum: ['customer', 'admin'], default: 'customer' })
+  @Column({ type: 'enum', enum: ['customer', 'associate', 'moderator', 'admin', 'super_admin'], default: 'customer' })
   role: string;
 
   @Column({ type: 'varchar', length: 100, nullable: true })

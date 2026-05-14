@@ -14,13 +14,16 @@ import {
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { VoucherService } from './voucher.service';
 import { CreateVoucherDto, UpdateVoucherDto } from './dto/voucher.dto';
+import { Roles } from '../common/decorators/roles.decorator';
 
 @ApiTags('Admin — Vouchers')
 @Controller('admin/vouchers')
 @ApiBearerAuth()
+@Roles('associate') // Base: read access for any admin role
 export class VoucherController {
   constructor(private readonly voucherService: VoucherService) {}
 
+  @Roles('admin')
   @Post()
   @ApiOperation({ summary: 'Create a voucher' })
   create(@Request() req, @Body() dto: CreateVoucherDto) {
@@ -68,6 +71,7 @@ export class VoucherController {
     return this.voucherService.findOne(id);
   }
 
+  @Roles('admin')
   @Patch(':id')
   @ApiOperation({ summary: 'Update a voucher' })
   update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateVoucherDto) {
