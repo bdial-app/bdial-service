@@ -11,6 +11,7 @@ import {
   Photo,
   ProviderOffer,
   SponsoredListing,
+  Product,
 } from '../entities';
 import { CategoryPersonalizationService } from '../users/category-personalization.service';
 import { HomeFeedDto } from './dto/home-feed.dto';
@@ -34,6 +35,7 @@ export class HomeService {
     @InjectRepository(Photo) private photoRepo: Repository<Photo>,
     @InjectRepository(ProviderOffer) private offerRepo: Repository<ProviderOffer>,
     @InjectRepository(SponsoredListing) private sponsoredRepo: Repository<SponsoredListing>,
+    @InjectRepository(Product) private productRepo: Repository<Product>,
     private readonly categoryPersonalization: CategoryPersonalizationService,
     private readonly dataSource: DataSource,
     @Inject(CACHE_MANAGER) private cacheManager: Cache,
@@ -118,13 +120,14 @@ export class HomeService {
     const { lat, lng, city } = dto;
 
     // Phase 1: Fetch sponsored first (they get priority placement)
-    const [sponsoredProviders, promoBanners, trendingCategories, communityReviews, platformStats] =
+    const [sponsoredProviders, promoBanners, trendingCategories, communityReviews, platformStats, bestProducts] =
       await Promise.all([
         this.getSponsoredProviders(lat, lng, city, 6),
         this.getActivePromoBanners(),
         this.getTrendingCategories(6),
         this.getCommunityReviews(10),
         this.getPlatformStats(),
+        this.getBestProductsThisWeek(lat, lng, city, 10),
       ]);
 
     // Collect sponsored provider IDs so we never repeat them in other sections
@@ -225,6 +228,7 @@ export class HomeService {
       dealsAroundYou: dedupedDeals,
       sponsoredProviders,
       womenLedProviders: dedupedWomenLed,
+      bestProducts,
       searchPrompts,
     };
   }
@@ -1511,6 +1515,60 @@ export class HomeService {
 
     // Cache for 2 minutes
     await this.cacheManager.set(cacheKey, result, 2 * 60 * 1000);
+    return result;
+  }
+
+  // ─── Best Products This Week ──────────────────────────────────────
+
+  /**
+   * Hero products from active providers — for "Best Products This Week" home section.
+   * Returns hero-marked products from active/unverified providers, scoped by city/location.
+   */
+  async getBestProductsThisWeek(
+    lat?: number,
+    lng?: number,
+    city?: string,
+    limit = 10,
+  ) {
+    const cacheKey = `home:best-products:${city || 'all'}:${lat?.toFixed(1) || ''}:${lng?.toFixed(1) || ''}`;
+    const cached = await this.cacheManager.get<any[]>(cacheKey);
+    if (cached) return cached;
+
+    let cityCondition = '';
+    const params: any[] = [];
+
+    if (city) {
+      params.push(`%${city}%`);
+      cityCondition = `AND p.city ILIKE $${params.length}`;
+    }
+
+    const result = await this.dataSource.query(`
+      SELECT
+        prod.id,
+        prod.name,
+        prod.photo_url AS "photoUrl",
+        prod.photo_urls AS "photoUrls",
+        prod.price,
+        prod.currency,
+        prod.product_type AS "productType",
+        prod.description,
+        p.id AS "providerId",
+        p.brand_name AS "providerName",
+        p.profile_photo_url AS "providerImage",
+        p.city AS "providerCity",
+        p.area AS "providerArea",
+        p.status AS "providerStatus"
+      FROM products prod
+      JOIN providers p ON p.id = prod.provider_id
+      WHERE prod.is_hero = true
+        AND prod.is_active = true
+        AND p.status IN ('active', 'unverified')
+        ${cityCondition}
+      ORDER BY prod.display_order ASC, prod.name ASC
+      LIMIT ${limit}
+    `, params);
+
+    await this.cacheManager.set(cacheKey, result, HomeService.TTL_2MIN);
     return result;
   }
 }

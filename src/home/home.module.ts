@@ -13,6 +13,7 @@ import {
   SponsoredListing,
   UserCategoryInteraction,
   User,
+  Product,
 } from '../entities';
 import { CategoryPersonalizationService } from '../users/category-personalization.service';
 
@@ -29,6 +30,7 @@ import { CategoryPersonalizationService } from '../users/category-personalizatio
       SponsoredListing,
       UserCategoryInteraction,
       User,
+      Product,
     ]),
   ],
   controllers: [HomeController],

@@ -40,6 +40,16 @@ export class ProductsService {
     // Content moderation: check product name and description
     this.checkProductContent(dto.name, dto.description);
 
+    // Enforce hero product limit (max 3 per provider)
+    if (dto.isHero) {
+      const heroCount = await this.productRepo.count({
+        where: { providerId: dto.providerId, isHero: true },
+      });
+      if (heroCount >= 3) {
+        throw new BadRequestException('Maximum 3 hero products allowed. Remove hero status from another product first.');
+      }
+    }
+
     // Backward compat: if photoUrls not provided, derive from photoUrl
     const photoUrls = dto.photoUrls?.length
       ? dto.photoUrls
@@ -76,6 +86,16 @@ export class ProductsService {
     // Content moderation: check product name and description
     this.checkProductContent(dto.name, dto.description);
 
+    // Enforce hero product limit (max 3 per provider) when promoting to hero
+    if (dto.isHero === true && !product.isHero) {
+      const heroCount = await this.productRepo.count({
+        where: { providerId: product.providerId, isHero: true },
+      });
+      if (heroCount >= 3) {
+        throw new BadRequestException('Maximum 3 hero products allowed. Remove hero status from another product first.');
+      }
+    }
+
     // Keep photoUrl in sync with photoUrls[0]
     if (dto.photoUrls !== undefined) {
       dto.photoUrl = dto.photoUrls[0] ?? null;
@@ -108,7 +128,7 @@ export class ProductsService {
   async findByProvider(providerId: string, page = 1, limit = 20) {
     const [data, total] = await this.productRepo.findAndCount({
       where: { providerId },
-      order: { displayOrder: 'ASC', name: 'ASC' },
+      order: { isHero: 'DESC', displayOrder: 'ASC', name: 'ASC' },
       take: limit,
       skip: (page - 1) * limit,
     });
@@ -150,10 +170,10 @@ export class ProductsService {
       }),
     ]);
 
-    // Related products: other active products from the same provider
+    // Related products: other active products from the same provider (hero first)
     const related = await this.productRepo.find({
       where: { providerId: provider.id, isActive: true, id: Not(product.id) },
-      order: { displayOrder: 'ASC' },
+      order: { isHero: 'DESC', displayOrder: 'ASC' },
       take: 8,
     });
 

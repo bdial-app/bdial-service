@@ -10,6 +10,7 @@ import { Provider } from './provider.entity';
 
 @Entity('products')
 @Index(['providerId', 'isActive'])
+@Index(['providerId', 'isHero'])
 export class Product {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -43,6 +44,9 @@ export class Product {
 
   @Column({ name: 'product_type', type: 'varchar', length: 10, default: 'product' })
   productType: 'product' | 'service';
+
+  @Column({ name: 'is_hero', type: 'boolean', default: false })
+  isHero: boolean;
 
   @ManyToOne(() => Provider, (p) => p.products)
   @JoinColumn({ name: 'provider_id' })

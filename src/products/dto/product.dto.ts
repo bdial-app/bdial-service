@@ -62,6 +62,12 @@ export class CreateProductDto {
   @IsOptional()
   @IsIn(['product', 'service'])
   productType?: 'product' | 'service';
+
+  @ApiPropertyOptional({ description: 'Mark as hero/showcase product (max 3 per provider)' })
+  @IsOptional()
+  @IsBoolean()
+  @Transform(({ value }) => value === 'true' || value === true)
+  isHero?: boolean;
 }
 
 export class UpdateProductDto {
@@ -121,4 +127,10 @@ export class UpdateProductDto {
   @IsInt()
   @Min(0)
   displayOrder?: number;
+
+  @ApiPropertyOptional({ description: 'Mark as hero/showcase product (max 3 per provider)' })
+  @IsOptional()
+  @IsBoolean()
+  @Transform(({ value }) => value === 'true' || value === true)
+  isHero?: boolean;
 }
