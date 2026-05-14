@@ -1542,7 +1542,8 @@ export class HomeService {
       cityCondition = `AND p.city ILIKE $${params.length}`;
     }
 
-    const result = await this.dataSource.query(`
+    // First try hero products
+    let result = await this.dataSource.query(`
       SELECT
         prod.id,
         prod.name,
@@ -1552,6 +1553,7 @@ export class HomeService {
         prod.currency,
         prod.product_type AS "productType",
         prod.description,
+        prod.is_hero AS "isHero",
         p.id AS "providerId",
         p.brand_name AS "providerName",
         p.profile_photo_url AS "providerImage",
@@ -1567,6 +1569,52 @@ export class HomeService {
       ORDER BY prod.display_order ASC, prod.name ASC
       LIMIT ${limit}
     `, params);
+
+    // Fallback: if no hero products, show newest active products with images
+    if (result.length < 3) {
+      const fallbackParams: any[] = [];
+      let fallbackCityCondition = '';
+      if (city) {
+        fallbackParams.push(`%${city}%`);
+        fallbackCityCondition = `AND p.city ILIKE $${fallbackParams.length}`;
+      }
+      const fallbackLimit = limit - result.length;
+      const existingIds = result.map((r: any) => r.id);
+      const excludeCondition = existingIds.length > 0
+        ? `AND prod.id NOT IN (${existingIds.map((_: any, i: number) => `$${fallbackParams.length + i + 1}`).join(',')})`
+        : '';
+      if (existingIds.length > 0) fallbackParams.push(...existingIds);
+
+      const fallback = await this.dataSource.query(`
+        SELECT
+          prod.id,
+          prod.name,
+          prod.photo_url AS "photoUrl",
+          prod.photo_urls AS "photoUrls",
+          prod.price,
+          prod.currency,
+          prod.product_type AS "productType",
+          prod.description,
+          prod.is_hero AS "isHero",
+          p.id AS "providerId",
+          p.brand_name AS "providerName",
+          p.profile_photo_url AS "providerImage",
+          p.city AS "providerCity",
+          p.area AS "providerArea",
+          p.status AS "providerStatus"
+        FROM products prod
+        JOIN providers p ON p.id = prod.provider_id
+        WHERE prod.is_active = true
+          AND prod.photo_url IS NOT NULL
+          AND p.status IN ('active', 'unverified')
+          ${fallbackCityCondition}
+          ${excludeCondition}
+        ORDER BY prod.display_order ASC, p.is_featured DESC, prod.name ASC
+        LIMIT ${fallbackLimit}
+      `, fallbackParams);
+
+      result = [...result, ...fallback];
+    }
 
     await this.cacheManager.set(cacheKey, result, HomeService.TTL_2MIN);
     return result;
