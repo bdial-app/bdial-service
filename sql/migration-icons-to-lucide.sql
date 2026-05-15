@@ -300,4 +300,216 @@ UPDATE categories SET icon = 'mail', icon_color = 'rose' WHERE slug = 'wedding-i
 UPDATE categories SET icon = 'credit-card', icon_color = 'indigo' WHERE slug = 'visiting-cards';
 UPDATE categories SET icon = 'flag', icon_color = 'amber' WHERE slug = 'banners-signage';
 
+-- ╔══════════════════════════════════════════════════════════════════════════╗
+-- ║  ADDITIONAL SUBCATEGORIES — covering remaining seed slugs               ║
+-- ╚══════════════════════════════════════════════════════════════════════════╝
+
+-- Architecture
+UPDATE categories SET icon = 'drafting-compass', icon_color = 'blue' WHERE slug = 'architect';
+
+-- Art & Craft
+UPDATE categories SET icon = 'brush', icon_color = 'fuchsia' WHERE slug = 'art-painting-craft';
+
+-- Accounting subcategories
+UPDATE categories SET icon = 'file-check', icon_color = 'indigo' WHERE slug = 'audit-assurance';
+UPDATE categories SET icon = 'calculator', icon_color = 'blue' WHERE slug = 'bookkeeping-accounting';
+UPDATE categories SET icon = 'receipt', icon_color = 'emerald' WHERE slug = 'gst-tax-filing';
+UPDATE categories SET icon = 'building-2', icon_color = 'indigo' WHERE slug = 'company-registration';
+
+-- Automotive additional subcategories
+UPDATE categories SET icon = 'steering-wheel', icon_color = 'indigo' WHERE slug = 'auto-driving-school';
+UPDATE categories SET icon = 'wrench', icon_color = 'blue' WHERE slug = 'car-repair';
+UPDATE categories SET icon = 'droplet', icon_color = 'cyan' WHERE slug = 'car-wash';
+UPDATE categories SET icon = 'car', icon_color = 'teal' WHERE slug = 'used-vehicles';
+UPDATE categories SET icon = 'truck', icon_color = 'amber' WHERE slug = 'vehicle-transport-storage';
+UPDATE categories SET icon = 'bike', icon_color = 'orange' WHERE slug = 'two-wheeler';
+
+-- Health & Medical additional subcategories
+UPDATE categories SET icon = 'leaf', icon_color = 'emerald' WHERE slug = 'Ayurveda';
+UPDATE categories SET icon = 'leaf', icon_color = 'teal' WHERE slug = 'Homeopathy';
+UPDATE categories SET icon = 'flower-2', icon_color = 'emerald' WHERE slug = 'naturopathy-holistic';
+UPDATE categories SET icon = 'heart', icon_color = 'lime' WHERE slug = 'unani-tibb';
+UPDATE categories SET icon = 'leaf', icon_color = 'emerald' WHERE slug = 'health-alternative-medicine';
+UPDATE categories SET icon = 'clipboard-check', icon_color = 'blue' WHERE slug = 'health-checkup';
+UPDATE categories SET icon = 'shield-check', icon_color = 'emerald' WHERE slug = 'health-mediclaim';
+UPDATE categories SET icon = 'pill', icon_color = 'red' WHERE slug = 'Pharmacy';
+UPDATE categories SET icon = 'activity', icon_color = 'lime' WHERE slug = 'Physiotherapy';
+UPDATE categories SET icon = 'scan', icon_color = 'indigo' WHERE slug = 'radiology-imaging';
+UPDATE categories SET icon = 'test-tubes', icon_color = 'blue' WHERE slug = 'pathology-blood';
+UPDATE categories SET icon = 'smile', icon_color = 'sky' WHERE slug = 'Dentist';
+UPDATE categories SET icon = 'stethoscope', icon_color = 'blue' WHERE slug = 'vet-hospital';
+
+-- Pest Control subcategories
+UPDATE categories SET icon = 'bug', icon_color = 'amber' WHERE slug = 'bedbug-mosquito';
+UPDATE categories SET icon = 'bug', icon_color = 'lime' WHERE slug = 'cockroach-general';
+UPDATE categories SET icon = 'bug', icon_color = 'orange' WHERE slug = 'rodent-control';
+UPDATE categories SET icon = 'bug', icon_color = 'red' WHERE slug = 'termite-treatment';
+
+-- Digital Marketing subcategories
+UPDATE categories SET icon = 'globe', icon_color = 'blue' WHERE slug = 'seo-content';
+UPDATE categories SET icon = 'share-2', icon_color = 'pink' WHERE slug = 'social-media-marketing';
+UPDATE categories SET icon = 'mouse-pointer-click', icon_color = 'orange' WHERE slug = 'ppc-advertising';
+UPDATE categories SET icon = 'palette', icon_color = 'fuchsia' WHERE slug = 'branding-design';
+
+-- Cleaning subcategories
+UPDATE categories SET icon = 'spray-can', icon_color = 'teal' WHERE slug = 'home-cleaning';
+UPDATE categories SET icon = 'building', icon_color = 'blue' WHERE slug = 'office-cleaning';
+UPDATE categories SET icon = 'sofa', icon_color = 'orange' WHERE slug = 'carpet-sofa-cleaning';
+UPDATE categories SET icon = 'droplets', icon_color = 'cyan' WHERE slug = 'tank-cleaning';
+
+-- Laundry subcategories
+UPDATE categories SET icon = 'shirt', icon_color = 'cyan' WHERE slug = 'laundry-ironing';
+UPDATE categories SET icon = 'sparkles', icon_color = 'violet' WHERE slug = 'dry-cleaning-premium';
+UPDATE categories SET icon = 'sofa', icon_color = 'teal' WHERE slug = 'laundry-carpet-sofa-cleaning';
+
+-- Painting subcategories
+UPDATE categories SET icon = 'paint-roller', icon_color = 'cyan' WHERE slug = 'interior-painting';
+UPDATE categories SET icon = 'paint-bucket', icon_color = 'amber' WHERE slug = 'exterior-painting';
+UPDATE categories SET icon = 'droplets', icon_color = 'blue' WHERE slug = 'waterproofing-services';
+
+-- Packers & Movers subcategories
+UPDATE categories SET icon = 'home', icon_color = 'amber' WHERE slug = 'local-shifting';
+UPDATE categories SET icon = 'truck', icon_color = 'orange' WHERE slug = 'intercity-moving';
+UPDATE categories SET icon = 'building-2', icon_color = 'blue' WHERE slug = 'office-relocation';
+
+-- Insurance subcategories
+UPDATE categories SET icon = 'shield', icon_color = 'emerald' WHERE slug = 'Insurance';
+UPDATE categories SET icon = 'heart-pulse', icon_color = 'red' WHERE slug = 'life-term-insurance';
+UPDATE categories SET icon = 'shield-check', icon_color = 'blue' WHERE slug = 'health-mediclaim';
+UPDATE categories SET icon = 'car', icon_color = 'indigo' WHERE slug = 'motor-vehicle-insurance';
+UPDATE categories SET icon = 'building', icon_color = 'amber' WHERE slug = 'property-business-insurance';
+
+-- Loans & Finance subcategories
+UPDATE categories SET icon = 'wallet', icon_color = 'amber' WHERE slug = 'loans-finance';
+
+-- CA & Tax subcategories
+UPDATE categories SET icon = 'calculator', icon_color = 'blue' WHERE slug = 'ca-tax';
+
+-- Electrical Goods subcategories
+UPDATE categories SET icon = 'cable', icon_color = 'amber' WHERE slug = 'wires-cables';
+UPDATE categories SET icon = 'toggle-right', icon_color = 'blue' WHERE slug = 'switches-fittings';
+UPDATE categories SET icon = 'fan', icon_color = 'sky' WHERE slug = 'fans-ventilation';
+UPDATE categories SET icon = 'lightbulb', icon_color = 'yellow' WHERE slug = 'led-decorative-lighting';
+
+-- Marble & Tiles subcategories
+UPDATE categories SET icon = 'square', icon_color = 'amber' WHERE slug = 'marble-granite';
+UPDATE categories SET icon = 'grid-3x3', icon_color = 'teal' WHERE slug = 'ceramic-vitrified-tiles';
+UPDATE categories SET icon = 'layers', icon_color = 'orange' WHERE slug = 'natural-stone-cladding';
+
+-- Welding & Fabrication subcategories
+UPDATE categories SET icon = 'fence', icon_color = 'amber' WHERE slug = 'gates-grills-railings';
+UPDATE categories SET icon = 'container', icon_color = 'blue' WHERE slug = 'sheet-metal-ducting';
+UPDATE categories SET icon = 'warehouse', icon_color = 'indigo' WHERE slug = 'structural-steel-sheds';
+
+-- Construction subcategories (additional)
+UPDATE categories SET icon = 'brick-wall', icon_color = 'orange' WHERE slug = 'mason';
+
+-- Home Services additional
+UPDATE categories SET icon = 'zap', icon_color = 'yellow' WHERE slug = 'electrical';
+UPDATE categories SET icon = 'wrench', icon_color = 'blue' WHERE slug = 'Plumbing';
+UPDATE categories SET icon = 'axe', icon_color = 'amber' WHERE slug = 'Carpentry';
+UPDATE categories SET icon = 'paint-roller', icon_color = 'cyan' WHERE slug = 'home-painting-waterproofing';
+UPDATE categories SET icon = 'bug', icon_color = 'lime' WHERE slug = 'home-pest-control';
+
+-- Agriculture subcategories
+UPDATE categories SET icon = 'tractor', icon_color = 'lime' WHERE slug = 'farm-supplies';
+UPDATE categories SET icon = 'flower-2', icon_color = 'emerald' WHERE slug = 'organic-gardening';
+UPDATE categories SET icon = 'tree-pine', icon_color = 'emerald' WHERE slug = 'plant-nursery';
+UPDATE categories SET icon = 'trees', icon_color = 'lime' WHERE slug = 'landscaping-lawn';
+
+-- Music & Arts subcategories
+UPDATE categories SET icon = 'music', icon_color = 'fuchsia' WHERE slug = 'music-arts';
+UPDATE categories SET icon = 'guitar', icon_color = 'violet' WHERE slug = 'music-instrument-vocal';
+UPDATE categories SET icon = 'disc-3', icon_color = 'pink' WHERE slug = 'dance-academy';
+
+-- Printing subcategories (additional)
+UPDATE categories SET icon = 'shirt', icon_color = 'amber' WHERE slug = 'merchandise-printing';
+UPDATE categories SET icon = 'heart', icon_color = 'rose' WHERE slug = 'wedding-cards';
+
+-- Fashion subcategories (additional)
+UPDATE categories SET icon = 'shirt', icon_color = 'indigo' WHERE slug = 'Men';
+UPDATE categories SET icon = 'shirt', icon_color = 'pink' WHERE slug = 'Women';
+UPDATE categories SET icon = 'baby', icon_color = 'sky' WHERE slug = 'Kids';
+UPDATE categories SET icon = 'footprints', icon_color = 'amber' WHERE slug = 'Footwear';
+
+-- Florist
+UPDATE categories SET icon = 'flower', icon_color = 'pink' WHERE slug = 'Florist';
+
+-- Mobile & Telecom additional
+UPDATE categories SET icon = 'smartphone', icon_color = 'blue' WHERE slug = 'mobile-sales';
+UPDATE categories SET icon = 'wrench', icon_color = 'indigo' WHERE slug = 'mobile-repair-telecom';
+UPDATE categories SET icon = 'radio', icon_color = 'sky' WHERE slug = 'recharge-plans';
+
+-- Pet Care additional
+UPDATE categories SET icon = 'paw-print', icon_color = 'emerald' WHERE slug = 'pet-boarding';
+UPDATE categories SET icon = 'paw-print', icon_color = 'orange' WHERE slug = 'pet-shop';
+
+-- Photography additional
+UPDATE categories SET icon = 'mic', icon_color = 'indigo' WHERE slug = 'event-corporate-photography';
+
+-- Mehndi additional
+UPDATE categories SET icon = 'shirt', icon_color = 'violet' WHERE slug = 'rida-abaya';
+
+-- Tuition additional
+UPDATE categories SET icon = 'moon-star', icon_color = 'emerald' WHERE slug = 'quran-islamic';
+
+-- Travel additional
+UPDATE categories SET icon = 'ticket', icon_color = 'violet' WHERE slug = 'visa-services';
+
+-- Electronics additional
+UPDATE categories SET icon = 'laptop', icon_color = 'indigo' WHERE slug = 'laptop-repair';
+UPDATE categories SET icon = 'tv', icon_color = 'sky' WHERE slug = 'tv-repair';
+
+-- Catering additional
+UPDATE categories SET icon = 'utensils', icon_color = 'orange' WHERE slug = 'party-food';
+
+-- Jewellery additional
+UPDATE categories SET icon = 'watch', icon_color = 'indigo' WHERE slug = 'watch-repair';
+
+-- Web Dev additional
+UPDATE categories SET icon = 'globe', icon_color = 'blue' WHERE slug = 'web-app-dev';
+
+-- Interior Design additional
+UPDATE categories SET icon = 'cloud', icon_color = 'sky' WHERE slug = 'false-ceiling';
+
+-- ╔══════════════════════════════════════════════════════════════════════════╗
+-- ║  MISSING SEED SLUGS — short slugs used in seed-categories-keywords.sql ║
+-- ╚══════════════════════════════════════════════════════════════════════════╝
+
+-- Top-level categories with short slugs
+UPDATE categories SET icon = 'heart-pulse', icon_color = 'red' WHERE slug = 'health';
+UPDATE categories SET icon = 'dumbbell', icon_color = 'lime' WHERE slug = 'fitness';
+UPDATE categories SET icon = 'armchair', icon_color = 'orange' WHERE slug = 'furniture';
+UPDATE categories SET icon = 'printer', icon_color = 'violet' WHERE slug = 'printing';
+UPDATE categories SET icon = 'gem', icon_color = 'yellow' WHERE slug = 'jewellery';
+UPDATE categories SET icon = 'plane', icon_color = 'sky' WHERE slug = 'travel';
+UPDATE categories SET icon = 'shirt', icon_color = 'cyan' WHERE slug = 'laundry';
+UPDATE categories SET icon = 'shopping-cart', icon_color = 'emerald' WHERE slug = 'grocery';
+UPDATE categories SET icon = 'shirt', icon_color = 'pink' WHERE slug = 'fashion';
+UPDATE categories SET icon = 'monitor', icon_color = 'blue' WHERE slug = 'it-services';
+UPDATE categories SET icon = 'sprout', icon_color = 'lime' WHERE slug = 'agriculture';
+UPDATE categories SET icon = 'truck', icon_color = 'amber' WHERE slug = 'courier';
+UPDATE categories SET icon = 'pencil', icon_color = 'blue' WHERE slug = 'stationery';
+UPDATE categories SET icon = 'wrench', icon_color = 'amber' WHERE slug = 'hardware-materials';
+UPDATE categories SET icon = 'bath', icon_color = 'cyan' WHERE slug = 'sanitary-ware';
+UPDATE categories SET icon = 'blocks', icon_color = 'yellow' WHERE slug = 'toys-kids';
+UPDATE categories SET icon = 'moon-star', icon_color = 'emerald' WHERE slug = 'islamic-goods';
+UPDATE categories SET icon = 'pill', icon_color = 'red' WHERE slug = 'pharmacy';
+UPDATE categories SET icon = 'milk', icon_color = 'amber' WHERE slug = 'dairy-products';
+UPDATE categories SET icon = 'shield-check', icon_color = 'emerald' WHERE slug = 'insurance';
+UPDATE categories SET icon = 'flower', icon_color = 'pink' WHERE slug = 'florist';
+UPDATE categories SET icon = 'tree-pine', icon_color = 'emerald' WHERE slug = 'nursery-plants';
+UPDATE categories SET icon = 'cup-soda', icon_color = 'orange' WHERE slug = 'juice-beverages';
+UPDATE categories SET icon = 'video', icon_color = 'indigo' WHERE slug = 'cctv-smart-home';
+UPDATE categories SET icon = 'footprints', icon_color = 'pink' WHERE slug = 'footwear';
+UPDATE categories SET icon = 'layout-grid', icon_color = 'orange' WHERE slug = 'modular-kitchen-wardrobe';
+UPDATE categories SET icon = 'luggage', icon_color = 'indigo' WHERE slug = 'bags-luggage';
+
+-- Subcategories with short slugs
+UPDATE categories SET icon = 'leaf', icon_color = 'emerald' WHERE slug = 'ayurveda';
+UPDATE categories SET icon = 'stethoscope', icon_color = 'teal' WHERE slug = 'homeopathy';
+UPDATE categories SET icon = 'pill-bottle', icon_color = 'blue' WHERE slug = 'pharmacy-sub';
+UPDATE categories SET icon = 'flower-2', icon_color = 'pink' WHERE slug = 'event-florist';
+UPDATE categories SET icon = 'footprints', icon_color = 'amber' WHERE slug = 'footwear-store';
+
 COMMIT;
