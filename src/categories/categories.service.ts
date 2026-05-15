@@ -151,6 +151,72 @@ export class CategoriesService {
     return result;
   }
 
+  /**
+   * Suggest top-level categories that best match free-text input
+   * (business name + description). Uses keyword partial matching + full-text
+   * search on the category search_vector, returning up to 6 ranked results.
+   */
+  async suggestByText(text: string): Promise<any[]> {
+    // Sanitize: keep alphanumeric, spaces, basic punctuation
+    const clean = text.replace(/[^\w\s\u0600-\u06FF\u0900-\u097F.,'-]/g, ' ').trim();
+    if (!clean) return [];
+
+    // Build tsquery from words (prefix matching for partial input)
+    const words = clean
+      .split(/\s+/)
+      .filter((w) => w.length >= 2)
+      .slice(0, 15); // cap to avoid giant queries
+    if (words.length === 0) return [];
+
+    const tsQuery = words.map((w) => `${w}:*`).join(' | ');
+    const ilikeParts = words.map((_, i) => `kw ILIKE '%' || $${i + 2} || '%'`).join(' OR ');
+
+    const raw: any[] = await this.categoryRepo.query(
+      `
+      SELECT
+        c.id,
+        c.name,
+        c.slug,
+        c.icon,
+        c.image_url AS "imageUrl",
+        c.description,
+        (
+          -- Full-text rank on category search_vector
+          COALESCE(ts_rank_cd(c.search_vector, to_tsquery('english', $1)), 0) * 2.0
+          +
+          -- Keyword partial match score
+          (SELECT COUNT(*)::float FROM unnest(c.keywords) kw WHERE ${ilikeParts}) * 1.5
+          +
+          -- Name direct match bonus
+          CASE WHEN c.name ILIKE '%' || $${words.length + 2} || '%' THEN 3.0 ELSE 0.0 END
+        ) AS score
+      FROM categories c
+      WHERE c.parent_id IS NULL
+        AND c.is_active = true
+        AND (
+          c.search_vector @@ to_tsquery('english', $1)
+          OR EXISTS (SELECT 1 FROM unnest(c.keywords) kw WHERE ${ilikeParts})
+          OR c.name ILIKE '%' || $${words.length + 2} || '%'
+        )
+      ORDER BY score DESC, c.display_order ASC
+      LIMIT 6
+      `,
+      [tsQuery, ...words, clean],
+    );
+
+    return raw
+      .filter((r) => parseFloat(r.score) > 0)
+      .map((r) => ({
+        id: r.id,
+        name: r.name,
+        slug: r.slug,
+        icon: r.icon,
+        imageUrl: r.imageUrl,
+        description: r.description,
+        score: parseFloat(r.score),
+      }));
+  }
+
   async findTree(): Promise<any[]> {
     const all = await this.categoryRepo.find({
       where: { isActive: true },

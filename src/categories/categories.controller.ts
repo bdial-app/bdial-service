@@ -77,6 +77,24 @@ export class CategoriesController {
     return this.categoriesService.findTree();
   }
 
+  @Post('suggest')
+  @ApiOperation({ summary: 'Suggest categories based on business title and description' })
+  @ApiResponse({ status: 200, description: 'Suggested categories returned' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Business name / brand name' },
+        description: { type: 'string', description: 'Business description' },
+      },
+    },
+  })
+  suggestCategories(@Body() body: { title?: string; description?: string }) {
+    const text = [body.title, body.description].filter(Boolean).join(' ');
+    if (!text.trim()) return [];
+    return this.categoriesService.suggestByText(text.trim());
+  }
+
   @Get(':parentId/subcategories')
   @ApiOperation({ summary: 'Get sub-categories by parent ID with pagination' })
   @ApiResponse({
