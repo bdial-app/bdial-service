@@ -95,8 +95,18 @@ export class CategoriesController {
     return this.categoriesService.suggestByText(text.trim());
   }
 
-  @Get(':parentId/subcategories')
-  @ApiOperation({ summary: 'Get sub-categories by parent ID with pagination' })
+  @Get('search')
+  @ApiOperation({ summary: 'Search categories across all levels by text' })
+  @ApiQuery({ name: 'q', required: true, description: 'Search query' })
+  @ApiQuery({ name: 'limit', required: false, example: 10 })
+  @ApiResponse({ status: 200, description: 'Matching categories returned' })
+  searchCategories(@Query('q') q: string, @Query('limit') limit?: number) {
+    if (!q || !q.trim()) return [];
+    return this.categoriesService.searchAllCategories(q.trim(), Math.min(Number(limit) || 10, 20));
+  }
+
+  @Get(':parentId/sub-categories')
+  @ApiOperation({ summary: 'Get sub-categories by parent ID with provider counts' })
   @ApiResponse({
     status: 200,
     description: 'Sub-categories retrieved successfully',
@@ -104,7 +114,7 @@ export class CategoriesController {
   @ApiResponse({ status: 404, description: 'Parent category not found' })
   @ApiParam({ name: 'parentId', description: 'Parent category ID' })
   @ApiQuery({ name: 'page', required: false, example: 1 })
-  @ApiQuery({ name: 'limit', required: false, example: 10 })
+  @ApiQuery({ name: 'limit', required: false, example: 50 })
   findSubCategories(
     @Param('parentId') parentId: string,
     @Query() paginationDto: PaginationDto,
