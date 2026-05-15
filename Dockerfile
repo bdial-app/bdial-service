@@ -21,6 +21,7 @@ COPY package.json ./
 RUN yarn install --production && yarn cache clean
 
 COPY --from=builder /usr/src/app/dist ./dist
+COPY sql ./sql
 
 ENV NODE_ENV=production
 
