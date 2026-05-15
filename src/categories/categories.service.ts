@@ -352,6 +352,20 @@ export class CategoriesService {
     if (data.name) data.slug = slugify(data.name);
     await this.categoryRepo.update(id, data);
     await this.cacheManager.del(CategoriesService.TOP_LEVEL_CACHE_KEY);
+
+    // If keywords or name changed, rebuild search vectors of all providers in this category
+    if (data.keywords || data.name) {
+      await this.categoryRepo.query(
+        `UPDATE providers SET updated_at = NOW()
+         WHERE id IN (
+           SELECT DISTINCT pc.provider_id FROM provider_categories pc
+           WHERE pc.category_id = $1
+              OR pc.category_id IN (SELECT c2.id FROM categories c2 WHERE c2.parent_id = $1)
+         )`,
+        [id],
+      );
+    }
+
     return this.categoryRepo.findOneBy({ id });
   }
 
