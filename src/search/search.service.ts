@@ -511,10 +511,16 @@ export class SearchService implements OnModuleInit {
     // When filtering by category, don't require text match
     if (!hasCategoryFilter) {
       conditions.push(`(
-        ($2 <> '' AND to_tsvector('english', COALESCE(p.brand_name, '') || ' ' || COALESCE(p.description, '')) @@ to_tsquery('english', $2))
+        ($2 <> '' AND p.search_vector @@ to_tsquery('english', $2))
         OR similarity(p.brand_name, $1) > 0.1
         OR p.brand_name ILIKE $1 || '%'
         OR p.brand_name ILIKE '%' || $1 || '%'
+        OR EXISTS (
+          SELECT 1 FROM provider_categories pc3
+          JOIN categories c3 ON c3.id = pc3.category_id
+          WHERE pc3.provider_id = p.id
+          AND (c3.name ILIKE '%' || $1 || '%' OR EXISTS (SELECT 1 FROM unnest(c3.keywords) kw WHERE kw ILIKE '%' || $1 || '%'))
+        )
       )`);
     }
 
@@ -555,7 +561,7 @@ export class SearchService implements OnModuleInit {
           ($2 <> '' AND search_vector @@ to_tsquery('english', $2))
           OR similarity(name, $1) > 0.3
           OR name ILIKE '%' || $1 || '%'
-          OR $1 = ANY(keywords)
+          OR EXISTS (SELECT 1 FROM unnest(keywords) kw WHERE kw ILIKE '%' || $1 || '%' OR similarity(kw, $1) > 0.3)
         )
       ),
       active_offers AS (
@@ -601,7 +607,7 @@ export class SearchService implements OnModuleInit {
           ao.discount_type,
           asp.provider_id IS NOT NULL AS is_sponsored,
           (
-            CASE WHEN $2 <> '' THEN COALESCE(ts_rank_cd(to_tsvector('english', COALESCE(p.brand_name, '') || ' ' || COALESCE(p.description, '')), to_tsquery('english', $2)), 0) * 0.22 ELSE 0 END +
+            CASE WHEN $2 <> '' THEN COALESCE(ts_rank_cd(p.search_vector, to_tsquery('english', $2), 32), 0) * 0.22 ELSE 0 END +
             COALESCE(similarity(p.brand_name, $1), 0) * 0.08 +
             CASE WHEN EXISTS (
               SELECT 1 FROM provider_categories pc2
@@ -611,18 +617,15 @@ export class SearchService implements OnModuleInit {
             CASE WHEN asp.provider_id IS NOT NULL THEN 0.08 ELSE 0 END +
             COALESCE(rs.avg_rating / 5.0, 0) * 0.13 +
             LEAST(COALESCE(LOG(rs.review_count + 1) / LOG(50), 0), 1.0) * 0.07 +
-            CASE WHEN ${distExpr} IS NOT NULL THEN (1.0 - LEAST(${distExpr} / ${radiusParam}::float, 1.0)) * 0.10 ELSE 0 END +
-            CASE WHEN p.is_featured THEN 0.04 ELSE 0 END +
+            CASE WHEN ${distExpr} IS NOT NULL THEN (1.0 - LEAST(${distExpr} / ${radiusParam}::float, 1.0)) * 0.15 ELSE 0 END +
+            CASE WHEN p.is_featured THEN 0.02 ELSE 0 END +
             CASE WHEN p.status = 'active' THEN 0.02 ELSE 0 END +
             CASE WHEN p.updated_at > NOW() - INTERVAL '30 days' THEN 0.01 ELSE 0 END +
-            CASE WHEN p.women_led_status = 'approved' THEN 0.05 ELSE 0 END
+            CASE WHEN p.women_led_status = 'approved' THEN 0.03 ELSE 0 END
           ) AS relevance_score,
           COUNT(*) OVER() AS total_count
         FROM providers p
-        LEFT JOIN (
-          SELECT rv.provider_id, AVG(rv.star_rating)::numeric(2,1) AS avg_rating, COUNT(*)::int AS review_count
-          FROM reviews rv WHERE rv.status = 'active' GROUP BY rv.provider_id
-        ) rs ON rs.provider_id = p.id
+        LEFT JOIN provider_rating_stats rs ON rs.provider_id = p.id
         LEFT JOIN cat_names cn ON cn.provider_id = p.id
         LEFT JOIN active_offers ao ON ao.provider_id = p.id
         LEFT JOIN active_sponsorships asp ON asp.provider_id = p.id
@@ -734,9 +737,15 @@ export class SearchService implements OnModuleInit {
       // Text match (skip if category filter)
       if (!hasCategoryFilter) {
         conditions.push(`(
-          ($2 <> '' AND to_tsvector('english', COALESCE(p.brand_name, '') || ' ' || COALESCE(p.description, '')) @@ to_tsquery('english', $2))
+          ($2 <> '' AND p.search_vector @@ to_tsquery('english', $2))
           OR similarity(p.brand_name, $1) > 0.1
           OR p.brand_name ILIKE '%' || $1 || '%'
+          OR EXISTS (
+            SELECT 1 FROM provider_categories pc3
+            JOIN categories c3 ON c3.id = pc3.category_id
+            WHERE pc3.provider_id = p.id
+            AND (c3.name ILIKE '%' || $1 || '%' OR EXISTS (SELECT 1 FROM unnest(c3.keywords) kw WHERE kw ILIKE '%' || $1 || '%'))
+          )
         )`);
       }
 
@@ -751,10 +760,7 @@ export class SearchService implements OnModuleInit {
           po.discount_value AS sort_discount
         FROM providers p
         JOIN provider_offers po ON po.provider_id = p.id
-        LEFT JOIN (
-          SELECT rv.provider_id, AVG(rv.star_rating)::numeric(2,1) AS avg_rating, COUNT(*)::int AS review_count
-          FROM reviews rv WHERE rv.status = 'active' GROUP BY rv.provider_id
-        ) rs ON rs.provider_id = p.id
+        LEFT JOIN provider_rating_stats rs ON rs.provider_id = p.id
         WHERE ${conditions.join(' AND ')}
         ORDER BY p.id, po.discount_value DESC
       `;
@@ -853,9 +859,15 @@ export class SearchService implements OnModuleInit {
 
       if (!hasCategoryFilter) {
         conditions.push(`(
-          ($2 <> '' AND to_tsvector('english', COALESCE(p.brand_name, '') || ' ' || COALESCE(p.description, '')) @@ to_tsquery('english', $2))
+          ($2 <> '' AND p.search_vector @@ to_tsquery('english', $2))
           OR similarity(p.brand_name, $1) > 0.1
           OR p.brand_name ILIKE '%' || $1 || '%'
+          OR EXISTS (
+            SELECT 1 FROM provider_categories pc3
+            JOIN categories c3 ON c3.id = pc3.category_id
+            WHERE pc3.provider_id = p.id
+            AND (c3.name ILIKE '%' || $1 || '%' OR EXISTS (SELECT 1 FROM unnest(c3.keywords) kw WHERE kw ILIKE '%' || $1 || '%'))
+          )
         )`);
       }
 
@@ -869,10 +881,7 @@ export class SearchService implements OnModuleInit {
           rs.avg_rating, rs.review_count,
           (SELECT string_agg(DISTINCT c.name, ', ') FROM provider_categories pc JOIN categories c ON c.id = pc.category_id WHERE pc.provider_id = p.id) AS categories
         FROM providers p
-        JOIN (
-          SELECT rv.provider_id, AVG(rv.star_rating)::numeric(2,1) AS avg_rating, COUNT(*)::int AS review_count
-          FROM reviews rv WHERE rv.status = 'active' GROUP BY rv.provider_id
-        ) rs ON rs.provider_id = p.id
+        JOIN provider_rating_stats rs ON rs.provider_id = p.id
         WHERE ${conditions.join(' AND ')}
         ORDER BY rs.avg_rating DESC, rs.review_count DESC
         LIMIT $${pi}
@@ -928,7 +937,7 @@ export class SearchService implements OnModuleInit {
             ($2 <> '' AND search_vector @@ to_tsquery('english', $2))
             OR similarity(name, $1) > 0.3
             OR name ILIKE '%' || $1 || '%'
-            OR $1 = ANY(keywords)
+            OR EXISTS (SELECT 1 FROM unnest(keywords) kw WHERE kw ILIKE '%' || $1 || '%' OR similarity(kw, $1) > 0.3)
           )
         `;
         const matchedCats: { id: string }[] = await this.dataSource.query(catMatchSql, [q, prefixTsQuery]);
@@ -980,10 +989,7 @@ export class SearchService implements OnModuleInit {
           (SELECT string_agg(DISTINCT c.name, ', ') FROM provider_categories pc JOIN categories c ON c.id = pc.category_id WHERE pc.provider_id = p.id) AS categories
         FROM sponsored_listings sl
         JOIN providers p ON p.id = sl.provider_id
-        LEFT JOIN (
-          SELECT rv.provider_id, AVG(rv.star_rating)::numeric(2,1) AS avg_rating, COUNT(*)::int AS review_count
-          FROM reviews rv WHERE rv.status = 'active' GROUP BY rv.provider_id
-        ) rs ON rs.provider_id = p.id
+        LEFT JOIN provider_rating_stats rs ON rs.provider_id = p.id
         WHERE sl.is_active = true
           AND sl.starts_at <= NOW()
           AND sl.ends_at >= NOW()
@@ -1091,7 +1097,7 @@ export class SearchService implements OnModuleInit {
         prov.area AS provider_area,
         ${distExpr} AS distance,
         (
-          CASE WHEN $2 <> '' THEN COALESCE(ts_rank_cd(to_tsvector('english', prod.name || ' ' || COALESCE(prod.description, '')), to_tsquery('english', $2)), 0) * 0.6 ELSE 0 END +
+          CASE WHEN $2 <> '' THEN COALESCE(ts_rank_cd(prod.search_vector, to_tsquery('english', $2), 32), 0) * 0.6 ELSE 0 END +
           COALESCE(similarity(prod.name, $1), 0) * 0.4
         ) AS relevance_score,
         COUNT(*) OVER() AS total_count
@@ -1099,9 +1105,15 @@ export class SearchService implements OnModuleInit {
       JOIN providers prov ON prov.id = prod.provider_id
       WHERE ${whereClause}
         AND (
-          ($2 <> '' AND to_tsvector('english', prod.name || ' ' || COALESCE(prod.description, '')) @@ to_tsquery('english', $2))
+          ($2 <> '' AND prod.search_vector @@ to_tsquery('english', $2))
           OR similarity(prod.name, $1) > 0.15
           OR prod.name ILIKE '%' || $1 || '%'
+          OR EXISTS (
+            SELECT 1 FROM provider_categories pc
+            JOIN categories c ON c.id = pc.category_id
+            WHERE pc.provider_id = prod.provider_id
+            AND c.search_vector @@ to_tsquery('english', $2)
+          )
         )
       ORDER BY relevance_score DESC, distance ASC NULLS LAST
       LIMIT $${pi} OFFSET $${pi + 1}
@@ -1172,7 +1184,7 @@ export class SearchService implements OnModuleInit {
           ($2 <> '' AND c.search_vector @@ to_tsquery('english', $2))
           OR similarity(c.name, $1) > 0.15
           OR c.name ILIKE '%' || $1 || '%'
-          OR $1 = ANY(c.keywords)
+          OR EXISTS (SELECT 1 FROM unnest(c.keywords) kw WHERE kw ILIKE '%' || $1 || '%' OR similarity(kw, $1) > 0.3)
         )
       ORDER BY relevance_score DESC
       LIMIT $3 OFFSET $4
@@ -1401,9 +1413,8 @@ export class SearchService implements OnModuleInit {
           OR similarity(c.name, $1) > 0.08
           OR c.name ILIKE $1 || '%'
           OR c.name ILIKE '%' || $1 || '%'
-          OR $1 = ANY(c.keywords)
           OR EXISTS (
-            SELECT 1 FROM unnest(c.keywords) kw WHERE kw ILIKE '%' || $1 || '%'
+            SELECT 1 FROM unnest(c.keywords) kw WHERE kw ILIKE '%' || $1 || '%' OR similarity(kw, $1) > 0.3
           )
         )
       ORDER BY
@@ -1595,10 +1606,16 @@ export class SearchService implements OnModuleInit {
 
         // Lower thresholds + trigram fuzzy for relaxed search
         conditions.push(`(
-          ($2 <> '' AND to_tsvector('english', COALESCE(p.brand_name, '') || ' ' || COALESCE(p.description, '')) @@ to_tsquery('english', $2))
+          ($2 <> '' AND p.search_vector @@ to_tsquery('english', $2))
           OR similarity(p.brand_name, $1) > 0.05
           OR p.brand_name ILIKE '%' || $1 || '%'
           OR p.description ILIKE '%' || $1 || '%'
+          OR EXISTS (
+            SELECT 1 FROM provider_categories pc3
+            JOIN categories c3 ON c3.id = pc3.category_id
+            WHERE pc3.provider_id = p.id
+            AND EXISTS (SELECT 1 FROM unnest(c3.keywords) kw WHERE kw ILIKE '%' || $1 || '%' OR similarity(kw, $1) > 0.2)
+          )
         )`);
 
         params.push(6);
@@ -1611,14 +1628,11 @@ export class SearchService implements OnModuleInit {
             rs.avg_rating, COALESCE(rs.review_count, 0) AS review_count,
             (SELECT string_agg(DISTINCT c.name, ', ') FROM provider_categories pc JOIN categories c ON c.id = pc.category_id WHERE pc.provider_id = p.id) AS categories,
             GREATEST(
-              CASE WHEN $2 <> '' THEN COALESCE(ts_rank_cd(to_tsvector('english', COALESCE(p.brand_name, '') || ' ' || COALESCE(p.description, '')), to_tsquery('english', $2)), 0) ELSE 0 END,
+              CASE WHEN $2 <> '' THEN COALESCE(ts_rank_cd(p.search_vector, to_tsquery('english', $2), 32), 0) ELSE 0 END,
               similarity(p.brand_name, $1)
             ) AS relevance_score
           FROM providers p
-          LEFT JOIN (
-            SELECT rv.provider_id, AVG(rv.star_rating)::numeric(2,1) AS avg_rating, COUNT(*)::int AS review_count
-            FROM reviews rv WHERE rv.status = 'active' GROUP BY rv.provider_id
-          ) rs ON rs.provider_id = p.id
+          LEFT JOIN provider_rating_stats rs ON rs.provider_id = p.id
           WHERE ${conditions.join(' AND ')}
           ORDER BY relevance_score DESC, distance ASC NULLS LAST
           LIMIT $${pi}
@@ -1705,10 +1719,7 @@ export class SearchService implements OnModuleInit {
           (SELECT string_agg(DISTINCT c.name, ', ') FROM provider_categories pc JOIN categories c ON c.id = pc.category_id WHERE pc.provider_id = p.id) AS categories,
           COALESCE(rs.avg_rating, 0) AS relevance_score
         FROM providers p
-        LEFT JOIN (
-          SELECT rv.provider_id, AVG(rv.star_rating)::numeric(2,1) AS avg_rating, COUNT(*)::int AS review_count
-          FROM reviews rv WHERE rv.status = 'active' GROUP BY rv.provider_id
-        ) rs ON rs.provider_id = p.id
+        LEFT JOIN provider_rating_stats rs ON rs.provider_id = p.id
         WHERE p.status IN ('active', 'unverified')
           AND p.latitude IS NOT NULL AND p.longitude IS NOT NULL
           AND ${distExpr} <= $3

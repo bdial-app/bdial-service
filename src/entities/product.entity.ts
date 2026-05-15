@@ -48,6 +48,9 @@ export class Product {
   @Column({ name: 'is_hero', type: 'boolean', default: false })
   isHero: boolean;
 
+  @Column({ type: 'text', array: true, nullable: true, default: null })
+  keywords: string[] | null;
+
   @ManyToOne(() => Provider, (p) => p.products)
   @JoinColumn({ name: 'provider_id' })
   provider: Provider;
