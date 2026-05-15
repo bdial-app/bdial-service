@@ -2528,6 +2528,8 @@ export class AdminService {
 
     const prevStatus = provider.status;
     await this.providerRepo.update(providerId, { status: 'disabled' });
+    // Reset user's preferred mode to customer so they don't land in provider view
+    await this.userRepo.update(provider.userId, { preferredMode: 'customer' } as any);
     await this.createAuditLog(admin.id, 'disable_provider', 'provider', providerId, { status: prevStatus }, { status: 'disabled' });
 
     this.notificationDispatch.sendTemplated(

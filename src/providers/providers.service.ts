@@ -360,7 +360,7 @@ export class ProvidersService {
       providerStatus = 'pending';
     }
 
-    return { providerStatus, verificationStatus, provider, verification, preferredMode: user?.preferredMode ?? 'customer' };
+    return { providerStatus, verificationStatus, provider, verification, preferredMode: providerStatus === 'disabled' || providerStatus === 'deleted' ? 'customer' : (user?.preferredMode ?? 'customer') };
   }
 
   async findOne(id: string) {
