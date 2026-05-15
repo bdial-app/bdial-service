@@ -123,8 +123,10 @@ export class CategoriesService {
       ) cnt ON true
       WHERE c.parent_id IS NULL
         AND c.is_active = true
-        AND COALESCE(cnt.provider_count, 0) > 0
-      ORDER BY cnt.provider_count DESC, c.display_order ASC
+      ORDER BY
+        CASE WHEN COALESCE(cnt.provider_count, 0) > 0 THEN 0 ELSE 1 END ASC,
+        cnt.provider_count DESC,
+        c.display_order ASC
     `);
 
     const result = raw.map((r) => ({

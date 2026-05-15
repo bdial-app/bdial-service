@@ -263,15 +263,19 @@ export class CategoryPersonalizationService {
   async resolveCategoriesForQuery(query: string): Promise<string[]> {
     if (!query?.trim()) return [];
 
+    const q = query.toLowerCase().trim();
+    const tsQuery = q.split(/\s+/).filter(Boolean).map(w => w + ':*').join(' & ');
+
     const rows: any[] = await this.dataSource.query(
       `SELECT id FROM categories
        WHERE is_active = true AND (
          name ILIKE '%' || $1 || '%'
          OR slug ILIKE '%' || $1 || '%'
-         OR $1 = ANY(keywords)
+         OR EXISTS (SELECT 1 FROM unnest(keywords) kw WHERE kw ILIKE '%' || $1 || '%' OR similarity(kw, $1) > 0.3)
+         OR (search_vector IS NOT NULL AND search_vector @@ to_tsquery('english', $2))
        )
        LIMIT 5`,
-      [query.toLowerCase().trim()],
+      [q, tsQuery],
     );
 
     return rows.map((r) => r.id);
