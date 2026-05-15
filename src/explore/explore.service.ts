@@ -700,6 +700,8 @@ export class ExploreService {
 
     const raw = await qb.getRawMany();
 
+    if (raw.length === 0) return null;
+
     return {
       category: {
         id: cat.id,
