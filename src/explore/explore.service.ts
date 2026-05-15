@@ -190,6 +190,7 @@ export class ExploreService {
 
   private async getSponsoredCarousel(lat?: number, lng?: number, city?: string) {
     const now = new Date();
+    const limit = 12;
 
     const qb = this.sponsoredRepo
       .createQueryBuilder('sl')
@@ -217,14 +218,12 @@ export class ExploreService {
     this.withReviewStats(qb);
     this.withCategoryServices(qb);
 
-    // Location targeting
+    // Enforce city targeting on the listing (not the provider's city text field)
     if (city) {
       qb.andWhere(
         '(sl.target_cities IS NULL OR :city = ANY(sl.target_cities))',
         { city },
       );
-      // Ensure the provider is actually in the user's city
-      qb.andWhere('p.city ILIKE :provCity', { provCity: `%${city}%` });
     }
 
     if (lat != null && lng != null) {
@@ -235,17 +234,47 @@ export class ExploreService {
         `(sl.target_radius IS NULL OR ${haversine} <= sl.target_radius)`,
       );
       qb.orderBy('sl.cost_per_click', 'DESC')
+        .addOrderBy(haversine, 'ASC')
         .addOrderBy('RANDOM()');
     } else {
       qb.orderBy('sl.cost_per_click', 'DESC')
         .addOrderBy('RANDOM()');
     }
 
-    qb.limit(5);
+    qb.limit(limit * 2);
 
     const raw = await qb.getRawMany();
 
-    return raw.map((r) => ({
+    // Deduplicate by provider (one sponsor slot per business)
+    const seenProviders = new Set<string>();
+    const deduplicated: typeof raw = [];
+    for (const r of raw) {
+      if (seenProviders.has(r.id)) continue;
+      seenProviders.add(r.id);
+      deduplicated.push(r);
+    }
+
+    const results = deduplicated.slice(0, limit);
+
+    // Fire-and-forget: increment impressions + deduct cost_per_impression (budget-guarded)
+    if (results.length > 0) {
+      const listingIds = results.map((r) => r.sponsoredListingId);
+      this.sponsoredRepo
+        .createQueryBuilder()
+        .update()
+        .set({
+          impressions: () => 'impressions + 1',
+          spentAmount: () => 'spent_amount + cost_per_impression',
+        })
+        .where('id IN (:...ids)', { ids: listingIds })
+        .andWhere('is_active = true')
+        .andWhere('spent_amount + cost_per_impression <= budget_amount')
+        .andWhere('ends_at > NOW()')
+        .execute()
+        .catch(() => {}); // non-blocking
+    }
+
+    return results.map((r) => ({
       id: r.id,
       name: r.name,
       image: r.bannerImage || r.image,
@@ -930,7 +959,7 @@ export class ExploreService {
 
     await this.adEventRepo.save(event);
 
-    // If click on sponsored listing, increment clicks + spend (with budget/active/date guards)
+    // If click on sponsored listing, increment clicks + spend
     if (dto.eventType === 'click' && dto.entityType === 'sponsored_listing') {
       await this.sponsoredRepo
         .createQueryBuilder()
@@ -940,25 +969,16 @@ export class ExploreService {
           spentAmount: () => 'spent_amount + cost_per_click',
         })
         .where('id = :id', { id: dto.entityId })
-        .andWhere('is_active = true')
-        .andWhere('spent_amount + cost_per_click <= budget_amount')
-        .andWhere('ends_at > NOW()')
         .execute();
     }
 
-    // If impression on sponsored listing, increment impressions + deduct cost_per_impression
+    // If impression on sponsored listing, increment impressions
     if (dto.eventType === 'impression' && dto.entityType === 'sponsored_listing') {
       await this.sponsoredRepo
         .createQueryBuilder()
         .update(SponsoredListing)
-        .set({
-          impressions: () => 'impressions + 1',
-          spentAmount: () => 'spent_amount + cost_per_impression',
-        })
+        .set({ impressions: () => 'impressions + 1' })
         .where('id = :id', { id: dto.entityId })
-        .andWhere('is_active = true')
-        .andWhere('spent_amount + cost_per_impression <= budget_amount')
-        .andWhere('ends_at > NOW()')
         .execute();
     }
   }

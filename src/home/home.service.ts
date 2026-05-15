@@ -122,7 +122,7 @@ export class HomeService {
     // Phase 1: Fetch sponsored first (they get priority placement)
     const [sponsoredProviders, promoBanners, trendingCategories, communityReviews, platformStats, bestProducts] =
       await Promise.all([
-        this.getSponsoredProviders(lat, lng, city, 6),
+        this.getSponsoredProviders(lat, lng, city, 12),
         this.getActivePromoBanners(),
         this.getTrendingCategories(6),
         this.getCommunityReviews(10),
@@ -945,56 +945,23 @@ export class HomeService {
       );
     }
 
-    // Always enforce city targeting when city is provided
+    // Enforce city targeting on the listing (not the provider's city text field)
     if (city) {
       qb.andWhere(
         `(s.target_cities IS NULL OR :city = ANY(s.target_cities))`,
         { city },
       );
-      // Also ensure the provider is actually in the user's city
-      qb.andWhere('p.city ILIKE :provCity', { provCity: `%${city}%` });
     }
 
-    // Prioritize by bid (cost_per_click) then randomize for fairness
-    qb.orderBy('s.cost_per_click', 'DESC')
-      .addOrderBy('RANDOM()')
-      .limit(limit * 3);
-
-    let raw = await qb.getRawMany();
-
-    // Fallback: if no city-local sponsors, relax city filter on provider
-    // (still respect target_cities on the listing itself)
-    if (raw.length === 0 && city && hasLocation) {
-      const fallbackQb = qb.clone();
-      // Remove the provider city constraint by re-running without it
-      // Simpler approach: just remove p.city filter from the clone
-      raw = await this.sponsoredRepo
-        .createQueryBuilder('s')
-        .innerJoin('providers', 'p', 'p.id = s.provider_id')
-        .select([
-          'p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image',
-          'p.banner_image_url AS "bannerImage"', 'p.description AS description',
-          'p.city AS city', 'p.area AS area', 'p.status AS status',
-          's.id AS "sponsoredListingId"', 's.type AS "sponsorType"',
-          's.starts_at AS "startsAt"', 's.ends_at AS "endsAt"',
-        ])
-        .addSelect(`(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`, 'listingPhoto')
-        .addSelect(`(SELECT cats.name FROM provider_categories pcs INNER JOIN categories cats ON cats.id = pcs.category_id WHERE pcs.provider_id = p.id LIMIT 1)`, 'primaryCategory')
-        .addSelect(`EXISTS (SELECT 1 FROM provider_offers po WHERE po.provider_id = p.id AND po.is_active = true AND po.starts_at <= NOW() AND po.ends_at >= NOW() AND po.approval_status = 'approved')`, 'hasActiveOffer')
-        .where('s.is_active = :active', { active: true })
-        .andWhere('s.starts_at <= :now', { now })
-        .andWhere('s.ends_at >= :now', { now })
-        .andWhere('s.spent_amount < s.budget_amount')
-        .andWhere("s.approval_status = 'approved'")
-        .andWhere("p.status IN ('active', 'unverified')")
-        .andWhere('p.latitude IS NOT NULL').andWhere('p.longitude IS NOT NULL')
-        .setParameter('lat', lat).setParameter('lng', lng)
-        .addSelect(HomeService.HAVERSINE, 'distance')
-        .andWhere(`(s.target_radius IS NULL OR ${HomeService.HAVERSINE} <= s.target_radius)`)
-        .orderBy('s.cost_per_click', 'DESC').addOrderBy('RANDOM()')
-        .limit(limit * 3)
-        .getRawMany();
+    // Prioritize by bid, then closest distance, then randomize for fairness among ties
+    qb.orderBy('s.cost_per_click', 'DESC');
+    if (hasLocation) {
+      qb.addOrderBy(`${HomeService.HAVERSINE}`, 'ASC');
     }
+    qb.addOrderBy('RANDOM()')
+      .limit(limit * 2);
+
+    const raw = await qb.getRawMany();
 
     // Deduplicate by provider (one sponsor slot per business)
     const seenProviders = new Set<string>();
