@@ -136,6 +136,7 @@ export class CategoriesService {
       slug: r.slug,
       description: r.description,
       icon: r.icon,
+      iconColor: r.iconColor || null,
       imageUrl: r.imageUrl,
       isActive: r.isActive,
       displayOrder: r.displayOrder,
