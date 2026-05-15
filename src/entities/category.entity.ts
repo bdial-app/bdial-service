@@ -37,6 +37,9 @@ export class Category {
   @Column({ name: 'image_url', type: 'varchar', length: 500, nullable: true })
   imageUrl: string | null;
 
+  @Column({ name: 'icon_color', type: 'varchar', length: 50, nullable: true })
+  iconColor: string | null;
+
   @Column({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean;
 
