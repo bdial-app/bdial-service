@@ -1053,10 +1053,26 @@ export class HomeService {
         'p.city AS city',
         'p.area AS area',
         'p.status AS status',
+        'p.is_featured AS "isFeatured"',
+        'p.is_available AS "isAvailable"',
       ])
       .addSelect(
         `(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`,
         'listingPhoto',
+      )
+      // Check if provider has an active sponsored listing targeting this category
+      .addSelect(
+        `EXISTS (
+          SELECT 1 FROM sponsored_listings sl
+          WHERE sl.provider_id = p.id
+            AND sl.is_active = true
+            AND sl.starts_at <= NOW()
+            AND sl.ends_at >= NOW()
+            AND sl.spent_amount < sl.budget_amount
+            AND sl.approval_status = 'approved'
+            AND (sl.target_category_ids IS NULL OR sl.target_category_ids && ARRAY[${categoryIds.map((id) => `'${id}'`).join(',')}]::uuid[])
+        )`,
+        'isSponsored',
       )
       .where(
         'EXISTS (SELECT 1 FROM provider_categories pc_f WHERE pc_f.provider_id = p.id AND pc_f.category_id IN (:...categoryIds))',
@@ -1072,12 +1088,19 @@ export class HomeService {
       if (city) {
         qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
       }
-      qb.orderBy('distance', 'ASC');
+      // Sponsored nearest first, then by rating, then distance
+      qb.orderBy('"isSponsored"', 'DESC')
+        .addOrderBy('distance', 'ASC')
+        .addOrderBy('"rating"', 'DESC');
     } else if (city) {
       qb.andWhere('p.city ILIKE :city', { city: `%${city}%` })
-        .orderBy('p.created_at', 'DESC');
+        .orderBy('"isSponsored"', 'DESC')
+        .addOrderBy('"rating"', 'DESC')
+        .addOrderBy('p.created_at', 'DESC');
     } else {
-      qb.orderBy('p.created_at', 'DESC');
+      qb.orderBy('"isSponsored"', 'DESC')
+        .addOrderBy('"rating"', 'DESC')
+        .addOrderBy('p.created_at', 'DESC');
     }
 
     qb.limit(limit);
@@ -1088,18 +1111,41 @@ export class HomeService {
     if (raw.length === 0 && city && hasLocation) {
       const fallbackQb = this.providerRepo
         .createQueryBuilder('p')
-        .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"', 'p.description AS description', 'p.city AS city', 'p.area AS area', 'p.status AS status'])
+        .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"', 'p.description AS description', 'p.city AS city', 'p.area AS area', 'p.status AS status', 'p.is_featured AS "isFeatured"', 'p.is_available AS "isAvailable"'])
         .addSelect(`(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`, 'listingPhoto')
+        .addSelect(`EXISTS (SELECT 1 FROM sponsored_listings sl WHERE sl.provider_id = p.id AND sl.is_active = true AND sl.starts_at <= NOW() AND sl.ends_at >= NOW() AND sl.spent_amount < sl.budget_amount AND sl.approval_status = 'approved' AND (sl.target_category_ids IS NULL OR sl.target_category_ids && ARRAY[${categoryIds.map((id) => `'${id}'`).join(',')}]::uuid[]))`, 'isSponsored')
         .where('EXISTS (SELECT 1 FROM provider_categories pc_f WHERE pc_f.provider_id = p.id AND pc_f.category_id IN (:...categoryIds))', { categoryIds })
         .andWhere('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] });
       this.withReviewStats(fallbackQb);
       this.withCategoryServices(fallbackQb);
       this.withGeo(fallbackQb, lat!, lng!, 100);
-      fallbackQb.orderBy('distance', 'ASC').limit(limit);
+      fallbackQb.orderBy('"isSponsored"', 'DESC').addOrderBy('distance', 'ASC').addOrderBy('"rating"', 'DESC').limit(limit);
       raw = await fallbackQb.getRawMany();
     }
 
-    return this.mapProviders(raw);
+    // Track impressions for sponsored providers (fire and forget)
+    const sponsoredProviderIds = raw.filter((r) => r.isSponsored === true || r.isSponsored === 't').map((r) => r.id);
+    if (sponsoredProviderIds.length > 0) {
+      this.sponsoredRepo
+        .createQueryBuilder()
+        .update()
+        .set({
+          impressions: () => 'impressions + 1',
+          spentAmount: () => 'spent_amount + cost_per_impression',
+        })
+        .where('provider_id IN (:...providerIds)', { providerIds: sponsoredProviderIds })
+        .andWhere('is_active = true')
+        .andWhere('starts_at <= NOW()')
+        .andWhere('ends_at >= NOW()')
+        .andWhere('spent_amount + cost_per_impression <= budget_amount')
+        .execute()
+        .catch(() => {}); // non-blocking
+    }
+
+    return raw.map((r) => ({
+      ...this.mapProviders([r])[0],
+      isSponsored: r.isSponsored === true || r.isSponsored === 't',
+    }));
   }
 
   /**
@@ -1140,6 +1186,7 @@ export class HomeService {
         c.name,
         c.slug,
         c.icon,
+        c.icon_color AS "iconColor",
         COALESCE(pc_stats.provider_count, 0)::int                AS "providerCount",
         COALESCE(bk_this.cnt, 0)::int                            AS "weeklyBookings",
         COALESCE(bk_last.cnt, 0)::int                            AS "lastWeekBookings",
@@ -1206,6 +1253,7 @@ export class HomeService {
         name: r.name,
         slug: r.slug,
         icon: r.icon,
+        iconColor: r.iconColor || null,
         providerCount: parseInt(r.providerCount, 10) || 0,
         recentBookings: parseInt(r.recentBookings, 10) || 0,
         weeklyBookings,

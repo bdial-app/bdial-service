@@ -706,6 +706,7 @@ export class ExploreService {
         name: cat.name,
         slug: cat.slug,
         icon: cat.icon,
+        iconColor: cat.iconColor || null,
       },
       providers: this.mapProviders(raw),
     };
@@ -770,7 +771,7 @@ export class ExploreService {
 
     const raw: any[] = await this.dataSource.query(`
       SELECT
-        c.id, c.name, c.slug, c.icon,
+        c.id, c.name, c.slug, c.icon, c.icon_color AS "iconColor",
         COALESCE(pc_stats.provider_count, 0)::int                AS "providerCount",
         COALESCE(bk_this.cnt, 0)::int                            AS "weeklyBookings",
         COALESCE(bk_last.cnt, 0)::int                            AS "lastWeekBookings",
@@ -820,6 +821,7 @@ export class ExploreService {
       name: r.name,
       slug: r.slug,
       icon: r.icon,
+      iconColor: r.iconColor || null,
       providerCount: parseInt(r.providerCount, 10) || 0,
     }));
 

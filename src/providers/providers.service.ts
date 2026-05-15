@@ -58,9 +58,15 @@ export class ProvidersService {
     }
     const mobile = mobileNumber.trim();
 
-    // Check if this number is already used by another provider
-    const formatted = `+91${mobile}`;
-    const existing = await this.providerRepo.findOneBy({ contactNumber: formatted });
+    // Check if this number is already used by an active provider (match multiple formats)
+    const existing = await this.providerRepo
+      .createQueryBuilder('p')
+      .where('p.deletedAt IS NULL')
+      .andWhere(
+        '(p.contactNumber = :withPrefix OR p.contactNumber = :bare OR p.contactNumber = :withZero)',
+        { withPrefix: `+91${mobile}`, bare: mobile, withZero: `91${mobile}` },
+      )
+      .getOne();
     if (existing) {
       throw new ConflictException('This phone number is already registered with another provider');
     }
@@ -145,12 +151,24 @@ export class ProvidersService {
     const user = await this.userRepo.findOneBy({ id: userId });
     if (!user) throw new NotFoundException(`User with ID '${userId}' not found`);
 
-    const existingProvider = await this.providerRepo.findOneBy({ userId });
+    const existingProvider = await this.providerRepo
+      .createQueryBuilder('p')
+      .where('p.userId = :userId', { userId })
+      .andWhere('p.deletedAt IS NULL')
+      .getOne();
     if (existingProvider) throw new ConflictException(`Provider already exists for user with ID '${userId}'`);
 
-    // Check if this contact number is already used by another provider
+    // Check if this contact number is already used by another active provider
     if (providerData.contactNumber) {
-      const phoneInUse = await this.providerRepo.findOneBy({ contactNumber: providerData.contactNumber });
+      const bare = providerData.contactNumber.replace(/^\+?91/, '');
+      const phoneInUse = await this.providerRepo
+        .createQueryBuilder('p')
+        .where('p.deletedAt IS NULL')
+        .andWhere(
+          '(p.contactNumber = :withPrefix OR p.contactNumber = :bare OR p.contactNumber = :withZero)',
+          { withPrefix: `+91${bare}`, bare, withZero: `91${bare}` },
+        )
+        .getOne();
       if (phoneInUse) {
         throw new ConflictException('This phone number is already registered with another provider');
       }
