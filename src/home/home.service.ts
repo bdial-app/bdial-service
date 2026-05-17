@@ -616,10 +616,27 @@ export class HomeService {
     this.withCategoryServices(qb);
 
     if (hasLocation) {
-      this.withGeo(qb, lat!, lng!, 50);
+      // Include providers within geo radius OR providers in the same city without coordinates
+      qb.setParameter('lat', lat!)
+        .setParameter('lng', lng!);
+      const maxKm = 50;
+      const dLat = maxKm / 111.32;
+      const dLng = maxKm / (111.32 * Math.cos((lat! * Math.PI) / 180));
       if (city) {
-        qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
+        qb.andWhere(
+          '((p.latitude IS NOT NULL AND p.longitude IS NOT NULL AND p.latitude BETWEEN :minLat AND :maxLat AND p.longitude BETWEEN :minLng AND :maxLng) OR (p.city ILIKE :city))',
+          { minLat: lat! - dLat, maxLat: lat! + dLat, minLng: lng! - dLng, maxLng: lng! + dLng, city: `%${city}%` },
+        );
+      } else {
+        qb.andWhere(
+          '(p.latitude IS NOT NULL AND p.longitude IS NOT NULL AND p.latitude BETWEEN :minLat AND :maxLat AND p.longitude BETWEEN :minLng AND :maxLng)',
+          { minLat: lat! - dLat, maxLat: lat! + dLat, minLng: lng! - dLng, maxLng: lng! + dLng },
+        );
       }
+      qb.addSelect(
+        `CASE WHEN p.latitude IS NOT NULL AND p.longitude IS NOT NULL THEN ${HomeService.HAVERSINE} ELSE 999 END`,
+        'distance',
+      );
       qb.orderBy('p.created_at', 'DESC');
     } else if (city) {
       qb.andWhere('p.city ILIKE :city', { city: `%${city}%` })
