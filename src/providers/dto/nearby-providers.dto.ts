@@ -78,4 +78,12 @@ export class NearbyProvidersDto {
   @Transform(({ value }) => value === 'true' || value === true)
   @IsBoolean()
   womenLedOnly?: boolean;
+
+  @ApiPropertyOptional({ example: 30, description: 'Only show providers created within the last N days' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(365)
+  sinceDays?: number;
 }

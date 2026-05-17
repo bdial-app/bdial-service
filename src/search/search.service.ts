@@ -460,10 +460,21 @@ export class SearchService implements OnModuleInit {
       `p.is_available = true`,
     ];
 
-    if (opts.hasGeo) {
+    if (opts.hasGeo && opts.city) {
+      // Include providers within geo radius OR in the same city (even without coordinates)
+      const bbox = this.getBoundingBox(opts.lat!, opts.lng!, opts.radius);
+      conditions.push(`(
+        (p.latitude IS NOT NULL AND p.longitude IS NOT NULL
+         AND p.latitude BETWEEN $${pi} AND $${pi + 1}
+         AND p.longitude BETWEEN $${pi + 2} AND $${pi + 3}
+         AND ${distExpr} <= $${pi + 4})
+        OR p.city ILIKE $${pi + 5}
+      )`);
+      allParams.push(bbox.latMin, bbox.latMax, bbox.lngMin, bbox.lngMax, opts.radius, `%${opts.city}%`);
+      pi += 6;
+    } else if (opts.hasGeo) {
       conditions.push(`p.latitude IS NOT NULL`);
       conditions.push(`p.longitude IS NOT NULL`);
-      // Bounding-box pre-filter: eliminates rows cheaply before Haversine
       const bbox = this.getBoundingBox(opts.lat!, opts.lng!, opts.radius);
       conditions.push(`p.latitude BETWEEN $${pi} AND $${pi + 1}`);
       conditions.push(`p.longitude BETWEEN $${pi + 2} AND $${pi + 3}`);
@@ -472,9 +483,7 @@ export class SearchService implements OnModuleInit {
       conditions.push(`${distExpr} <= $${pi}`);
       allParams.push(opts.radius);
       pi++;
-    }
-
-    if (opts.city) {
+    } else if (opts.city) {
       conditions.push(`p.city ILIKE $${pi}`);
       allParams.push(`%${opts.city}%`);
       pi++;
@@ -703,9 +712,20 @@ export class SearchService implements OnModuleInit {
         `po.ends_at >= NOW()`,
       ];
 
-      if (opts.hasGeo) {
+      if (opts.hasGeo && opts.city) {
+        // Include providers within geo radius OR in the same city (even without coordinates)
+        const bbox = this.getBoundingBox(opts.lat!, opts.lng!, opts.radius);
+        conditions.push(`(
+          (p.latitude IS NOT NULL AND p.longitude IS NOT NULL
+           AND p.latitude BETWEEN $${pi} AND $${pi + 1}
+           AND p.longitude BETWEEN $${pi + 2} AND $${pi + 3}
+           AND ${distExpr} <= $${pi + 4})
+          OR p.city ILIKE $${pi + 5}
+        )`);
+        allParams.push(bbox.latMin, bbox.latMax, bbox.lngMin, bbox.lngMax, opts.radius, `%${opts.city}%`);
+        pi += 6;
+      } else if (opts.hasGeo) {
         conditions.push(`p.latitude IS NOT NULL`, `p.longitude IS NOT NULL`);
-        // Bounding-box pre-filter
         const bbox = this.getBoundingBox(opts.lat!, opts.lng!, opts.radius);
         conditions.push(`p.latitude BETWEEN $${pi} AND $${pi + 1}`);
         conditions.push(`p.longitude BETWEEN $${pi + 2} AND $${pi + 3}`);
@@ -714,9 +734,7 @@ export class SearchService implements OnModuleInit {
         conditions.push(`${distExpr} <= $${pi}`);
         allParams.push(opts.radius);
         pi++;
-      }
-
-      if (opts.city) {
+      } else if (opts.city) {
         conditions.push(`p.city ILIKE $${pi}`);
         allParams.push(`%${opts.city}%`);
         pi++;
@@ -826,9 +844,20 @@ export class SearchService implements OnModuleInit {
         `rs.review_count >= 3`,
       ];
 
-      if (opts.hasGeo) {
+      if (opts.hasGeo && opts.city) {
+        // Include providers within geo radius OR in the same city (even without coordinates)
+        const bbox = this.getBoundingBox(opts.lat!, opts.lng!, opts.radius);
+        conditions.push(`(
+          (p.latitude IS NOT NULL AND p.longitude IS NOT NULL
+           AND p.latitude BETWEEN $${pi} AND $${pi + 1}
+           AND p.longitude BETWEEN $${pi + 2} AND $${pi + 3}
+           AND ${distExpr} <= $${pi + 4})
+          OR p.city ILIKE $${pi + 5}
+        )`);
+        allParams.push(bbox.latMin, bbox.latMax, bbox.lngMin, bbox.lngMax, opts.radius, `%${opts.city}%`);
+        pi += 6;
+      } else if (opts.hasGeo) {
         conditions.push(`p.latitude IS NOT NULL`, `p.longitude IS NOT NULL`);
-        // Bounding-box pre-filter
         const bbox = this.getBoundingBox(opts.lat!, opts.lng!, opts.radius);
         conditions.push(`p.latitude BETWEEN $${pi} AND $${pi + 1}`);
         conditions.push(`p.longitude BETWEEN $${pi + 2} AND $${pi + 3}`);
@@ -837,9 +866,7 @@ export class SearchService implements OnModuleInit {
         conditions.push(`${distExpr} <= $${pi}`);
         allParams.push(opts.radius);
         pi++;
-      }
-
-      if (opts.city) {
+      } else if (opts.city) {
         conditions.push(`p.city ILIKE $${pi}`);
         allParams.push(`%${opts.city}%`);
         pi++;

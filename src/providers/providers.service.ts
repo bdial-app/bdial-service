@@ -636,6 +636,10 @@ export class ProvidersService {
       qb.andWhere("provider.womenLedStatus = 'approved'");
     }
 
+    if (dto.sinceDays) {
+      qb.andWhere('provider.createdAt >= NOW() - INTERVAL :sinceDays', { sinceDays: `${dto.sinceDays} days` });
+    }
+
     // Add a computed column to rank verified (active) above unverified
     qb.addSelect("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'status_rank');
 

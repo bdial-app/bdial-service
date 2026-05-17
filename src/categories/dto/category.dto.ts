@@ -6,6 +6,11 @@ export class CreateCategoryDto {
   @IsString()
   name?: string;
 
+  @ApiPropertyOptional({ description: 'Category description' })
+  @IsOptional()
+  @IsString()
+  description?: string;
+
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
@@ -48,6 +53,11 @@ export class UpdateCategoryDto {
   @IsOptional()
   @IsString()
   name?: string;
+
+  @ApiPropertyOptional({ description: 'Category description' })
+  @IsOptional()
+  @IsString()
+  description?: string;
 
   @ApiPropertyOptional({ description: 'Is the category active?' })
   @IsOptional()

@@ -764,12 +764,15 @@ export class ExploreService {
         'distance',
       );
       qb.orderBy('p.created_at', 'DESC')
-        .addOrderBy('distance', 'ASC');
+        .addOrderBy('distance', 'ASC')
+        .addOrderBy('p.id', 'ASC');
     } else if (city) {
       qb.andWhere('p.city ILIKE :city', { city: `%${city}%` })
-        .orderBy('p.created_at', 'DESC');
+        .orderBy('p.created_at', 'DESC')
+        .addOrderBy('p.id', 'ASC');
     } else {
-      qb.orderBy('p.created_at', 'DESC');
+      qb.orderBy('p.created_at', 'DESC')
+        .addOrderBy('p.id', 'ASC');
     }
 
     qb.limit(limit);

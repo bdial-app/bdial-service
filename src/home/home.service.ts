@@ -637,12 +637,15 @@ export class HomeService {
         `CASE WHEN p.latitude IS NOT NULL AND p.longitude IS NOT NULL THEN ${HomeService.HAVERSINE} ELSE 999 END`,
         'distance',
       );
-      qb.orderBy('p.created_at', 'DESC');
+      qb.orderBy('p.created_at', 'DESC')
+        .addOrderBy('p.id', 'ASC');
     } else if (city) {
       qb.andWhere('p.city ILIKE :city', { city: `%${city}%` })
-        .orderBy('p.created_at', 'DESC');
+        .orderBy('p.created_at', 'DESC')
+        .addOrderBy('p.id', 'ASC');
     } else {
-      qb.orderBy('p.created_at', 'DESC');
+      qb.orderBy('p.created_at', 'DESC')
+        .addOrderBy('p.id', 'ASC');
     }
 
     qb.limit(limit);
@@ -661,7 +664,7 @@ export class HomeService {
       this.withReviewStats(fallbackQb);
       this.withCategoryServices(fallbackQb);
       this.withGeo(fallbackQb, lat!, lng!, 100);
-      fallbackQb.orderBy('p.created_at', 'DESC').limit(limit);
+      fallbackQb.orderBy('p.created_at', 'DESC').addOrderBy('p.id', 'ASC').limit(limit);
       raw = await fallbackQb.getRawMany();
     }
 
