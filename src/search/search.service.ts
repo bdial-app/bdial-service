@@ -1139,8 +1139,14 @@ export class SearchService implements OnModuleInit {
             SELECT 1 FROM provider_categories pc
             JOIN categories c ON c.id = pc.category_id
             WHERE pc.provider_id = prod.provider_id
-            AND c.search_vector @@ to_tsquery('english', $2)
+            AND (c.search_vector @@ to_tsquery('english', $2) OR c.name ILIKE '%' || $1 || '%' OR EXISTS (SELECT 1 FROM unnest(c.keywords) kw WHERE kw ILIKE '%' || $1 || '%'))
           )
+          OR EXISTS (
+            SELECT 1 FROM categories c2
+            WHERE (c2.id = prod.category_id OR c2.id = prod.subcategory_id)
+            AND (c2.name ILIKE '%' || $1 || '%' OR EXISTS (SELECT 1 FROM unnest(c2.keywords) kw WHERE kw ILIKE '%' || $1 || '%'))
+          )
+          OR EXISTS (SELECT 1 FROM unnest(prod.keywords) kw WHERE kw ILIKE '%' || $1 || '%')
         )
       ORDER BY relevance_score DESC, distance ASC NULLS LAST
       LIMIT $${pi} OFFSET $${pi + 1}

@@ -625,7 +625,11 @@ export class ProvidersService {
     }
     if (categoryIds?.length) {
       qb.andWhere(
-        `provider.id IN (SELECT pc.provider_id FROM provider_categories pc WHERE pc.category_id IN (:...categoryIds))`,
+        `provider.id IN (
+          SELECT pc.provider_id FROM provider_categories pc
+          WHERE pc.category_id IN (:...categoryIds)
+             OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id IN (:...categoryIds))
+        )`,
         { categoryIds },
       );
     }

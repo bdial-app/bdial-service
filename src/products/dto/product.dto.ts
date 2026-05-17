@@ -68,6 +68,23 @@ export class CreateProductDto {
   @IsBoolean()
   @Transform(({ value }) => value === 'true' || value === true)
   isHero?: boolean;
+
+  @ApiPropertyOptional({ description: 'Parent category ID for the product' })
+  @IsOptional()
+  @IsUUID()
+  categoryId?: string;
+
+  @ApiPropertyOptional({ description: 'Sub-category ID for the product' })
+  @IsOptional()
+  @IsUUID()
+  subcategoryId?: string;
+
+  @ApiPropertyOptional({ description: 'Search keywords for discoverability', example: ['rida', 'abaya', 'custom stitching'] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @ArrayMaxSize(15)
+  keywords?: string[];
 }
 
 export class UpdateProductDto {
@@ -133,4 +150,21 @@ export class UpdateProductDto {
   @IsBoolean()
   @Transform(({ value }) => value === 'true' || value === true)
   isHero?: boolean;
+
+  @ApiPropertyOptional({ description: 'Parent category ID for the product' })
+  @IsOptional()
+  @IsUUID()
+  categoryId?: string;
+
+  @ApiPropertyOptional({ description: 'Sub-category ID for the product' })
+  @IsOptional()
+  @IsUUID()
+  subcategoryId?: string;
+
+  @ApiPropertyOptional({ description: 'Search keywords for discoverability', example: ['rida', 'abaya', 'custom stitching'] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @ArrayMaxSize(15)
+  keywords?: string[];
 }

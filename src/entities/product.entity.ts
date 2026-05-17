@@ -7,10 +7,12 @@ import {
   Index,
 } from 'typeorm';
 import { Provider } from './provider.entity';
+import { Category } from './category.entity';
 
 @Entity('products')
 @Index(['providerId', 'isActive'])
 @Index(['providerId', 'isHero'])
+@Index(['categoryId', 'subcategoryId'])
 export class Product {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -51,7 +53,21 @@ export class Product {
   @Column({ type: 'text', array: true, nullable: true, default: null })
   keywords: string[] | null;
 
+  @Column({ name: 'category_id', type: 'uuid', nullable: true })
+  categoryId: string | null;
+
+  @Column({ name: 'subcategory_id', type: 'uuid', nullable: true })
+  subcategoryId: string | null;
+
   @ManyToOne(() => Provider, (p) => p.products)
   @JoinColumn({ name: 'provider_id' })
   provider: Provider;
+
+  @ManyToOne(() => Category, { nullable: true })
+  @JoinColumn({ name: 'category_id' })
+  category: Category | null;
+
+  @ManyToOne(() => Category, { nullable: true })
+  @JoinColumn({ name: 'subcategory_id' })
+  subcategory: Category | null;
 }
