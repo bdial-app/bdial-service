@@ -91,7 +91,8 @@ export class AuthService {
     if (!user) {
       throw new NotFoundException({ statusCode: 404, message: 'User not found', field: 'mobileNumber', error_code: 'USER_NOT_FOUND' });
     }
-    if (user.role !== 'admin') {
+    const adminRoles = ['associate', 'moderator', 'admin', 'super_admin'];
+    if (!adminRoles.includes(user.role)) {
       throw new ForbiddenException({ statusCode: 403, message: 'Access denied', error_code: 'NOT_ADMIN' });
     }
     return this.sendOtp(dto);

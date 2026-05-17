@@ -52,7 +52,8 @@ export class AdminService {
   ) {}
 
   private assertAdmin(user: any) {
-    if (user.role !== 'admin') throw new ForbiddenException('Admin access required');
+    const adminRoles = ['associate', 'moderator', 'admin', 'super_admin'];
+    if (!adminRoles.includes(user.role)) throw new ForbiddenException('Admin access required');
   }
 
   async getDashboard(admin: any) {
@@ -975,7 +976,7 @@ export class AdminService {
 
   async updateProviderAdmin(admin: any, providerId: string, body: Partial<Provider>) {
     this.assertAdmin(admin);
-    const allowed: string[] = ['status', 'isFeatured', 'communityVerified', 'brandName', 'description', 'isAvailable', 'websiteUrl', 'instagramHandle', 'facebookHandle', 'youtubeHandle', 'whatsappNumber'];
+    const allowed: string[] = ['status', 'isFeatured', 'communityVerified', 'brandName', 'description', 'isAvailable', 'websiteUrl', 'instagramHandle', 'facebookHandle', 'youtubeHandle', 'whatsappNumber', 'linkedinHandle'];
     const update: any = {};
     for (const key of allowed) {
       if ((body as any)[key] !== undefined) update[key] = (body as any)[key];

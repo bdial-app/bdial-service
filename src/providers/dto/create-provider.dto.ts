@@ -145,4 +145,11 @@ export class CreateProviderDto {
   @IsString()
   @Matches(/^\+?\d{7,15}$/, { message: 'WhatsApp number must be 7-15 digits, optionally starting with +' })
   whatsappNumber?: string;
+
+  @ApiPropertyOptional({ example: 'mybusiness', description: 'LinkedIn profile or company page handle/URL' })
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @MaxLength(128)
+  linkedinHandle?: string;
 }

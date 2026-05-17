@@ -143,6 +143,9 @@ export class Provider {
   @Column({ name: 'whatsapp_number', type: 'varchar', length: 20, nullable: true })
   whatsappNumber: string | null;
 
+  @Column({ name: 'linkedin_handle', type: 'varchar', length: 128, nullable: true })
+  linkedinHandle: string | null;
+
   @OneToOne(() => User, (u) => u.provider, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })
   user: User;
