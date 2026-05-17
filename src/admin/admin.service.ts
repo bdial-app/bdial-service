@@ -1,6 +1,6 @@
 import { Injectable, ForbiddenException, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, IsNull, In, MoreThan, ILike, Between } from 'typeorm';
+import { Repository, DataSource, IsNull, Not, In, MoreThan, ILike, Between } from 'typeorm';
 import { Provider, User, Verification, Review, ReviewReport, Report, ProviderWarning, Product, Category, ProviderCategory, Conversation, ConversationParticipant, Message, PromoBanner, SponsoredListing, ProviderOffer, ProviderBadge, ProviderAnalyticsEvent, ProviderLead, SearchLog, AdEvent, AppInvite, AuditLog, SystemSetting, Photo, ReviewPhoto, ServiceableCity, UserArchive } from '../entities';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { BugReport } from '../bug-reports/bug-report.entity';
@@ -52,8 +52,7 @@ export class AdminService {
   ) {}
 
   private assertAdmin(user: any) {
-    const adminRoles = ['associate', 'moderator', 'admin', 'super_admin'];
-    if (!adminRoles.includes(user.role)) throw new ForbiddenException('Admin access required');
+    if (user.role !== 'admin') throw new ForbiddenException('Admin access required');
   }
 
   async getDashboard(admin: any) {
@@ -976,7 +975,7 @@ export class AdminService {
 
   async updateProviderAdmin(admin: any, providerId: string, body: Partial<Provider>) {
     this.assertAdmin(admin);
-    const allowed: string[] = ['status', 'isFeatured', 'communityVerified', 'brandName', 'description', 'isAvailable', 'websiteUrl', 'instagramHandle', 'facebookHandle', 'youtubeHandle', 'whatsappNumber', 'linkedinHandle'];
+    const allowed: string[] = ['status', 'isFeatured', 'communityVerified', 'brandName', 'description', 'isAvailable', 'websiteUrl', 'instagramHandle', 'facebookHandle', 'youtubeHandle', 'whatsappNumber'];
     const update: any = {};
     for (const key of allowed) {
       if ((body as any)[key] !== undefined) update[key] = (body as any)[key];
@@ -1071,13 +1070,47 @@ export class AdminService {
 
   async getProductStats(admin: any) {
     this.assertAdmin(admin);
-    const [total, active, products, services] = await Promise.all([
+    const [total, active, withImages, withPrice, products, services] = await Promise.all([
       this.productRepo.count(),
       this.productRepo.count({ where: { isActive: true } }),
+      this.productRepo.createQueryBuilder('p').where('p."photoUrls"::text != \'[]\'').andWhere('p."photoUrls" IS NOT NULL').getCount(),
+      this.productRepo.count({ where: { price: Not(IsNull()) } }),
       this.productRepo.count({ where: { productType: 'product' as any } }),
       this.productRepo.count({ where: { productType: 'service' as any } }),
     ]);
-    return { total, active, inactive: total - active, products, services };
+
+    const topProviders = await this.productRepo
+      .createQueryBuilder('p')
+      .select('p."providerId"', 'providerId')
+      .addSelect('COUNT(*)::int', 'count')
+      .addSelect('pr."brandName"', 'brandName')
+      .innerJoin('providers', 'pr', 'pr.id = p."providerId"')
+      .where('p."isActive" = true')
+      .groupBy('p."providerId"')
+      .addGroupBy('pr."brandName"')
+      .orderBy('"count"', 'DESC')
+      .limit(5)
+      .getRawMany();
+
+    return {
+      total,
+      active,
+      inactive: total - active,
+      withImages,
+      withoutImages: total - withImages,
+      withPrice,
+      withoutPrice: total - withPrice,
+      avgPrice: 0,
+      typeBreakdown: [
+        { type: 'product', count: products },
+        { type: 'service', count: services },
+      ],
+      topProviders: topProviders.map((tp: any) => ({
+        brandName: tp.brandName,
+        providerId: tp.providerId,
+        count: Number(tp.count),
+      })),
+    };
   }
 
   async getProductById(admin: any, productId: string) {
@@ -1113,7 +1146,7 @@ export class AdminService {
 
   async updateProductAdmin(admin: any, productId: string, body: Partial<Product>) {
     this.assertAdmin(admin);
-    const allowed: string[] = ['isActive', 'displayOrder', 'name', 'description', 'price'];
+    const allowed: string[] = ['isActive', 'displayOrder', 'name', 'description', 'price', 'productType', 'categoryId', 'subcategoryId'];
     const update: any = {};
     for (const key of allowed) {
       if ((body as any)[key] !== undefined) update[key] = (body as any)[key];
@@ -2421,6 +2454,9 @@ export class AdminService {
             description: p.description || null,
             price: p.price != null ? p.price : null,
             currency: p.currency || 'INR',
+            productType: (p as any).productType || 'product',
+            categoryId: (p as any).categoryId || null,
+            subcategoryId: (p as any).subcategoryId || null,
             isActive: true,
             displayOrder: i,
           });
@@ -2529,8 +2565,6 @@ export class AdminService {
 
     const prevStatus = provider.status;
     await this.providerRepo.update(providerId, { status: 'disabled' });
-    // Reset user's preferred mode to customer so they don't land in provider view
-    await this.userRepo.update(provider.userId, { preferredMode: 'customer' } as any);
     await this.createAuditLog(admin.id, 'disable_provider', 'provider', providerId, { status: prevStatus }, { status: 'disabled' });
 
     this.notificationDispatch.sendTemplated(
