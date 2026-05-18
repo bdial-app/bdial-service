@@ -3,6 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThan, MoreThan, IsNull, Not, In } from 'typeorm';
 import { User } from '../entities/user.entity';
+import { Provider } from '../entities/provider.entity';
 import { Subscription } from '../entities/subscription.entity';
 import { Voucher } from '../entities/voucher.entity';
 import { SponsoredListing } from '../entities/sponsored-listing.entity';
@@ -27,6 +28,8 @@ export class NotificationCronService {
     private readonly voucherRepo: Repository<Voucher>,
     @InjectRepository(SponsoredListing)
     private readonly sponsoredRepo: Repository<SponsoredListing>,
+    @InjectRepository(Provider)
+    private readonly providerRepo: Repository<Provider>,
     private readonly dispatchService: NotificationDispatchService,
     private readonly templateService: NotificationTemplateService,
   ) {}
@@ -255,14 +258,13 @@ export class NotificationCronService {
     oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
 
     // Count new providers registered in the last week, grouped by city
-    const newProvidersByCity = await this.userRepo
-      .createQueryBuilder('u')
-      .where('u.role IN (:...roles)', { roles: ['provider', 'both'] })
-      .andWhere('u.status = :status', { status: 'active' })
-      .andWhere('u.createdAt > :since', { since: oneWeekAgo })
-      .andWhere('u.city IS NOT NULL')
-      .select(['u.city AS city', 'COUNT(*) AS count'])
-      .groupBy('u.city')
+    const newProvidersByCity = await this.providerRepo
+      .createQueryBuilder('p')
+      .where('p.status = :status', { status: 'active' })
+      .andWhere('p.createdAt > :since', { since: oneWeekAgo })
+      .andWhere('p.city IS NOT NULL')
+      .select(['p.city AS city', 'COUNT(*) AS count'])
+      .groupBy('p.city')
       .getRawMany();
 
     if (newProvidersByCity.length === 0) return;

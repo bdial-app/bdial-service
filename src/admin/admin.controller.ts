@@ -390,6 +390,81 @@ export class AdminController {
   }
 
   // ============================================
+  // Google Reviews Management (Admin)
+  // ============================================
+
+  @Get('google-reviews/providers')
+  @ApiOperation({ summary: 'List providers with Google link status and trust levels' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'trustLevel', required: false, type: String })
+  @ApiQuery({ name: 'linked', required: false, type: Boolean })
+  @ApiQuery({ name: 'search', required: false, type: String })
+  getGoogleLinkedProviders(
+    @Request() req,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+    @Query('trustLevel') trustLevel?: string,
+    @Query('linked') linked?: string,
+    @Query('search') search?: string,
+  ) {
+    return this.adminService.getGoogleLinkedProviders(req.user, page, limit, {
+      trustLevel,
+      linked: linked === 'true' ? true : linked === 'false' ? false : undefined,
+      search,
+    });
+  }
+
+  @Get('google-reviews/trust-overview')
+  @ApiOperation({ summary: 'Trust level distribution overview' })
+  getTrustOverview(@Request() req) {
+    return this.adminService.getTrustOverview(req.user);
+  }
+
+  @Post('google-reviews/verify/:providerId')
+  @ApiOperation({ summary: 'Admin: Find Google Place candidates for a provider' })
+  @ApiParam({ name: 'providerId', description: 'Provider ID' })
+  adminVerifyGooglePlace(
+    @Param('providerId') providerId: string,
+    @Request() req,
+    @Body() body: { phoneNumber?: string },
+  ) {
+    return this.adminService.adminVerifyGooglePlace(req.user, providerId, body.phoneNumber);
+  }
+
+  @Post('google-reviews/confirm/:providerId')
+  @ApiOperation({ summary: 'Admin: Link a Google Place to a provider' })
+  @ApiParam({ name: 'providerId', description: 'Provider ID' })
+  @ApiBody({ schema: { properties: { placeId: { type: 'string' } }, required: ['placeId'] } })
+  adminConfirmGooglePlace(
+    @Param('providerId') providerId: string,
+    @Request() req,
+    @Body('placeId') placeId: string,
+  ) {
+    return this.adminService.adminConfirmGooglePlace(req.user, providerId, placeId);
+  }
+
+  @Delete('google-reviews/unlink/:providerId')
+  @ApiOperation({ summary: 'Admin: Unlink Google Place from a provider' })
+  @ApiParam({ name: 'providerId', description: 'Provider ID' })
+  adminUnlinkGooglePlace(
+    @Param('providerId') providerId: string,
+    @Request() req,
+  ) {
+    return this.adminService.adminUnlinkGooglePlace(req.user, providerId);
+  }
+
+  @Post('google-reviews/refresh/:providerId')
+  @ApiOperation({ summary: 'Admin: Force refresh Google aggregates for a provider' })
+  @ApiParam({ name: 'providerId', description: 'Provider ID' })
+  adminRefreshGoogleAggregates(
+    @Param('providerId') providerId: string,
+    @Request() req,
+  ) {
+    return this.adminService.adminRefreshGoogleAggregates(req.user, providerId);
+  }
+
+  // ============================================
   // Global Warnings Management
   // ============================================
 

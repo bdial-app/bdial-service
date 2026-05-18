@@ -9,6 +9,7 @@ import { BugReport } from '../bug-reports/bug-report.entity';
 import { StorageModule } from '../storage/storage.module';
 import { SupabaseModule } from '../supabase/supabase.module';
 import { ServiceableCitiesModule } from '../serviceable-cities/serviceable-cities.module';
+import { GoogleReviewsModule } from '../google-reviews/google-reviews.module';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { ServiceableCitiesModule } from '../serviceable-cities/serviceable-citie
     TypeOrmModule.forFeature([Provider, User, UserArchive, Verification, Review, ReviewPhoto, ReviewReport, Report, ProviderWarning, Product, Category, ProviderCategory, Conversation, ConversationParticipant, Message, PromoBanner, SponsoredListing, ProviderOffer, ProviderBadge, ProviderAnalyticsEvent, ProviderLead, SearchLog, AdEvent, AppInvite, AuditLog, SystemSetting, BugReport, Photo]),
     NotificationsModule,
     ServiceableCitiesModule,
+    GoogleReviewsModule,
   ],
   controllers: [AdminController],
   providers: [AdminService],

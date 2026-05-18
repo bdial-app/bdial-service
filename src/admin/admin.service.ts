@@ -11,6 +11,7 @@ import { compressImage, compressImages } from '../common/image-processor';
 import { SupabaseAuthService } from '../supabase/supabase-auth.service';
 import { ServiceableCitiesService } from '../serviceable-cities/serviceable-cities.service';
 import { ContentSanitizerService } from '../common/content-sanitizer';
+import { GoogleReviewsService } from '../google-reviews/google-reviews.service';
 
 @Injectable()
 export class AdminService {
@@ -49,6 +50,7 @@ export class AdminService {
     private supabaseAuthService: SupabaseAuthService,
     private serviceableCitiesService: ServiceableCitiesService,
     private contentSanitizer: ContentSanitizerService,
+    private googleReviewsService: GoogleReviewsService,
   ) {}
 
   private assertAdmin(user: any) {
@@ -1249,10 +1251,64 @@ export class AdminService {
       update.moderatedBy = admin.id;
     }
     await this.reviewRepo.update(reviewId, update);
+
+    // Recompute combined rating after moderation
+    const review = await this.reviewRepo.findOneBy({ id: reviewId });
+    if (review) {
+      this.googleReviewsService.recomputeByProviderId(review.providerId).catch(() => {});
+    }
+
     return this.reviewRepo.findOne({
       where: { id: reviewId },
       relations: ['reviewer', 'provider'],
     });
+  }
+
+  // ============================================
+  // Google Reviews Management (Admin)
+  // ============================================
+
+  async getGoogleLinkedProviders(
+    admin: any,
+    page?: number,
+    limit?: number,
+    filters?: { trustLevel?: string; linked?: boolean; search?: string },
+  ) {
+    this.assertAdmin(admin);
+    return this.googleReviewsService.getLinkedProviders(
+      Math.max(1, Number(page) || 1),
+      Math.min(100, Math.max(1, Number(limit) || 20)),
+      filters,
+    );
+  }
+
+  async getTrustOverview(admin: any) {
+    this.assertAdmin(admin);
+    return this.googleReviewsService.getTrustOverview();
+  }
+
+  async adminVerifyGooglePlace(admin: any, providerId: string, phoneNumber?: string) {
+    this.assertAdmin(admin);
+    // Admin bypasses ownership check (no actorUserId passed)
+    return this.googleReviewsService.findPlaceCandidates(providerId, phoneNumber);
+  }
+
+  async adminConfirmGooglePlace(admin: any, providerId: string, placeId: string) {
+    this.assertAdmin(admin);
+    if (!placeId) throw new BadRequestException('placeId is required');
+    // Admin bypasses ownership check (no actorUserId passed)
+    return this.googleReviewsService.confirmGooglePlace(providerId, placeId);
+  }
+
+  async adminUnlinkGooglePlace(admin: any, providerId: string) {
+    this.assertAdmin(admin);
+    // Admin bypasses ownership check (no actorUserId passed)
+    return this.googleReviewsService.unlinkGooglePlace(providerId);
+  }
+
+  async adminRefreshGoogleAggregates(admin: any, providerId: string) {
+    this.assertAdmin(admin);
+    return this.googleReviewsService.forceRefreshAggregates(providerId);
   }
 
   // ============================================

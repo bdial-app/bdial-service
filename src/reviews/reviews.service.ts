@@ -13,6 +13,7 @@ import { StorageService } from '../storage/storage.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { ContentSanitizerService } from '../common/content-sanitizer';
 import { compressImage } from '../common/image-processor';
+import { GoogleReviewsService } from '../google-reviews/google-reviews.service';
 
 @Injectable()
 export class ReviewsService {
@@ -24,6 +25,7 @@ export class ReviewsService {
     private storageService: StorageService,
     private notificationDispatch: NotificationDispatchService,
     private contentSanitizer: ContentSanitizerService,
+    private googleReviewsService: GoogleReviewsService,
   ) {}
 
   async create(userId: string, dto: CreateReviewDto) {
@@ -57,6 +59,9 @@ export class ReviewsService {
       reviewText: dto.reviewText,
     });
     const saved = await this.reviewRepo.save(review);
+
+    // Recompute combined rating (includes Google aggregates if linked)
+    this.googleReviewsService.recomputeByProviderId(dto.providerId).catch(() => {});
 
     // Notify the provider about the new review
     const provider = await this.providerRepo.findOneBy({ id: dto.providerId });

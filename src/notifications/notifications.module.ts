@@ -9,6 +9,7 @@ import { User } from '../entities/user.entity';
 import { Subscription } from '../entities/subscription.entity';
 import { Voucher } from '../entities/voucher.entity';
 import { SponsoredListing } from '../entities/sponsored-listing.entity';
+import { Provider } from '../entities/provider.entity';
 import { FirebaseService } from './firebase.service';
 import { NotificationsService } from './notifications.service';
 import { NotificationDispatchService } from './notification-dispatch.service';
@@ -31,6 +32,7 @@ import { AdminNotificationsController } from './admin-notifications.controller';
       Subscription,
       Voucher,
       SponsoredListing,
+      Provider,
     ]),
   ],
   controllers: [

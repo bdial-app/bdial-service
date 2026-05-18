@@ -41,6 +41,7 @@ import { BugReportsModule } from './bug-reports/bug-reports.module';
 import { PaymentModule } from './payment/payment.module';
 import { VoucherModule } from './voucher/voucher.module';
 import { ServiceableCitiesModule } from './serviceable-cities/serviceable-cities.module';
+import { GoogleReviewsModule } from './google-reviews/google-reviews.module';
 import { SystemSetting } from './entities';
 
 @Module({
@@ -95,6 +96,7 @@ import { SystemSetting } from './entities';
     PaymentModule,
     VoucherModule,
     ServiceableCitiesModule,
+    GoogleReviewsModule,
     TypeOrmModule.forFeature([SystemSetting]),
   ],
   controllers: [AppController],

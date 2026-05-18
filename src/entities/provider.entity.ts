@@ -146,6 +146,36 @@ export class Provider {
   @Column({ name: 'linkedin_handle', type: 'varchar', length: 128, nullable: true })
   linkedinHandle: string | null;
 
+  // ── Google Reviews Integration ──
+  @Column({ name: 'google_place_id', type: 'varchar', length: 255, nullable: true })
+  googlePlaceId: string | null;
+
+  @Column({ name: 'google_rating', type: 'decimal', precision: 2, scale: 1, nullable: true })
+  googleRating: number | null;
+
+  @Column({ name: 'google_review_count', type: 'int', nullable: true })
+  googleReviewCount: number | null;
+
+  @Column({ name: 'google_verified_at', type: 'timestamptz', nullable: true })
+  googleVerifiedAt: Date | null;
+
+  @Column({ name: 'google_last_fetched_at', type: 'timestamptz', nullable: true })
+  googleLastFetchedAt: Date | null;
+
+  @Column({ name: 'combined_rating', type: 'decimal', precision: 2, scale: 1, nullable: true })
+  combinedRating: number | null;
+
+  @Column({ name: 'combined_review_count', type: 'int', nullable: true })
+  combinedReviewCount: number | null;
+
+  @Column({
+    name: 'trust_level',
+    type: 'enum',
+    enum: ['unverified', 'basic', 'verified', 'trusted'],
+    default: 'unverified',
+  })
+  trustLevel: 'unverified' | 'basic' | 'verified' | 'trusted';
+
   @OneToOne(() => User, (u) => u.provider, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })
   user: User;
