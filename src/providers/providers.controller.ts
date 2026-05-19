@@ -80,6 +80,22 @@ export class ProvidersController {
     return this.providersService.verifyProviderOtp(body.mobileNumber, body.otp);
   }
 
+  @Patch(':id/contact-number')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @Throttle({ default: { ttl: 60000, limit: 3 } })
+  @ApiOperation({ summary: 'Update provider contact number with OTP verification (24h cooldown)' })
+  @ApiResponse({ status: 200, description: 'Contact number updated' })
+  @ApiResponse({ status: 400, description: 'Invalid input or cooldown active' })
+  @ApiParam({ name: 'id', description: 'Provider ID (UUID)' })
+  updateContactNumber(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Request() req,
+    @Body() body: { contactNumber: string; otp: string },
+  ) {
+    return this.providersService.updateContactNumber(id, req.user.id, body.contactNumber, body.otp);
+  }
+
   @Post('website-meta')
   @ApiBearerAuth()
   @UseGuards(AuthGuard('jwt'))

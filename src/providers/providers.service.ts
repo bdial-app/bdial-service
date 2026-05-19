@@ -90,6 +90,51 @@ export class ProvidersService {
     return { message: 'OTP verified successfully', verified: true };
   }
 
+  async updateContactNumber(providerId: string, userId: string, contactNumber: string, otp: string) {
+    const provider = await this.providerRepo.findOneBy({ id: providerId });
+    if (!provider) throw new NotFoundException('Provider not found');
+    if (provider.userId !== userId) throw new ForbiddenException('You can only update your own provider');
+
+    // Validate inputs
+    const phone = (contactNumber || '').replace(/\D/g, '').slice(-10);
+    if (!/^\d{10}$/.test(phone)) throw new BadRequestException('Phone number must be exactly 10 digits');
+    const code = (otp || '').trim();
+    if (!/^\d{6}$/.test(code)) throw new BadRequestException('OTP must be exactly 6 digits');
+
+    // Enforce 24-hour cooldown
+    if (provider.lastContactNumberChangeAt) {
+      const elapsed = Date.now() - new Date(provider.lastContactNumberChangeAt).getTime();
+      const cooldownMs = 24 * 60 * 60 * 1000;
+      if (elapsed < cooldownMs) {
+        const hoursLeft = Math.ceil((cooldownMs - elapsed) / (60 * 60 * 1000));
+        throw new BadRequestException(`Contact number can only be changed once every 24 hours. Try again in ${hoursLeft}h.`);
+      }
+    }
+
+    // Verify OTP for the new number
+    await this.otpService.verifyOtpWithKey(`provider_${phone}`, phone, code);
+
+    // Check if this number is already used by another provider
+    const existing = await this.providerRepo
+      .createQueryBuilder('p')
+      .where('p.deletedAt IS NULL')
+      .andWhere('p.id != :id', { id: providerId })
+      .andWhere(
+        '(p.contactNumber = :withPrefix OR p.contactNumber = :bare OR p.contactNumber = :withZero)',
+        { withPrefix: `+91${phone}`, bare: phone, withZero: `91${phone}` },
+      )
+      .getOne();
+    if (existing) throw new ConflictException('This phone number is already registered with another provider');
+
+    // Update
+    await this.providerRepo.update(providerId, {
+      contactNumber: phone,
+      lastContactNumberChangeAt: new Date(),
+    });
+
+    return { message: 'Contact number updated successfully', contactNumber: phone };
+  }
+
   async create(createProviderDto: CreateProviderDto) {
     const { userId } = createProviderDto;
     const user = await this.userRepo.findOneBy({ id: userId });
