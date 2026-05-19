@@ -19,9 +19,15 @@ export type NotificationType =
   | 'promotional'
   | 'system_announcement'
   | 'report_update'
-  | 'new_enquiry';
+  | 'new_enquiry'
+  | 'payment_update'
+  | 'voucher_update'
+  | 'subscription_update'
+  | 'invite_update';
 
 export type NotificationSource = 'system' | 'admin';
+
+export type NotificationTargetMode = 'customer' | 'provider';
 
 @Entity('notifications')
 @Index(['userId', 'isRead', 'createdAt'])
@@ -46,6 +52,10 @@ export class Notification {
       'system_announcement',
       'report_update',
       'new_enquiry',
+      'payment_update',
+      'voucher_update',
+      'subscription_update',
+      'invite_update',
     ],
   })
   type: NotificationType;
@@ -77,6 +87,14 @@ export class Notification {
     default: 'system',
   })
   source: NotificationSource;
+
+  @Column({
+    name: 'target_mode',
+    type: 'varchar',
+    length: 20,
+    nullable: true,
+  })
+  targetMode: NotificationTargetMode | null;
 
   @Column({ name: 'batch_id', type: 'uuid', nullable: true })
   batchId: string | null;

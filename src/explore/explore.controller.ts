@@ -18,6 +18,7 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import { ExploreService } from './explore.service';
 import { ExploreFeedDto } from './dto/explore-feed.dto';
+import { DealsQueryDto } from './dto/deals-query.dto';
 import { TrackAdEventDto } from './dto/track-ad-event.dto';
 import { Public } from '../common/decorators/public.decorator';
 
@@ -60,6 +61,20 @@ export class ExploreController {
   async trackEvent(@Body() dto: TrackAdEventDto, @Request() req: any) {
     const userId = req.user?.id ?? null;
     await this.exploreService.trackEvent(dto, userId);
+  }
+
+  @Get('deals')
+  @Public()
+  @UseGuards(OptionalJwtGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Get paginated deals & offers',
+    description:
+      'Returns a paginated list of active provider deals/offers, filterable by location, category, and sortable by discount, ending_soon, distance, or newest.',
+  })
+  @ApiResponse({ status: 200, description: 'Paginated deals returned' })
+  async getDeals(@Query() dto: DealsQueryDto) {
+    return this.exploreService.getDeals(dto);
   }
 
   @Post('award-badges')

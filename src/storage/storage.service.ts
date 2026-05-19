@@ -47,6 +47,7 @@ export class StorageService {
           Key: storageKey,
           Body: file.buffer,
           ContentType: file.mimetype,
+          CacheControl: 'public, max-age=31536000, immutable',
         }),
       );
     } catch (err) {

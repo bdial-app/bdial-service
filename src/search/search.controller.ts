@@ -7,6 +7,7 @@ import {
   UseGuards,
   HttpCode,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import {
   ApiTags,
   ApiOperation,
@@ -60,6 +61,7 @@ export class SearchController {
 
   @Get('suggestions')
   @Public()
+  @Throttle({ default: { ttl: 1000, limit: 10 } })
   @ApiOperation({
     summary: 'Get autocomplete suggestions',
     description:

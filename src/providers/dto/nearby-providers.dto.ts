@@ -3,15 +3,17 @@ import { IsLatitude, IsLongitude, IsOptional, IsInt, Min, Max, IsString, IsEnum,
 import { Type, Transform } from 'class-transformer';
 
 export class NearbyProvidersDto {
-  @ApiProperty({ example: 18.5204, description: 'User latitude' })
+  @ApiPropertyOptional({ example: 18.5204, description: 'User latitude (optional — omit for city-only browsing)' })
+  @IsOptional()
   @Type(() => Number)
   @IsLatitude()
-  lat: number;
+  lat?: number;
 
-  @ApiProperty({ example: 73.8567, description: 'User longitude' })
+  @ApiPropertyOptional({ example: 73.8567, description: 'User longitude (optional — omit for city-only browsing)' })
+  @IsOptional()
   @Type(() => Number)
   @IsLongitude()
-  lng: number;
+  lng?: number;
 
   @ApiPropertyOptional({ example: 10, description: 'Radius in km (default 10, max 100)' })
   @IsOptional()
@@ -76,4 +78,12 @@ export class NearbyProvidersDto {
   @Transform(({ value }) => value === 'true' || value === true)
   @IsBoolean()
   womenLedOnly?: boolean;
+
+  @ApiPropertyOptional({ example: 30, description: 'Only show providers created within the last N days' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(365)
+  sinceDays?: number;
 }

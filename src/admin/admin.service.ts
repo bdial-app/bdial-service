@@ -1,11 +1,17 @@
 import { Injectable, ForbiddenException, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, IsNull, In, MoreThan, ILike, Between } from 'typeorm';
-import { Provider, User, Verification, Review, ReviewReport, Report, ProviderWarning, Product, Category, ProviderCategory, Conversation, ConversationParticipant, Message, PromoBanner, SponsoredListing, ProviderOffer, ProviderBadge, ProviderAnalyticsEvent, ProviderLead, SearchLog, AdEvent, AppInvite, AuditLog, SystemSetting, Photo, ReviewPhoto } from '../entities';
+import { Repository, DataSource, IsNull, Not, In, MoreThan, ILike, Between } from 'typeorm';
+import { Provider, User, Verification, Review, ReviewReport, Report, ProviderWarning, Product, Category, ProviderCategory, Conversation, ConversationParticipant, Message, PromoBanner, SponsoredListing, ProviderOffer, ProviderBadge, ProviderAnalyticsEvent, ProviderLead, SearchLog, AdEvent, AppInvite, AuditLog, SystemSetting, Photo, ReviewPhoto, ServiceableCity, UserArchive } from '../entities';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { BugReport } from '../bug-reports/bug-report.entity';
 import { AdminCreateUserDto, AdminCreateProviderWithUserDto } from './dto/admin-create-user.dto';
 import { StorageService } from '../storage/storage.service';
+import { OtpService } from '../otp/otp.service';
+import { compressImage, compressImages } from '../common/image-processor';
+import { SupabaseAuthService } from '../supabase/supabase-auth.service';
+import { ServiceableCitiesService } from '../serviceable-cities/serviceable-cities.service';
+import { ContentSanitizerService } from '../common/content-sanitizer';
+import { GoogleReviewsService } from '../google-reviews/google-reviews.service';
 
 @Injectable()
 export class AdminService {
@@ -36,9 +42,15 @@ export class AdminService {
     @InjectRepository(ProviderCategory) private providerCatRepo: Repository<ProviderCategory>,
     @InjectRepository(Photo) private photoRepo: Repository<Photo>,
     @InjectRepository(ReviewPhoto) private reviewPhotoRepo: Repository<ReviewPhoto>,
+    @InjectRepository(UserArchive) private userArchiveRepo: Repository<UserArchive>,
     private dataSource: DataSource,
     private notificationDispatch: NotificationDispatchService,
     private storageService: StorageService,
+    private otpService: OtpService,
+    private supabaseAuthService: SupabaseAuthService,
+    private serviceableCitiesService: ServiceableCitiesService,
+    private contentSanitizer: ContentSanitizerService,
+    private googleReviewsService: GoogleReviewsService,
   ) {}
 
   private assertAdmin(user: any) {
@@ -81,6 +93,42 @@ export class AdminService {
       this.offerRepo.count({ where: { approvalStatus: 'pending_approval' } }),
     ]);
 
+    // Extended stats via raw queries
+    const [
+      revenueStats, leadBreakdown, adStats, womenLedPending,
+      topCities, activeSubscriptions, totalMessages,
+    ] = await Promise.all([
+      this.dataSource.query(`
+        SELECT COALESCE(SUM(amount)::int, 0) AS "totalRevenue",
+               COALESCE(SUM(CASE WHEN created_at >= $1 THEN amount ELSE 0 END)::int, 0) AS "revenueThisMonth",
+               COUNT(*)::int AS "totalPayments"
+        FROM payments WHERE status = 'succeeded'
+      `, [oneMonthAgo]).then(r => r[0] || { totalRevenue: 0, revenueThisMonth: 0, totalPayments: 0 }),
+      this.dataSource.query(`
+        SELECT tier, COUNT(*)::int AS count FROM provider_leads GROUP BY tier
+      `).then(rows => {
+        const map: Record<string, number> = {};
+        for (const r of rows) map[r.tier] = r.count;
+        return { hot: map['hot'] || 0, warm: map['warm'] || 0, cold: map['cold'] || 0 };
+      }),
+      this.dataSource.query(`
+        SELECT
+          COALESCE(SUM(CASE WHEN event_type = 'impression' THEN 1 ELSE 0 END)::int, 0) AS impressions,
+          COALESCE(SUM(CASE WHEN event_type = 'click' THEN 1 ELSE 0 END)::int, 0) AS clicks
+        FROM ad_events
+      `).then(r => r[0] || { impressions: 0, clicks: 0 }),
+      this.providerRepo.count({ where: { womenLedStatus: 'pending' as any } }),
+      this.dataSource.query(`
+        SELECT city, COUNT(*)::int AS count FROM providers
+        WHERE city IS NOT NULL AND status IN ('active','unverified')
+        GROUP BY city ORDER BY count DESC LIMIT 8
+      `),
+      this.dataSource.query(`
+        SELECT COUNT(*)::int AS count FROM subscriptions WHERE status = 'active'
+      `).then(r => r[0]?.count || 0),
+      this.messageRepo.count(),
+    ]);
+
     return {
       pendingProviders, totalProviders, totalUsers, pendingVerifications,
       flaggedReviews, openReports, totalProducts, totalReviews,
@@ -88,6 +136,18 @@ export class AdminService {
       totalSearches, totalLeads, totalConversations, totalInvites,
       activeOffers, activeSponsorships, activeBanners,
       pendingSponsorships, pendingOffers,
+      // Extended
+      totalRevenue: revenueStats.totalRevenue,
+      revenueThisMonth: revenueStats.revenueThisMonth,
+      totalPayments: revenueStats.totalPayments,
+      activeSubscriptions,
+      leadBreakdown,
+      adImpressions: adStats.impressions,
+      adClicks: adStats.clicks,
+      adCtr: adStats.impressions > 0 ? Math.round((adStats.clicks / adStats.impressions) * 10000) / 100 : 0,
+      womenLedPending,
+      topCities,
+      totalMessages,
     };
   }
 
@@ -113,6 +173,9 @@ export class AdminService {
         'Provider Approved!',
         'Congratulations! Your provider profile has been approved and is now live.',
         { route: '/provider-details', params: { id: providerId } },
+        undefined,
+        undefined,
+        'provider',
       ).catch(() => {});
     }
 
@@ -132,6 +195,9 @@ export class AdminService {
         'Provider Profile Suspended',
         'Your provider profile has been suspended. Please contact support for details.',
         { route: '/provider-details', params: { id: providerId } },
+        undefined,
+        undefined,
+        'provider',
       ).catch(() => {});
     }
 
@@ -155,6 +221,9 @@ export class AdminService {
         'Suspension Revoked',
         'Your provider profile suspension has been revoked. Your profile is now active again.',
         { route: '/provider-details', params: { id: providerId } },
+        undefined,
+        undefined,
+        'provider',
       ).catch(() => {});
     }
 
@@ -229,9 +298,25 @@ export class AdminService {
       reviewedBy: admin.id,
     };
     if (ijamatStatus) data.ijamatStatus = ijamatStatus;
+
+    // Update overall status based on aadhaar review result
+    data.status = aadhaarStatus;
+
     await this.verificationRepo.update(verificationId, data);
 
-    const verification = await this.verificationRepo.findOneBy({ id: verificationId });
+    const verification = await this.verificationRepo.findOne({
+      where: { id: verificationId },
+      relations: ['user'],
+    });
+
+    // If approved, also activate the provider
+    if (verification && aadhaarStatus === 'approved') {
+      const provider = await this.providerRepo.findOneBy({ userId: verification.userId });
+      if (provider && provider.status === 'unverified') {
+        provider.status = 'active';
+        await this.providerRepo.save(provider);
+      }
+    }
 
     // Notify user of verification result
     if (verification) {
@@ -247,6 +332,9 @@ export class AdminService {
         title,
         body,
         { route: '/provider-onboarding/verify' },
+        undefined,
+        undefined,
+        'provider',
       ).catch(() => {});
     }
 
@@ -271,10 +359,52 @@ export class AdminService {
     });
   }
 
-  async suspendUser(admin: any, userId: string) {
+  async pauseUser(admin: any, userId: string) {
     this.assertAdmin(admin);
-    await this.userRepo.update(userId, { status: 'suspended' });
-    return this.userRepo.findOneBy({ id: userId });
+    const user = await this.userRepo.findOne({ where: { id: userId }, relations: ['provider'] });
+    if (!user) throw new NotFoundException('User not found');
+    if (user.role === 'admin') throw new BadRequestException('Cannot pause admin users');
+    if (user.status === 'paused') throw new BadRequestException('User is already paused');
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      // 1. Set status to paused
+      await queryRunner.manager.update(User, userId, {
+        status: 'paused',
+        pausedAt: new Date(),
+      });
+
+      // 2. Ban Supabase user (blocks all SSO re-login)
+      if (user.supabaseId) {
+        await this.supabaseAuthService.banUser(user.supabaseId);
+      }
+
+      // 3. Hide provider if exists
+      if (user.provider) {
+        await queryRunner.manager.update(Provider, user.provider.id, {
+          isAvailable: false,
+        });
+      }
+
+      // 4. Deactivate chat participations
+      await queryRunner.manager.update(
+        ConversationParticipant,
+        { userId },
+        { isActive: false },
+      );
+
+      await queryRunner.commitTransaction();
+      await this.createAuditLog(admin.id, 'pause_user', 'user', userId, { status: user.status }, { status: 'paused' }, 'Admin paused user');
+      return { ...user, status: 'paused', pausedAt: new Date() };
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
   }
 
   async updateVerificationStatus(
@@ -325,9 +455,52 @@ export class AdminService {
       take: pageSize,
     });
 
+    // Hydrate each report with target entity summary
+    const hydratedReports = await Promise.all(
+      reports.map(async (report) => {
+        let targetSummary: { name: string; imageUrl?: string; status?: string; totalReports: number } | null = null;
+        try {
+          const totalReports = await this.entityReportRepo.count({
+            where: { entityType: report.entityType, entityId: report.entityId },
+          });
+          if (report.entityType === 'provider') {
+            const provider = await this.providerRepo.findOne({
+              where: { id: report.entityId },
+              select: ['id', 'brandName', 'profilePhotoUrl', 'status'],
+            });
+            if (provider) {
+              targetSummary = {
+                name: provider.brandName || 'Unknown Provider',
+                imageUrl: provider.profilePhotoUrl || undefined,
+                status: provider.status,
+                totalReports,
+              };
+            }
+          } else if (report.entityType === 'product') {
+            const product: any = await this.providerRepo.manager
+              .getRepository('Product')
+              .findOne({ where: { id: report.entityId }, relations: ['provider'] });
+            if (product) {
+              targetSummary = {
+                name: product.name || 'Unknown Product',
+                imageUrl: product.photos?.[0]?.url || undefined,
+                status: product.isActive ? 'active' : 'inactive',
+                totalReports,
+              };
+            }
+          } else if (report.entityType === 'message') {
+            targetSummary = { name: 'Message', totalReports };
+          }
+        } catch {
+          // Silently ignore hydration errors — target may have been deleted
+        }
+        return { ...report, targetSummary };
+      }),
+    );
+
     const totalPages = Math.ceil(totalCount / pageSize);
     return {
-      data: reports,
+      data: hydratedReports,
       pagination: {
         currentPage,
         pageSize,
@@ -349,9 +522,9 @@ export class AdminService {
 
     // Reporter credibility stats
     const [totalFiled, dismissedCount, actionCount] = await Promise.all([
-      this.entityReportRepo.count({ where: { reporterId: report.reporterId } }),
-      this.entityReportRepo.count({ where: { reporterId: report.reporterId, status: 'dismissed' as any } }),
-      this.entityReportRepo.count({ where: { reporterId: report.reporterId, status: 'action_taken' as any } }),
+      report.reporterId ? this.entityReportRepo.count({ where: { reporterId: report.reporterId } }) : Promise.resolve(0),
+      report.reporterId ? this.entityReportRepo.count({ where: { reporterId: report.reporterId, status: 'dismissed' as any } }) : Promise.resolve(0),
+      report.reporterId ? this.entityReportRepo.count({ where: { reporterId: report.reporterId, status: 'action_taken' as any } }) : Promise.resolve(0),
     ]);
 
     // Other reports against same target
@@ -451,14 +624,14 @@ export class AdminService {
         });
         // Suspend the provider
         if (report.entityType === 'provider') {
-          await this.providerRepo.update(report.entityId, { status: 'suspended' });
+          await this.providerRepo.update(report.entityId, { status: 'suspended', suspendedAt: new Date(), suspensionConfirmed: false });
           await this.createProviderWarning(report.entityId, reportId, admin.id, report.reason, adminNotes, true);
         } else if (report.entityType === 'product') {
           const product = await this.providerRepo.manager
             .getRepository('Product')
             .findOne({ where: { id: report.entityId }, relations: ['provider'] });
           if (product?.provider?.id) {
-            await this.providerRepo.update(product.provider.id, { status: 'suspended' });
+            await this.providerRepo.update(product.provider.id, { status: 'suspended', suspendedAt: new Date(), suspensionConfirmed: false });
             await this.createProviderWarning(product.provider.id, reportId, admin.id, report.reason, adminNotes, true);
           }
         }
@@ -477,22 +650,43 @@ export class AdminService {
         if (report.entityType === 'provider') {
           const provider = await this.providerRepo.findOneBy({ id: report.entityId });
           if (provider) {
-            await this.providerRepo.update(report.entityId, { status: 'suspended' });
+            await this.providerRepo.update(report.entityId, { status: 'suspended', suspendedAt: new Date(), suspensionConfirmed: true });
             await this.userRepo.update(provider.userId, { status: 'suspended' });
             await this.createProviderWarning(report.entityId, reportId, admin.id, report.reason, adminNotes, true);
+            // Notify the user about account suspension
+            this.notificationDispatch.sendToUser(
+              provider.userId, 'system_announcement',
+              'Account Suspended',
+              'Your account has been suspended due to a policy violation. Contact support for details.',
+              { route: '/' }, undefined, undefined, 'customer',
+            ).catch(() => {});
           }
         } else if (report.entityType === 'product') {
           const product = await this.providerRepo.manager
             .getRepository('Product')
             .findOne({ where: { id: report.entityId }, relations: ['provider'] });
           if (product?.provider) {
-            await this.providerRepo.update(product.provider.id, { status: 'suspended' });
+            await this.providerRepo.update(product.provider.id, { status: 'suspended', suspendedAt: new Date(), suspensionConfirmed: true });
             await this.userRepo.update(product.provider.userId, { status: 'suspended' });
             await this.createProviderWarning(product.provider.id, reportId, admin.id, report.reason, adminNotes, true);
+            // Notify the user about account suspension
+            this.notificationDispatch.sendToUser(
+              product.provider.userId, 'system_announcement',
+              'Account Suspended',
+              'Your account has been suspended due to a policy violation. Contact support for details.',
+              { route: '/' }, undefined, undefined, 'customer',
+            ).catch(() => {});
           }
         }
         break;
       }
+    }
+
+    // Notify reporter that their report was resolved
+    if (report.reporterId) {
+      this.notificationDispatch.sendTemplated(report.reporterId, 'report_resolved', {
+        outcome: action === 'dismiss' ? 'dismissed' : 'action taken',
+      }, undefined, 'customer').catch(() => {});
     }
 
     return this.entityReportRepo.findOne({
@@ -570,6 +764,15 @@ export class AdminService {
       issuedBy,
     });
     await this.warningRepo.save(warning);
+
+    // Notify provider about warning
+    const provider = await this.providerRepo.findOneBy({ id: providerId });
+    if (provider) {
+      this.notificationDispatch.sendTemplated(provider.userId, 'warning_issued', {
+        reason: reasonLabel,
+      }, undefined, 'provider').catch(() => {});
+    }
+
     return warning;
   }
 
@@ -579,6 +782,18 @@ export class AdminService {
       where: { providerId },
       order: { createdAt: 'DESC' },
     });
+  }
+
+  async confirmSuspension(admin: any, providerId: string) {
+    this.assertAdmin(admin);
+    const provider = await this.providerRepo.findOneBy({ id: providerId });
+    if (!provider) throw new NotFoundException('Provider not found');
+    if (provider.status !== 'suspended') {
+      throw new BadRequestException('Provider is not currently suspended');
+    }
+    await this.providerRepo.update(providerId, { suspensionConfirmed: true });
+    await this.createAuditLog(admin.id, 'confirm_suspension', 'provider', providerId, null, { confirmed: true });
+    return { message: 'Suspension confirmed. Auto-lift is now disabled for this provider.' };
   }
 
   // ============================================
@@ -600,6 +815,28 @@ export class AdminService {
     const pageSize = Math.min(100, Math.max(1, limit || 10));
     const skip = (currentPage - 1) * pageSize;
 
+    // Deleted users are in the archive table
+    if (status === 'deleted') {
+      const qb = this.userArchiveRepo.createQueryBuilder('a');
+      if (role) qb.andWhere('a.role = :role', { role });
+      qb.orderBy('a.deletedAt', 'DESC').skip(skip).take(pageSize);
+      const [items, total] = await qb.getManyAndCount();
+      return {
+        items: items.map((a) => ({
+          id: a.id,
+          name: 'Deleted User',
+          role: a.role,
+          gender: a.gender,
+          status: 'deleted' as const,
+          archiveReason: a.archiveReason,
+          deletedBy: a.deletedBy,
+          createdAt: a.originalCreatedAt,
+          deletedAt: a.deletedAt,
+        })),
+        meta: { total, page: currentPage, limit: pageSize, totalPages: Math.ceil(total / pageSize) },
+      };
+    }
+
     const qb = this.userRepo.createQueryBuilder('u');
 
     if (search) {
@@ -608,7 +845,7 @@ export class AdminService {
         { search: `%${search}%` },
       );
     }
-    const VALID_USER_STATUSES = ['active', 'suspended', 'deleted', 'paused'];
+    const VALID_USER_STATUSES = ['active', 'suspended', 'paused'];
     const VALID_USER_ROLES = ['customer', 'admin'];
     if (status && VALID_USER_STATUSES.includes(status)) qb.andWhere('u.status = :status', { status });
     if (role && VALID_USER_ROLES.includes(role)) qb.andWhere('u.role = :role', { role });
@@ -705,6 +942,8 @@ export class AdminService {
     if (city) qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
     if (isFeatured === 'true') qb.andWhere('p.is_featured = true');
     if (isWomenLed === 'true') qb.andWhere('p.is_women_led = true');
+    if (isWomenLed === 'pending') qb.andWhere("p.women_led_status = 'pending'");
+    if (isWomenLed === 'approved') qb.andWhere("p.women_led_status = 'approved'");
 
     qb.orderBy('p.createdAt', 'DESC').skip(skip).take(pageSize);
 
@@ -738,13 +977,57 @@ export class AdminService {
 
   async updateProviderAdmin(admin: any, providerId: string, body: Partial<Provider>) {
     this.assertAdmin(admin);
-    const allowed: string[] = ['status', 'isFeatured', 'communityVerified', 'brandName', 'description', 'isAvailable'];
+    const allowed: string[] = [
+      'status', 'isFeatured', 'communityVerified', 'brandName', 'description',
+      'isAvailable', 'websiteUrl', 'instagramHandle', 'facebookHandle',
+      'youtubeHandle', 'whatsappNumber', 'openTime', 'closeTime',
+      'city', 'area', 'pincode', 'address', 'isWomenLed',
+    ];
     const update: any = {};
     for (const key of allowed) {
       if ((body as any)[key] !== undefined) update[key] = (body as any)[key];
     }
     if (Object.keys(update).length === 0) throw new BadRequestException('No valid fields to update');
     await this.providerRepo.update(providerId, update);
+    return this.providerRepo.findOne({
+      where: { id: providerId },
+      relations: ['user', 'providerCategories', 'providerCategories.category'],
+    });
+  }
+
+  async updateProviderContactNumber(admin: any, providerId: string, contactNumber: string, otp: string) {
+    this.assertAdmin(admin);
+    const phone = contactNumber?.replace(/\D/g, '').slice(-10);
+    if (!/^\d{10}$/.test(phone)) throw new BadRequestException('Contact number must be exactly 10 digits');
+    const code = otp?.trim();
+    if (!/^\d{6}$/.test(code)) throw new BadRequestException('OTP must be exactly 6 digits');
+
+    const provider = await this.providerRepo.findOne({ where: { id: providerId } });
+    if (!provider) throw new NotFoundException('Provider not found');
+
+    // Enforce 24h cooldown
+    if (provider.lastContactNumberChangeAt) {
+      const elapsed = Date.now() - new Date(provider.lastContactNumberChangeAt).getTime();
+      const cooldownMs = 24 * 60 * 60 * 1000;
+      if (elapsed < cooldownMs) {
+        const remaining = Math.ceil((cooldownMs - elapsed) / 1000);
+        throw new BadRequestException({
+          statusCode: 429,
+          message: 'Contact number was changed recently. Please wait before changing again.',
+          retryAfterSeconds: remaining,
+          error_code: 'CONTACT_CHANGE_COOLDOWN',
+        });
+      }
+    }
+
+    // Verify OTP
+    await this.otpService.verifyOtpWithKey(`admin_action_${phone}_business_verification`, phone, code);
+
+    await this.providerRepo.update(providerId, {
+      contactNumber: phone,
+      lastContactNumberChangeAt: new Date(),
+    });
+
     return this.providerRepo.findOne({
       where: { id: providerId },
       relations: ['user', 'providerCategories', 'providerCategories.category'],
@@ -762,6 +1045,12 @@ export class AdminService {
     search?: string,
     providerId?: string,
     isActive?: string,
+    productType?: string,
+    priceMin?: string,
+    priceMax?: string,
+    hasImages?: string,
+    sortBy?: string,
+    sortOrder?: string,
   ) {
     this.assertAdmin(admin);
     const currentPage = Math.max(1, Number(page) || 1);
@@ -778,8 +1067,16 @@ export class AdminService {
       if (providerId) qb.andWhere('prod.provider_id = :providerId', { providerId });
       if (isActive === 'true') qb.andWhere('prod.is_active = true');
       if (isActive === 'false') qb.andWhere('prod.is_active = false');
+      if (productType) qb.andWhere('prod.product_type = :productType', { productType });
+      if (priceMin) qb.andWhere('prod.price >= :priceMin', { priceMin: Number(priceMin) });
+      if (priceMax) qb.andWhere('prod.price <= :priceMax', { priceMax: Number(priceMax) });
+      if (hasImages === 'true') qb.andWhere("prod.photo_urls != '{}'");
+      if (hasImages === 'false') qb.andWhere("prod.photo_urls = '{}'");
 
-      qb.orderBy('prod.display_order', 'ASC').skip(skip).take(pageSize);
+      const validSortFields: Record<string, string> = { name: 'prod.name', price: 'prod.price', createdAt: 'prod.createdAt', displayOrder: 'prod.display_order' };
+      const sortField = (sortBy && validSortFields[sortBy]) || 'prod.display_order';
+      const order = sortOrder?.toUpperCase() === 'DESC' ? 'DESC' : 'ASC';
+      qb.orderBy(sortField, order).skip(skip).take(pageSize);
 
       const [items, total] = await qb.getManyAndCount();
       return {
@@ -817,6 +1114,51 @@ export class AdminService {
     }
   }
 
+  async getProductStats(admin: any) {
+    this.assertAdmin(admin);
+    const [total, active, withImages, withPrice, products, services] = await Promise.all([
+      this.productRepo.count(),
+      this.productRepo.count({ where: { isActive: true } }),
+      this.productRepo.createQueryBuilder('p').where('p."photoUrls"::text != \'[]\'').andWhere('p."photoUrls" IS NOT NULL').getCount(),
+      this.productRepo.count({ where: { price: Not(IsNull()) } }),
+      this.productRepo.count({ where: { productType: 'product' as any } }),
+      this.productRepo.count({ where: { productType: 'service' as any } }),
+    ]);
+
+    const topProviders = await this.productRepo
+      .createQueryBuilder('p')
+      .select('p."providerId"', 'providerId')
+      .addSelect('COUNT(*)::int', 'count')
+      .addSelect('pr."brandName"', 'brandName')
+      .innerJoin('providers', 'pr', 'pr.id = p."providerId"')
+      .where('p."isActive" = true')
+      .groupBy('p."providerId"')
+      .addGroupBy('pr."brandName"')
+      .orderBy('"count"', 'DESC')
+      .limit(5)
+      .getRawMany();
+
+    return {
+      total,
+      active,
+      inactive: total - active,
+      withImages,
+      withoutImages: total - withImages,
+      withPrice,
+      withoutPrice: total - withPrice,
+      avgPrice: 0,
+      typeBreakdown: [
+        { type: 'product', count: products },
+        { type: 'service', count: services },
+      ],
+      topProviders: topProviders.map((tp: any) => ({
+        brandName: tp.brandName,
+        providerId: tp.providerId,
+        count: Number(tp.count),
+      })),
+    };
+  }
+
   async getProductById(admin: any, productId: string) {
     this.assertAdmin(admin);
     const product = await this.productRepo.findOne({
@@ -833,8 +1175,9 @@ export class AdminService {
     if (!product) throw new NotFoundException('Product not found');
     if (!files.length) throw new BadRequestException('No images provided');
 
+    const compressed = await compressImages(files, 'full');
     const uploaded: string[] = [];
-    for (const file of files) {
+    for (const file of compressed) {
       const result = await this.storageService.upload('products', file);
       uploaded.push(result.url);
     }
@@ -849,7 +1192,7 @@ export class AdminService {
 
   async updateProductAdmin(admin: any, productId: string, body: Partial<Product>) {
     this.assertAdmin(admin);
-    const allowed: string[] = ['isActive', 'displayOrder', 'name', 'description', 'price'];
+    const allowed: string[] = ['isActive', 'displayOrder', 'name', 'description', 'price', 'productType', 'categoryId', 'subcategoryId'];
     const update: any = {};
     for (const key of allowed) {
       if ((body as any)[key] !== undefined) update[key] = (body as any)[key];
@@ -952,10 +1295,64 @@ export class AdminService {
       update.moderatedBy = admin.id;
     }
     await this.reviewRepo.update(reviewId, update);
+
+    // Recompute combined rating after moderation
+    const review = await this.reviewRepo.findOneBy({ id: reviewId });
+    if (review) {
+      this.googleReviewsService.recomputeByProviderId(review.providerId).catch(() => {});
+    }
+
     return this.reviewRepo.findOne({
       where: { id: reviewId },
       relations: ['reviewer', 'provider'],
     });
+  }
+
+  // ============================================
+  // Google Reviews Management (Admin)
+  // ============================================
+
+  async getGoogleLinkedProviders(
+    admin: any,
+    page?: number,
+    limit?: number,
+    filters?: { trustLevel?: string; linked?: boolean; search?: string },
+  ) {
+    this.assertAdmin(admin);
+    return this.googleReviewsService.getLinkedProviders(
+      Math.max(1, Number(page) || 1),
+      Math.min(100, Math.max(1, Number(limit) || 20)),
+      filters,
+    );
+  }
+
+  async getTrustOverview(admin: any) {
+    this.assertAdmin(admin);
+    return this.googleReviewsService.getTrustOverview();
+  }
+
+  async adminVerifyGooglePlace(admin: any, providerId: string, phoneNumber?: string) {
+    this.assertAdmin(admin);
+    // Admin bypasses ownership check (no actorUserId passed)
+    return this.googleReviewsService.findPlaceCandidates(providerId, phoneNumber);
+  }
+
+  async adminConfirmGooglePlace(admin: any, providerId: string, placeId: string) {
+    this.assertAdmin(admin);
+    if (!placeId) throw new BadRequestException('placeId is required');
+    // Admin bypasses ownership check (no actorUserId passed)
+    return this.googleReviewsService.confirmGooglePlace(providerId, placeId);
+  }
+
+  async adminUnlinkGooglePlace(admin: any, providerId: string) {
+    this.assertAdmin(admin);
+    // Admin bypasses ownership check (no actorUserId passed)
+    return this.googleReviewsService.unlinkGooglePlace(providerId);
+  }
+
+  async adminRefreshGoogleAggregates(admin: any, providerId: string) {
+    this.assertAdmin(admin);
+    return this.googleReviewsService.forceRefreshAggregates(providerId);
   }
 
   // ============================================
@@ -968,6 +1365,10 @@ export class AdminService {
     limit?: number,
     providerId?: string,
     warningType?: string,
+    search?: string,
+    isRead?: string,
+    dateFrom?: string,
+    dateTo?: string,
   ) {
     this.assertAdmin(admin);
     const currentPage = Math.max(1, page || 1);
@@ -980,6 +1381,11 @@ export class AdminService {
 
     if (providerId) qb.andWhere('w.provider_id = :providerId', { providerId });
     if (warningType) qb.andWhere('w.warning_type = :warningType', { warningType });
+    if (search) qb.andWhere('(w.title ILIKE :search OR w.message ILIKE :search)', { search: `%${search}%` });
+    if (isRead === 'true') qb.andWhere('w.is_read = true');
+    if (isRead === 'false') qb.andWhere('w.is_read = false');
+    if (dateFrom) qb.andWhere('w.createdAt >= :dateFrom', { dateFrom });
+    if (dateTo) qb.andWhere('w.createdAt <= :dateTo', { dateTo });
 
     qb.orderBy('w.createdAt', 'DESC').skip(skip).take(pageSize);
 
@@ -1048,6 +1454,10 @@ export class AdminService {
     limit?: number,
     status?: string,
     search?: string,
+    type?: string,
+    dateFrom?: string,
+    dateTo?: string,
+    hasRedacted?: string,
   ) {
     this.assertAdmin(admin);
     const currentPage = Math.max(1, page || 1);
@@ -1062,6 +1472,10 @@ export class AdminService {
     if (search) {
       qb.andWhere('(u.name ILIKE :search OR u.mobile_number ILIKE :search)', { search: `%${search}%` });
     }
+    if (type) qb.andWhere('c.type = :type', { type });
+    if (dateFrom) qb.andWhere('c.createdAt >= :dateFrom', { dateFrom });
+    if (dateTo) qb.andWhere('c.createdAt <= :dateTo', { dateTo });
+    if (hasRedacted === 'true') qb.andWhere('c.hasRedactedMessages = true');
 
     qb.orderBy('c.lastMessageAt', 'DESC').skip(skip).take(pageSize);
 
@@ -1173,7 +1587,8 @@ export class AdminService {
       .getRawOne();
 
     if (file) {
-      const result = await this.storageService.upload('banners', file);
+      const compressed = await compressImage(file, 'banner');
+      const result = await this.storageService.upload('banners', compressed);
       body.imageUrl = result.url;
     }
 
@@ -1195,7 +1610,8 @@ export class AdminService {
         const oldKey = this.storageService.extractKeyFromUrl(banner.imageUrl);
         if (oldKey) await this.storageService.delete(oldKey).catch(() => {});
       }
-      const result = await this.storageService.upload('banners', file);
+      const compressed = await compressImage(file, 'banner');
+      const result = await this.storageService.upload('banners', compressed);
       body.imageUrl = result.url;
     }
 
@@ -1308,6 +1724,30 @@ export class AdminService {
       totalImpressions: Number(totalImpressions?.val || 0),
       totalClicks: Number(totalClicks?.val || 0),
     };
+  }
+
+  async getSponsorshipAnalytics(admin: any, id: string, period: string) {
+    this.assertAdmin(admin);
+    const listing = await this.sponsoredRepo.findOne({ where: { id }, relations: ['provider'] });
+    if (!listing) throw new NotFoundException('Sponsored listing not found');
+
+    const days = period === '30d' ? 30 : period === '14d' ? 14 : 7;
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+
+    const events = await this.adEventRepo
+      .createQueryBuilder('e')
+      .select("DATE(e.created_at)", 'date')
+      .addSelect("e.event_type", 'eventType')
+      .addSelect("COUNT(*)", 'count')
+      .where('e.sponsored_listing_id = :id', { id })
+      .andWhere('e.created_at >= :since', { since })
+      .groupBy("DATE(e.created_at)")
+      .addGroupBy("e.event_type")
+      .orderBy("date", 'ASC')
+      .getRawMany();
+
+    return { listing, period, events };
   }
 
   // ============================================
@@ -1498,6 +1938,24 @@ export class AdminService {
       .orderBy('date', 'ASC')
       .getRawMany();
 
+    const leadVolume = await this.leadRepo
+      .createQueryBuilder('l')
+      .select("DATE_TRUNC('day', l.created_at)", 'date')
+      .addSelect('COUNT(*)', 'count')
+      .where('l.created_at >= :startDate', { startDate })
+      .groupBy("DATE_TRUNC('day', l.created_at)")
+      .orderBy('date', 'ASC')
+      .getRawMany();
+
+    const conversationVolume = await this.conversationRepo
+      .createQueryBuilder('c')
+      .select("DATE_TRUNC('day', c.created_at)", 'date')
+      .addSelect('COUNT(*)', 'count')
+      .where('c.created_at >= :startDate', { startDate })
+      .groupBy("DATE_TRUNC('day', c.created_at)")
+      .orderBy('date', 'ASC')
+      .getRawMany();
+
     const fmt = (rows: any[]) => rows.map(r => ({ date: r.date, count: Number(r.count) }));
 
     return {
@@ -1505,6 +1963,8 @@ export class AdminService {
       providerGrowth: fmt(providerGrowth),
       searchVolume: fmt(searchVolume),
       reportVolume: fmt(reportVolume),
+      leadVolume: fmt(leadVolume),
+      conversationVolume: fmt(conversationVolume),
     };
   }
 
@@ -1798,7 +2258,7 @@ export class AdminService {
     return this.auditLogRepo.save(log);
   }
 
-  async getAuditLogs(admin: any, page = 1, rows = 25, filters?: { adminId?: string; action?: string; entityType?: string; startDate?: string; endDate?: string }) {
+  async getAuditLogs(admin: any, page = 1, rows = 25, filters?: { adminId?: string; action?: string; entityType?: string; startDate?: string; endDate?: string; search?: string }) {
     this.assertAdmin(admin);
     const qb = this.auditLogRepo
       .createQueryBuilder('al')
@@ -1810,6 +2270,7 @@ export class AdminService {
     if (filters?.entityType) qb.andWhere('al.entityType = :et', { et: filters.entityType });
     if (filters?.startDate) qb.andWhere('al.createdAt >= :sd', { sd: filters.startDate });
     if (filters?.endDate) qb.andWhere('al.createdAt <= :ed', { ed: filters.endDate });
+    if (filters?.search) qb.andWhere('(al.action ILIKE :search OR al.entityType ILIKE :search OR al.details::text ILIKE :search)', { search: `%${filters.search}%` });
 
     qb.skip((page - 1) * rows).take(rows);
     const [items, total] = await qb.getManyAndCount();
@@ -1892,6 +2353,14 @@ export class AdminService {
   async adminCreateUser(admin: any, dto: AdminCreateUserDto) {
     this.assertAdmin(admin);
 
+    // Content moderation
+    if (dto.name) {
+      const check = this.contentSanitizer.check(dto.name);
+      if (check.flagged) {
+        throw new BadRequestException('Name contains inappropriate language.');
+      }
+    }
+
     // Check for duplicate mobile number
     const existingByMobile = await this.userRepo.findOne({ where: { mobileNumber: dto.mobileNumber } });
     if (existingByMobile) {
@@ -1936,6 +2405,37 @@ export class AdminService {
 
   async adminCreateProviderWithUser(admin: any, dto: AdminCreateProviderWithUserDto) {
     this.assertAdmin(admin);
+
+    // Content moderation on text fields
+    const fieldsToCheck = [
+      { label: 'user name', value: dto.userName },
+      { label: 'brand name', value: dto.brandName },
+      { label: 'description', value: dto.description },
+    ];
+    for (const field of fieldsToCheck) {
+      if (field.value && typeof field.value === 'string') {
+        const check = this.contentSanitizer.check(field.value);
+        if (check.flagged) {
+          throw new BadRequestException(`The ${field.label} contains inappropriate language. Please revise.`);
+        }
+      }
+    }
+    if (dto.products?.length) {
+      for (const p of dto.products) {
+        if (p.name) {
+          const nameCheck = this.contentSanitizer.check(p.name);
+          if (nameCheck.flagged) {
+            throw new BadRequestException(`Product name "${p.name}" contains inappropriate language.`);
+          }
+        }
+        if (p.description) {
+          const descCheck = this.contentSanitizer.check(p.description);
+          if (descCheck.flagged) {
+            throw new BadRequestException(`Product description for "${p.name}" contains inappropriate language.`);
+          }
+        }
+      }
+    }
 
     // ── Pre-flight validations ────────────────────────────
     // 1. Check duplicate user mobile
@@ -2030,6 +2530,7 @@ export class AdminService {
         openTime: dto.openTime || null,
         closeTime: dto.closeTime || null,
         isWomenLed: dto.isWomenLed ?? (dto.userGender === 'female'),
+        womenLedStatus: (dto.isWomenLed ?? (dto.userGender === 'female')) ? 'approved' : 'none',
         status: (dto.providerStatus as any) || 'active',
       });
       const savedProvider = await manager.save(Provider, provider);
@@ -2053,6 +2554,9 @@ export class AdminService {
             description: p.description || null,
             price: p.price != null ? p.price : null,
             currency: p.currency || 'INR',
+            productType: (p as any).productType || 'product',
+            categoryId: (p as any).categoryId || null,
+            subcategoryId: (p as any).subcategoryId || null,
             isActive: true,
             displayOrder: i,
           });
@@ -2087,8 +2591,6 @@ export class AdminService {
   // Admin OTP Management (for verification in flow)
   // ============================================
 
-  private adminOtpStore = new Map<string, { otp: string; expiresAt: Date; sentAt: Date; purpose: string }>();
-
   async adminSendOtp(admin: any, mobileNumber: string, purpose = 'user_verification') {
     this.assertAdmin(admin);
     const phone = mobileNumber.trim();
@@ -2096,26 +2598,8 @@ export class AdminService {
       throw new BadRequestException('Mobile number must be exactly 10 digits');
     }
 
-    // Check cooldown
-    const existing = this.adminOtpStore.get(`${phone}_${purpose}`);
-    if (existing && new Date() < existing.expiresAt) {
-      const timeSinceSent = Date.now() - existing.sentAt.getTime();
-      if (timeSinceSent < 60 * 1000) {
-        const remaining = Math.ceil((60 * 1000 - timeSinceSent) / 1000);
-        throw new BadRequestException({
-          message: 'OTP recently sent. Please wait.',
-          retryAfterSeconds: remaining,
-          error_code: 'OTP_RATE_LIMITED',
-        });
-      }
-    }
-
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-    this.adminOtpStore.set(`${phone}_${purpose}`, { otp, expiresAt, sentAt: new Date(), purpose });
-    console.log(`[Admin OTP] ${phone} (${purpose}): ${otp} (Expires: ${expiresAt.toISOString()})`);
-
-    return { message: 'OTP sent successfully', data: { mobileNumber: phone, expiresIn: '5 minutes', otp } };
+    const result = await this.otpService.sendOtpWithKey(`admin_action_${phone}_${purpose}`, phone);
+    return { message: 'OTP sent successfully', data: { mobileNumber: phone, expiresIn: result.expiresIn, ...(result.otp ? { otp: result.otp } : {}) } };
   }
 
   async adminVerifyOtp(admin: any, mobileNumber: string, otp: string, purpose = 'user_verification') {
@@ -2126,19 +2610,7 @@ export class AdminService {
     if (!/^\d{10}$/.test(phone)) throw new BadRequestException('Mobile number must be exactly 10 digits');
     if (!/^\d{6}$/.test(code)) throw new BadRequestException('OTP must be exactly 6 digits');
 
-    const key = `${phone}_${purpose}`;
-    const record = this.adminOtpStore.get(key);
-    if (!record) {
-      throw new BadRequestException({ message: 'No OTP found for this number', error_code: 'OTP_NOT_FOUND' });
-    }
-    if (new Date() > record.expiresAt) {
-      this.adminOtpStore.delete(key);
-      throw new BadRequestException({ message: 'OTP has expired', error_code: 'OTP_EXPIRED' });
-    }
-    if (record.otp !== code) {
-      throw new BadRequestException({ message: 'Invalid OTP', error_code: 'INVALID_OTP' });
-    }
-    this.adminOtpStore.delete(key);
+    await this.otpService.verifyOtpWithKey(`admin_action_${phone}_${purpose}`, phone, code);
 
     return { message: 'OTP verified successfully', verified: true, mobileNumber: phone, purpose };
   }
@@ -2195,10 +2667,8 @@ export class AdminService {
     await this.providerRepo.update(providerId, { status: 'disabled' });
     await this.createAuditLog(admin.id, 'disable_provider', 'provider', providerId, { status: prevStatus }, { status: 'disabled' });
 
-    this.notificationDispatch.sendToUser(
-      provider.userId, 'provider_status', 'Provider Profile Disabled',
-      'Your provider profile has been disabled by admin. Contact support for details.',
-      { route: '/provider-details', params: { id: providerId } },
+    this.notificationDispatch.sendTemplated(
+      provider.userId, 'provider_disabled', {},
     ).catch(() => {});
 
     return { ...provider, status: 'disabled' };
@@ -2213,10 +2683,8 @@ export class AdminService {
     await this.providerRepo.update(providerId, { status: 'active' });
     await this.createAuditLog(admin.id, 'enable_provider', 'provider', providerId, { status: 'disabled' }, { status: 'active' });
 
-    this.notificationDispatch.sendToUser(
-      provider.userId, 'provider_status', 'Provider Profile Re-enabled',
-      'Your provider profile has been re-enabled and is now active.',
-      { route: '/provider-details', params: { id: providerId } },
+    this.notificationDispatch.sendTemplated(
+      provider.userId, 'provider_enabled', {},
     ).catch(() => {});
 
     return { ...provider, status: 'active' };
@@ -2236,6 +2704,9 @@ export class AdminService {
       provider.userId, 'provider_status', 'Provider Profile Removed',
       'Your provider profile has been removed. Contact support if you believe this is an error.',
       { route: '/' },
+      undefined,
+      undefined,
+      'provider',
     ).catch(() => {});
 
     return { message: 'Provider soft-deleted', id: providerId };
@@ -2253,37 +2724,217 @@ export class AdminService {
   }
 
   // ============================================
+  // Women-Led Business Approval
+  // ============================================
+
+  async getWomenLedPending(admin: any, page?: number, limit?: number) {
+    this.assertAdmin(admin);
+    const currentPage = Math.max(1, page || 1);
+    const pageSize = Math.min(50, Math.max(1, limit || 10));
+    const skip = (currentPage - 1) * pageSize;
+
+    const qb = this.providerRepo.createQueryBuilder('p')
+      .leftJoinAndSelect('p.user', 'user')
+      .where("p.women_led_status = 'pending'")
+      .orderBy('p.createdAt', 'ASC')
+      .skip(skip)
+      .take(pageSize);
+
+    const [items, total] = await qb.getManyAndCount();
+    return {
+      items: items.map((p) => ({
+        id: p.id,
+        brandName: p.brandName,
+        city: p.city,
+        area: p.area,
+        status: p.status,
+        womenLedStatus: p.womenLedStatus,
+        createdAt: p.createdAt,
+        user: p.user ? { id: p.user.id, name: (p.user as any).name, gender: (p.user as any).gender } : null,
+      })),
+      meta: { total, page: currentPage, limit: pageSize, totalPages: Math.ceil(total / pageSize) },
+    };
+  }
+
+  async reviewWomenLedStatus(admin: any, providerId: string, decision: 'approved' | 'rejected') {
+    this.assertAdmin(admin);
+    const provider = await this.providerRepo.findOneBy({ id: providerId });
+    if (!provider) throw new NotFoundException('Provider not found');
+
+    const oldStatus = provider.womenLedStatus;
+
+    await this.providerRepo.update(providerId, {
+      womenLedStatus: decision,
+      isWomenLed: decision === 'approved',
+      womenLedReviewedAt: new Date(),
+      womenLedReviewedBy: admin.id,
+    });
+
+    await this.createAuditLog(
+      admin.id,
+      `women_led_${decision}`,
+      'provider',
+      providerId,
+      { womenLedStatus: oldStatus },
+      { womenLedStatus: decision },
+    );
+
+    return { id: providerId, womenLedStatus: decision, isWomenLed: decision === 'approved' };
+  }
+
+  async getWomenLedAnalytics(admin: any) {
+    this.assertAdmin(admin);
+
+    const [totalApproved, totalPending, totalRejected] = await Promise.all([
+      this.providerRepo.count({ where: { womenLedStatus: 'approved' as any } }),
+      this.providerRepo.count({ where: { womenLedStatus: 'pending' as any } }),
+      this.providerRepo.count({ where: { womenLedStatus: 'rejected' as any } }),
+    ]);
+
+    const totalProviders = await this.providerRepo.count();
+
+    // Category distribution of approved women-led providers
+    const categoryDistribution = await this.providerRepo.query(`
+      SELECT c.name, COUNT(DISTINCT p.id)::int AS count
+      FROM providers p
+      JOIN provider_categories pc ON pc.provider_id = p.id
+      JOIN categories c ON c.id = pc.category_id
+      WHERE p.women_led_status = 'approved'
+      GROUP BY c.name
+      ORDER BY count DESC
+      LIMIT 10
+    `);
+
+    // Avg rating comparison
+    const ratingComparison = await this.providerRepo.query(`
+      SELECT
+        COALESCE(AVG(CASE WHEN p.women_led_status = 'approved' THEN rs.avg_rating END)::numeric(2,1), 0) AS "womenLedAvgRating",
+        COALESCE(AVG(CASE WHEN p.women_led_status != 'approved' THEN rs.avg_rating END)::numeric(2,1), 0) AS "platformAvgRating"
+      FROM providers p
+      LEFT JOIN provider_rating_stats rs ON rs.provider_id = p.id
+      WHERE p.status IN ('active', 'unverified')
+    `);
+
+    // Growth this month
+    const startOfMonth = new Date();
+    startOfMonth.setDate(1);
+    startOfMonth.setHours(0, 0, 0, 0);
+    const newThisMonth = await this.providerRepo.createQueryBuilder('p')
+      .where("p.women_led_status = 'approved'")
+      .andWhere('p.women_led_reviewed_at >= :startOfMonth', { startOfMonth })
+      .getCount();
+
+    return {
+      totalApproved,
+      totalPending,
+      totalRejected,
+      totalProviders,
+      percentageOfPlatform: totalProviders > 0 ? parseFloat(((totalApproved / totalProviders) * 100).toFixed(1)) : 0,
+      newApprovedThisMonth: newThisMonth,
+      categoryDistribution,
+      ratingComparison: ratingComparison[0] || { womenLedAvgRating: 0, platformAvgRating: 0 },
+    };
+  }
+
+  // ============================================
   // User Lifecycle (Unsuspend / Delete)
   // ============================================
 
-  async unsuspendUser(admin: any, userId: string) {
+  async unpauseUser(admin: any, userId: string) {
     this.assertAdmin(admin);
-    const user = await this.userRepo.findOneBy({ id: userId });
+    const user = await this.userRepo.findOne({ where: { id: userId }, relations: ['provider'] });
     if (!user) throw new NotFoundException('User not found');
-    if (user.status !== 'suspended') throw new BadRequestException('User is not suspended');
+    if (user.status !== 'paused') throw new BadRequestException('User is not paused');
 
-    await this.userRepo.update(userId, { status: 'active' });
-    await this.createAuditLog(admin.id, 'unsuspend_user', 'user', userId, { status: 'suspended' }, { status: 'active' });
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
 
-    return { ...user, status: 'active' };
+    try {
+      // 1. Restore status to active
+      await queryRunner.manager.update(User, userId, {
+        status: 'active',
+        pausedAt: null,
+      });
+
+      // 2. Unban Supabase user
+      if (user.supabaseId) {
+        await this.supabaseAuthService.unbanUser(user.supabaseId);
+      }
+
+      // 3. Restore provider visibility if exists
+      if (user.provider) {
+        await queryRunner.manager.update(Provider, user.provider.id, {
+          isAvailable: true,
+        });
+      }
+
+      // 4. Reactivate chat participations
+      await queryRunner.manager.update(
+        ConversationParticipant,
+        { userId },
+        { isActive: true },
+      );
+
+      await queryRunner.commitTransaction();
+      await this.createAuditLog(admin.id, 'unpause_user', 'user', userId, { status: 'paused' }, { status: 'active' }, 'Admin unpaused user');
+      return { ...user, status: 'active', pausedAt: null };
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
   }
 
   async softDeleteUser(admin: any, userId: string) {
     this.assertAdmin(admin);
-    const user = await this.userRepo.findOneBy({ id: userId });
+    const user = await this.userRepo.findOne({ where: { id: userId }, relations: ['provider'] });
     if (!user) throw new NotFoundException('User not found');
     if (user.role === 'admin') throw new BadRequestException('Cannot delete admin users through this endpoint');
 
-    await this.userRepo.update(userId, { status: 'deleted', deletedAt: new Date() });
-    await this.createAuditLog(admin.id, 'delete_user', 'user', userId, { status: user.status }, { status: 'deleted' });
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
 
-    // Also disable their provider if they have one
-    const provider = await this.providerRepo.findOneBy({ userId });
-    if (provider && !provider.deletedAt) {
-      await this.providerRepo.update(provider.id, { status: 'disabled', deletedAt: new Date() });
+    try {
+      // 1. Create audit log BEFORE deleting the user (references admin, not user)
+      await this.createAuditLog(admin.id, 'delete_user', 'user', userId, { status: user.status }, { archived: true });
+
+      // 2. Archive non-PII audit data
+      await queryRunner.manager.save(UserArchive, {
+        id: user.id,
+        role: user.role,
+        gender: user.gender,
+        archiveReason: 'admin_action',
+        deletedBy: admin.id,
+        originalCreatedAt: user.createdAt,
+      });
+
+      // 3. Soft-delete provider if exists
+      if (user.provider && !user.provider.deletedAt) {
+        await queryRunner.manager.update(Provider, user.provider.id, { status: 'disabled', deletedAt: new Date() });
+      }
+
+      // 4. Deactivate chat participations
+      await queryRunner.manager.update(
+        ConversationParticipant,
+        { userId },
+        { isActive: false },
+      );
+
+      // 5. Hard-delete user row
+      await queryRunner.manager.delete(User, userId);
+
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
     }
 
-    return { message: 'User soft-deleted', id: userId };
+    return { message: 'User deleted and archived', id: userId };
   }
 
   // ============================================
@@ -2401,7 +3052,7 @@ export class AdminService {
         const body = action === 'approve'
           ? 'Your provider profile has been approved and is now live.'
           : 'Your provider profile has been suspended. Contact support for details.';
-        this.notificationDispatch.sendToUser(provider.userId, 'provider_status', title, body, { route: '/provider-details', params: { id: provider.id } }).catch(() => {});
+        this.notificationDispatch.sendToUser(provider.userId, 'provider_status', title, body, { route: '/provider-details', params: { id: provider.id } }, undefined, undefined, 'provider').catch(() => {});
       }
     }
 
@@ -2416,6 +3067,25 @@ export class AdminService {
     const newStatus = action === 'suspend' ? 'suspended' : 'active';
     const result = await this.userRepo.update(ids.map(id => id), { status: newStatus });
     await this.createAuditLog(admin.id, `bulk_${action}_users`, 'user', null, { ids }, { status: newStatus, count: result.affected }, `Bulk ${action} on ${ids.length} users`);
+
+    // Notify affected users
+    for (const userId of ids) {
+      if (action === 'suspend') {
+        this.notificationDispatch.sendToUser(
+          userId, 'system_announcement',
+          'Account Suspended',
+          'Your account has been suspended. Please contact support for details.',
+          { route: '/' }, undefined, undefined, 'customer',
+        ).catch(() => {});
+      } else {
+        this.notificationDispatch.sendToUser(
+          userId, 'system_announcement',
+          'Account Restored',
+          'Your account has been restored. You can now use all features again.',
+          { route: '/' }, undefined, undefined, 'customer',
+        ).catch(() => {});
+      }
+    }
 
     return { message: `Bulk ${action} completed`, affected: result.affected };
   }
@@ -2469,7 +3139,7 @@ export class AdminService {
     await this.createAuditLog(admin.id, 'approve_sponsorship', 'sponsored_listing', id, { approvalStatus: 'pending_approval' }, { approvalStatus: 'approved' });
 
     if (listing.provider) {
-      this.notificationDispatch.sendToUser(listing.provider.userId, 'provider_status', 'Sponsorship Approved!', 'Your sponsored listing has been approved and is now active.', { route: '/' }).catch(() => {});
+      this.notificationDispatch.sendTemplated(listing.provider.userId, 'sponsorship_approved', {}).catch(() => {});
     }
 
     return { ...listing, approvalStatus: 'approved' };
@@ -2484,7 +3154,7 @@ export class AdminService {
     await this.createAuditLog(admin.id, 'reject_sponsorship', 'sponsored_listing', id, { approvalStatus: listing.approvalStatus }, { approvalStatus: 'rejected', adminNotes });
 
     if (listing.provider) {
-      this.notificationDispatch.sendToUser(listing.provider.userId, 'provider_status', 'Sponsorship Not Approved', adminNotes || 'Your sponsorship request was not approved. Please review and resubmit.', { route: '/' }).catch(() => {});
+      this.notificationDispatch.sendToUser(listing.provider.userId, 'provider_status', 'Sponsorship Not Approved', adminNotes || 'Your sponsorship request was not approved. Please review and resubmit.', { route: '/' }, undefined, undefined, 'provider').catch(() => {});
     }
 
     return { ...listing, approvalStatus: 'rejected', isActive: false };
@@ -2521,7 +3191,7 @@ export class AdminService {
     await this.createAuditLog(admin.id, 'approve_offer', 'provider_offer', id, { approvalStatus: 'pending_approval' }, { approvalStatus: 'approved' });
 
     if (offer.provider) {
-      this.notificationDispatch.sendToUser(offer.provider.userId, 'provider_status', 'Offer Approved!', `Your offer "${offer.title}" has been approved and is now visible.`, { route: '/' }).catch(() => {});
+      this.notificationDispatch.sendTemplated(offer.provider.userId, 'offer_approved', {}).catch(() => {});
     }
 
     return { ...offer, approvalStatus: 'approved' };
@@ -2536,7 +3206,7 @@ export class AdminService {
     await this.createAuditLog(admin.id, 'reject_offer', 'provider_offer', id, { approvalStatus: offer.approvalStatus }, { approvalStatus: 'rejected', adminNotes });
 
     if (offer.provider) {
-      this.notificationDispatch.sendToUser(offer.provider.userId, 'provider_status', 'Offer Not Approved', adminNotes || `Your offer "${offer.title}" was not approved.`, { route: '/' }).catch(() => {});
+      this.notificationDispatch.sendToUser(offer.provider.userId, 'provider_status', 'Offer Not Approved', adminNotes || `Your offer "${offer.title}" was not approved.`, { route: '/' }, undefined, undefined, 'provider').catch(() => {});
     }
 
     return { ...offer, approvalStatus: 'rejected', isActive: false };
@@ -2706,6 +3376,48 @@ export class AdminService {
         { type: 'bugReports', label: 'Open Bug Reports', count: openBugReports, route: '/bug-reports-admin?status=open' },
       ],
     };
+  }
+
+  // ============================================
+  // Serviceable Cities
+  // ============================================
+
+  async getServiceableCities(admin: any) {
+    this.assertAdmin(admin);
+    const cities = await this.serviceableCitiesService.getAllCities();
+    const requestStats = await this.serviceableCitiesService.getRequestStats();
+    const statsMap = new Map(requestStats.map((s) => [s.city.toLowerCase(), s]));
+
+    return cities.map((c) => ({
+      ...c,
+      requestCount: statsMap.get(c.name.toLowerCase())?.count ?? 0,
+      lastRequestAt: statsMap.get(c.name.toLowerCase())?.lastRequestAt ?? null,
+    }));
+  }
+
+  async updateServiceableCity(admin: any, id: string, status: 'active' | 'coming_soon' | 'disabled') {
+    this.assertAdmin(admin);
+    const cityRepo = this.dataSource.getRepository(ServiceableCity);
+    const city = await cityRepo.findOneBy({ id });
+    if (!city) throw new NotFoundException('Serviceable city not found');
+    const prev = city.status;
+    city.status = status;
+    if (status === 'active' && !city.launchDate) {
+      city.launchDate = new Date();
+    }
+    const saved = await cityRepo.save(city);
+    await this.createAuditLog(admin.id, 'update_serviceable_city', 'serviceable_city', id, { status: prev }, { status }, `City: ${city.name}`);
+    return saved;
+  }
+
+  async getCityRequestStats(admin: any) {
+    this.assertAdmin(admin);
+    return this.serviceableCitiesService.getRequestStats();
+  }
+
+  async getCityRequestInsights(admin: any) {
+    this.assertAdmin(admin);
+    return this.serviceableCitiesService.getRequestInsights();
   }
 }
 

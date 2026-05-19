@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards, Request, Query, UseInterceptors, UploadedFile, UploadedFiles } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards, Request, Query, UseInterceptors, UploadedFile, UploadedFiles, ParseFilePipe, MaxFileSizeValidator, FileTypeValidator } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiBody, ApiQuery, ApiParam, ApiConsumes } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
@@ -130,10 +130,10 @@ export class AdminController {
     return this.adminService.removeReview(req.user, id);
   }
 
-  @Patch('users/:id/suspend')
-  @ApiOperation({ summary: 'Suspend a user' })
-  suspendUser(@Param('id') id: string, @Request() req) {
-    return this.adminService.suspendUser(req.user, id);
+  @Patch('users/:id/pause')
+  @ApiOperation({ summary: 'Pause a user (blocks login, hides provider, deactivates chats)' })
+  pauseUser(@Param('id') id: string, @Request() req) {
+    return this.adminService.pauseUser(req.user, id);
   }
 
   // ============================================
@@ -195,6 +195,13 @@ export class AdminController {
   @ApiParam({ name: 'id', description: 'Provider ID' })
   getProviderWarnings(@Param('id') id: string, @Request() req) {
     return this.adminService.getProviderWarnings(req.user, id);
+  }
+
+  @Patch('providers/:id/confirm-suspension')
+  @ApiOperation({ summary: 'Confirm a provider suspension (prevents auto-lift after 48h)' })
+  @ApiParam({ name: 'id', description: 'Provider ID' })
+  confirmSuspension(@Param('id') id: string, @Request() req) {
+    return this.adminService.confirmSuspension(req.user, id);
   }
 
   // ============================================
@@ -277,9 +284,23 @@ export class AdminController {
     return this.adminService.updateProviderAdmin(req.user, id, body);
   }
 
+  @Patch('providers/:id/contact-number')
+  @ApiOperation({ summary: 'Admin update provider contact number with OTP verification' })
+  @ApiParam({ name: 'id', description: 'Provider ID' })
+  @ApiBody({ schema: { properties: { contactNumber: { type: 'string' }, otp: { type: 'string' } } } })
+  updateContactNumber(@Param('id') id: string, @Request() req, @Body() body: { contactNumber: string; otp: string }) {
+    return this.adminService.updateProviderContactNumber(req.user, id, body.contactNumber, body.otp);
+  }
+
   // ============================================
   // Products Management
   // ============================================
+
+  @Get('products/stats')
+  @ApiOperation({ summary: 'Product statistics' })
+  getProductStats(@Request() req) {
+    return this.adminService.getProductStats(req.user);
+  }
 
   @Get('products')
   @ApiOperation({ summary: 'Paginated product list with filters' })
@@ -321,10 +342,10 @@ export class AdminController {
   }
 
   @Post('products/:id/images')
-  @ApiOperation({ summary: 'Upload images for a product (max 5 files, 5MB each)' })
+  @ApiOperation({ summary: 'Upload images for a product (max 5 files, 10MB each)' })
   @ApiParam({ name: 'id', description: 'Product ID' })
   @ApiConsumes('multipart/form-data')
-  @UseInterceptors(FilesInterceptor('images', 5, { storage: memoryStorage() }))
+  @UseInterceptors(FilesInterceptor('images', 5, { storage: memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }))
   uploadProductImages(
     @Param('id') id: string,
     @Request() req,
@@ -374,6 +395,81 @@ export class AdminController {
     @Body('status') status: 'active' | 'removed',
   ) {
     return this.adminService.updateReviewStatus(req.user, id, status);
+  }
+
+  // ============================================
+  // Google Reviews Management (Admin)
+  // ============================================
+
+  @Get('google-reviews/providers')
+  @ApiOperation({ summary: 'List providers with Google link status and trust levels' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'trustLevel', required: false, type: String })
+  @ApiQuery({ name: 'linked', required: false, type: Boolean })
+  @ApiQuery({ name: 'search', required: false, type: String })
+  getGoogleLinkedProviders(
+    @Request() req,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+    @Query('trustLevel') trustLevel?: string,
+    @Query('linked') linked?: string,
+    @Query('search') search?: string,
+  ) {
+    return this.adminService.getGoogleLinkedProviders(req.user, page, limit, {
+      trustLevel,
+      linked: linked === 'true' ? true : linked === 'false' ? false : undefined,
+      search,
+    });
+  }
+
+  @Get('google-reviews/trust-overview')
+  @ApiOperation({ summary: 'Trust level distribution overview' })
+  getTrustOverview(@Request() req) {
+    return this.adminService.getTrustOverview(req.user);
+  }
+
+  @Post('google-reviews/verify/:providerId')
+  @ApiOperation({ summary: 'Admin: Find Google Place candidates for a provider' })
+  @ApiParam({ name: 'providerId', description: 'Provider ID' })
+  adminVerifyGooglePlace(
+    @Param('providerId') providerId: string,
+    @Request() req,
+    @Body() body: { phoneNumber?: string },
+  ) {
+    return this.adminService.adminVerifyGooglePlace(req.user, providerId, body.phoneNumber);
+  }
+
+  @Post('google-reviews/confirm/:providerId')
+  @ApiOperation({ summary: 'Admin: Link a Google Place to a provider' })
+  @ApiParam({ name: 'providerId', description: 'Provider ID' })
+  @ApiBody({ schema: { properties: { placeId: { type: 'string' } }, required: ['placeId'] } })
+  adminConfirmGooglePlace(
+    @Param('providerId') providerId: string,
+    @Request() req,
+    @Body('placeId') placeId: string,
+  ) {
+    return this.adminService.adminConfirmGooglePlace(req.user, providerId, placeId);
+  }
+
+  @Delete('google-reviews/unlink/:providerId')
+  @ApiOperation({ summary: 'Admin: Unlink Google Place from a provider' })
+  @ApiParam({ name: 'providerId', description: 'Provider ID' })
+  adminUnlinkGooglePlace(
+    @Param('providerId') providerId: string,
+    @Request() req,
+  ) {
+    return this.adminService.adminUnlinkGooglePlace(req.user, providerId);
+  }
+
+  @Post('google-reviews/refresh/:providerId')
+  @ApiOperation({ summary: 'Admin: Force refresh Google aggregates for a provider' })
+  @ApiParam({ name: 'providerId', description: 'Provider ID' })
+  adminRefreshGoogleAggregates(
+    @Param('providerId') providerId: string,
+    @Request() req,
+  ) {
+    return this.adminService.adminRefreshGoogleAggregates(req.user, providerId);
   }
 
   // ============================================
@@ -922,14 +1018,50 @@ export class AdminController {
   }
 
   // ============================================
+  // Women-Led Business Approval
+  // ============================================
+
+  @Get('providers/women-led/pending')
+  @ApiOperation({ summary: 'Get providers with pending women-led approval' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  getWomenLedPending(
+    @Request() req,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.adminService.getWomenLedPending(req.user, page, limit);
+  }
+
+  @Patch('providers/:id/women-led/approve')
+  @ApiOperation({ summary: 'Approve women-led status for a provider' })
+  @ApiParam({ name: 'id', description: 'Provider ID' })
+  approveWomenLed(@Param('id') id: string, @Request() req) {
+    return this.adminService.reviewWomenLedStatus(req.user, id, 'approved');
+  }
+
+  @Patch('providers/:id/women-led/reject')
+  @ApiOperation({ summary: 'Reject women-led status for a provider' })
+  @ApiParam({ name: 'id', description: 'Provider ID' })
+  rejectWomenLed(@Param('id') id: string, @Request() req) {
+    return this.adminService.reviewWomenLedStatus(req.user, id, 'rejected');
+  }
+
+  @Get('analytics/women-led')
+  @ApiOperation({ summary: 'Get women-led business analytics and stats' })
+  getWomenLedAnalytics(@Request() req) {
+    return this.adminService.getWomenLedAnalytics(req.user);
+  }
+
+  // ============================================
   // User Lifecycle (Unsuspend / Delete)
   // ============================================
 
-  @Patch('users/:id/unsuspend')
-  @ApiOperation({ summary: 'Unsuspend a user' })
+  @Patch('users/:id/unpause')
+  @ApiOperation({ summary: 'Unpause a user (restores login, provider, chats)' })
   @ApiParam({ name: 'id', description: 'User ID' })
-  unsuspendUser(@Param('id') id: string, @Request() req) {
-    return this.adminService.unsuspendUser(req.user, id);
+  unpauseUser(@Param('id') id: string, @Request() req) {
+    return this.adminService.unpauseUser(req.user, id);
   }
 
   @Delete('users/:id')
@@ -1139,5 +1271,39 @@ export class AdminController {
   @ApiOperation({ summary: 'Unified moderation queue with counts of all pending items' })
   getModerationQueue(@Request() req) {
     return this.adminService.getModerationQueue(req.user);
+  }
+
+  // ============================================
+  // Serviceable Cities
+  // ============================================
+
+  @Get('serviceable-cities')
+  @ApiOperation({ summary: 'Get all serviceable cities with request counts' })
+  getServiceableCities(@Request() req) {
+    return this.adminService.getServiceableCities(req.user);
+  }
+
+  @Patch('serviceable-cities/:id')
+  @ApiOperation({ summary: 'Update a serviceable city status' })
+  @ApiParam({ name: 'id', description: 'City ID' })
+  @ApiBody({ schema: { properties: { status: { type: 'string', enum: ['active', 'coming_soon', 'disabled'] } } } })
+  updateServiceableCity(
+    @Param('id') id: string,
+    @Request() req,
+    @Body('status') status: 'active' | 'coming_soon' | 'disabled',
+  ) {
+    return this.adminService.updateServiceableCity(req.user, id, status);
+  }
+
+  @Get('city-requests/stats')
+  @ApiOperation({ summary: 'Get aggregated city request stats' })
+  getCityRequestStats(@Request() req) {
+    return this.adminService.getCityRequestStats(req.user);
+  }
+
+  @Get('city-requests/insights')
+  @ApiOperation({ summary: 'Get platform/device breakdown and recent city requests' })
+  getCityRequestInsights(@Request() req) {
+    return this.adminService.getCityRequestInsights(req.user);
   }
 }

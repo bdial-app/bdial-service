@@ -1,11 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, MinLength, IsOptional, IsLatitude, IsLongitude, IsInt, Min, Max } from 'class-validator';
+import { IsString, MinLength, MaxLength, IsOptional, IsLatitude, IsLongitude, IsInt, Min, Max } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class SuggestionsQueryDto {
   @ApiProperty({ example: 'bea', description: 'Autocomplete query (min 1 char)' })
   @IsString()
   @MinLength(1)
+  @MaxLength(200)
   q: string;
 
   @ApiPropertyOptional({ example: 18.5204 })

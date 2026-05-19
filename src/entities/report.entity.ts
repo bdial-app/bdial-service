@@ -9,7 +9,7 @@ import {
 } from 'typeorm';
 import { User } from './user.entity';
 
-export type ReportEntityType = 'provider' | 'product' | 'message';
+export type ReportEntityType = 'provider' | 'product' | 'message' | 'deal' | 'review' | 'customer';
 
 export type ReportReason =
   // Provider reasons
@@ -27,6 +27,18 @@ export type ReportReason =
   // Message reasons
   | 'spam'
   | 'fraud'
+  // Deal reasons
+  | 'misleading_offer'
+  | 'expired_deal'
+  | 'fake_discount'
+  // Review reasons
+  | 'fake_review'
+  | 'offensive_language'
+  | 'irrelevant_content'
+  // Customer reasons
+  | 'abusive_behavior'
+  | 'fake_account'
+  | 'spam_messages'
   // Shared
   | 'other';
 
@@ -42,13 +54,13 @@ export class Report {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ name: 'reporter_id', type: 'uuid' })
-  reporterId: string;
+  @Column({ name: 'reporter_id', type: 'uuid', nullable: true })
+  reporterId: string | null;
 
   @Column({
     name: 'entity_type',
     type: 'enum',
-    enum: ['provider', 'product', 'message'],
+    enum: ['provider', 'product', 'message', 'deal', 'review', 'customer'],
   })
   entityType: ReportEntityType;
 
@@ -70,6 +82,15 @@ export class Report {
       'wrong_price',
       'spam',
       'fraud',
+      'misleading_offer',
+      'expired_deal',
+      'fake_discount',
+      'fake_review',
+      'offensive_language',
+      'irrelevant_content',
+      'abusive_behavior',
+      'fake_account',
+      'spam_messages',
       'other',
     ],
   })
@@ -105,9 +126,9 @@ export class Report {
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
-  @ManyToOne(() => User, (u) => u.reports)
+  @ManyToOne(() => User, (u) => u.reports, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'reporter_id' })
-  reporter: User;
+  reporter: User | null;
 
   @ManyToOne(() => User, { nullable: true })
   @JoinColumn({ name: 'reviewed_by' })

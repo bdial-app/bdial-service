@@ -1,6 +1,9 @@
+import 'dotenv/config'; // load .env for TypeORM CLI (NestJS uses ConfigModule instead)
 import { DataSource, DataSourceOptions } from 'typeorm';
 import { join } from 'path';
-import { User } from '../entities/user.entity';import { Category } from '../entities/category.entity';
+import { User } from '../entities/user.entity';
+import { UserArchive } from '../entities/user-archive.entity';
+import { Category } from '../entities/category.entity';
 import { ProviderCategory } from '../entities/provider-category.entity';
 import { Verification } from '../entities/verification.entity';
 import { Photo } from '../entities/photo.entity';
@@ -32,10 +35,21 @@ import { DeviceToken } from '../entities/device-token.entity';
 import { Notification } from '../entities/notification.entity';
 import { NotificationPreference } from '../entities/notification-preference.entity';
 import { NotificationBatch } from '../entities/notification-batch.entity';
+import { NotificationTemplate } from '../entities/notification-template.entity';
 import { BugReport } from '../bug-reports/bug-report.entity';
+import { Payment } from '../entities/payment.entity';
+import { SubscriptionPlan } from '../entities/subscription-plan.entity';
+import { Subscription } from '../entities/subscription.entity';
+import { Voucher } from '../entities/voucher.entity';
+import { VoucherRedemption } from '../entities/voucher-redemption.entity';
+import { UserCategoryInteraction } from '../entities/user-category-interaction.entity';
+import { ServiceableCity } from '../entities/serviceable-city.entity';
+import { CityRequest } from '../entities/city-request.entity';
+import { truncate } from 'fs';
 
 export const ALL_ENTITIES = [
   User,
+  UserArchive,
   Category,
   ProviderCategory,
   Verification,
@@ -68,7 +82,16 @@ export const ALL_ENTITIES = [
   Notification,
   NotificationPreference,
   NotificationBatch,
+  NotificationTemplate,
   BugReport,
+  Payment,
+  SubscriptionPlan,
+  Subscription,
+  Voucher,
+  VoucherRedemption,
+  UserCategoryInteraction,
+  ServiceableCity,
+  CityRequest,
 ];
 
 export function buildTypeOrmOptions(url?: string): DataSourceOptions {
@@ -82,8 +105,13 @@ export function buildTypeOrmOptions(url?: string): DataSourceOptions {
     migrationsRun: true, // auto-run pending migrations on app start
     synchronize: false,  // never use synchronize — migrations handle schema
     extra: {
-      max: 3,
-      idleTimeoutMillis: 5000,
+      // Pool size per instance — Supabase Pro allows 200 total connections.
+      // Keep this moderate so multiple instances can coexist:
+      //   3 instances × 15 = 45 connections (leaves room for Studio, migrations, etc.)
+      max: 15,
+      min: 2,                      // keep 2 warm connections for fast cold starts
+      idleTimeoutMillis: 30000,    // release idle connections after 30s
+      connectionTimeoutMillis: 5000, // fail fast if pool is exhausted
     },
   };
 

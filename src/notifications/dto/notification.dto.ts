@@ -142,6 +142,11 @@ export class GetNotificationsQueryDto {
   @IsOptional()
   @IsEnum(['all', 'read', 'unread'])
   status?: 'all' | 'read' | 'unread' = 'all';
+
+  @ApiPropertyOptional({ enum: ['customer', 'provider'], description: 'Filter by target mode (provider view vs customer view)' })
+  @IsOptional()
+  @IsEnum(['customer', 'provider'])
+  targetMode?: 'customer' | 'provider';
 }
 
 // ──────────────────────────────────────────────

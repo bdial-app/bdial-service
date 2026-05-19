@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   ConflictException,
   BadRequestException,
@@ -7,9 +8,10 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, ILike } from 'typeorm';
-import { Provider, User, Verification, ProviderCategory, Review, Product, Photo, Message, ConversationParticipant, ProviderBadge, ProviderOffer, SponsoredListing, ProviderWarning, SystemSetting } from '../entities';
+import { Provider, User, Verification, ProviderCategory, Review, Product, Photo, Message, ConversationParticipant, ProviderBadge, ProviderOffer, SponsoredListing, ProviderWarning, SystemSetting, Subscription } from '../entities';
 import { StorageService } from '../storage/storage.service';
 import { GeocodeService } from '../geocode/geocode.service';
+import { OtpService } from '../otp/otp.service';
 import { CreateProviderDto } from './dto/create-provider.dto';
 import { UpdateProviderDto } from './dto/update-provider.dto';
 import { ProviderPaginationDto } from './dto/provider-pagination.dto';
@@ -19,10 +21,12 @@ import { CreateOfferDto } from './dto/create-offer.dto';
 import { UpdateOfferDto } from './dto/update-offer.dto';
 import { CreateSponsorshipDto, UpdateSponsorshipDto } from './dto/sponsorship.dto';
 import { ContentSanitizerService } from '../common/content-sanitizer';
+import { compressImage, compressImages } from '../common/image-processor';
+import { WebsiteMetaService } from './website-meta.service';
 
 @Injectable()
 export class ProvidersService {
-  private providerOtpStore = new Map<string, { otp: string; expiresAt: Date; sentAt: Date }>();
+  private readonly logger = new Logger(ProvidersService.name);
 
   constructor(
     @InjectRepository(Provider) private providerRepo: Repository<Provider>,
@@ -39,10 +43,13 @@ export class ProvidersService {
     @InjectRepository(SponsoredListing) private sponsorRepo: Repository<SponsoredListing>,
     @InjectRepository(ProviderWarning) private warningRepo: Repository<ProviderWarning>,
     @InjectRepository(SystemSetting) private settingRepo: Repository<SystemSetting>,
+    @InjectRepository(Subscription) private subscriptionRepo: Repository<Subscription>,
     private storage: StorageService,
     private dataSource: DataSource,
     private geocodeService: GeocodeService,
     private contentSanitizer: ContentSanitizerService,
+    private otpService: OtpService,
+    private websiteMetaService: WebsiteMetaService,
   ) {}
 
   async sendProviderOtp(mobileNumber: string) {
@@ -51,21 +58,21 @@ export class ProvidersService {
     }
     const mobile = mobileNumber.trim();
 
-    const existing = this.providerOtpStore.get(mobile);
-    if (existing && new Date() < existing.expiresAt) {
-      const timeSinceSent = Date.now() - existing.sentAt.getTime();
-      if (timeSinceSent < 60 * 1000) {
-        const remaining = Math.ceil((60 * 1000 - timeSinceSent) / 1000);
-        throw new BadRequestException({ message: 'OTP recently sent. Please wait before resending.', retryAfterSeconds: remaining, error_code: 'OTP_RATE_LIMITED' });
-      }
+    // Check if this number is already used by an active provider (match multiple formats)
+    const existing = await this.providerRepo
+      .createQueryBuilder('p')
+      .where('p.deletedAt IS NULL')
+      .andWhere(
+        '(p.contactNumber = :withPrefix OR p.contactNumber = :bare OR p.contactNumber = :withZero)',
+        { withPrefix: `+91${mobile}`, bare: mobile, withZero: `91${mobile}` },
+      )
+      .getOne();
+    if (existing) {
+      throw new ConflictException('This phone number is already registered with another provider');
     }
 
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-    this.providerOtpStore.set(mobile, { otp, expiresAt, sentAt: new Date() });
-    console.log(`[Provider OTP] ${mobile}: ${otp} (Expires: ${expiresAt.toISOString()})`);
-
-    return { message: 'OTP sent successfully', data: { mobileNumber: mobile, expiresIn: '5 minutes', otp } };
+    const result = await this.otpService.sendOtpWithKey(`provider_${mobile}`, mobile);
+    return { message: 'OTP sent successfully', data: { mobileNumber: mobile, expiresIn: result.expiresIn, ...(result.otp ? { otp: result.otp } : {}) } };
   }
 
   async verifyProviderOtp(mobileNumber: string, otp: string) {
@@ -78,16 +85,54 @@ export class ProvidersService {
     if (!/^\d{10}$/.test(mobile)) throw new BadRequestException('Mobile number must be exactly 10 digits');
     if (!/^\d{6}$/.test(code)) throw new BadRequestException('OTP must be exactly 6 digits');
 
-    const record = this.providerOtpStore.get(mobile);
-    if (!record) throw new BadRequestException({ message: 'No OTP found for this number', error_code: 'OTP_NOT_FOUND' });
-    if (new Date() > record.expiresAt) {
-      this.providerOtpStore.delete(mobile);
-      throw new BadRequestException({ message: 'OTP has expired', error_code: 'OTP_EXPIRED' });
-    }
-    if (record.otp !== code) throw new BadRequestException({ message: 'Invalid OTP', error_code: 'INVALID_OTP' });
-    this.providerOtpStore.delete(mobile);
+    await this.otpService.verifyOtpWithKey(`provider_${mobile}`, mobile, code);
 
     return { message: 'OTP verified successfully', verified: true };
+  }
+
+  async updateContactNumber(providerId: string, userId: string, contactNumber: string, otp: string) {
+    const provider = await this.providerRepo.findOneBy({ id: providerId });
+    if (!provider) throw new NotFoundException('Provider not found');
+    if (provider.userId !== userId) throw new ForbiddenException('You can only update your own provider');
+
+    // Validate inputs
+    const phone = (contactNumber || '').replace(/\D/g, '').slice(-10);
+    if (!/^\d{10}$/.test(phone)) throw new BadRequestException('Phone number must be exactly 10 digits');
+    const code = (otp || '').trim();
+    if (!/^\d{6}$/.test(code)) throw new BadRequestException('OTP must be exactly 6 digits');
+
+    // Enforce 24-hour cooldown
+    if (provider.lastContactNumberChangeAt) {
+      const elapsed = Date.now() - new Date(provider.lastContactNumberChangeAt).getTime();
+      const cooldownMs = 24 * 60 * 60 * 1000;
+      if (elapsed < cooldownMs) {
+        const hoursLeft = Math.ceil((cooldownMs - elapsed) / (60 * 60 * 1000));
+        throw new BadRequestException(`Contact number can only be changed once every 24 hours. Try again in ${hoursLeft}h.`);
+      }
+    }
+
+    // Verify OTP for the new number
+    await this.otpService.verifyOtpWithKey(`provider_${phone}`, phone, code);
+
+    // Check if this number is already used by another provider
+    const existing = await this.providerRepo
+      .createQueryBuilder('p')
+      .where('p.deletedAt IS NULL')
+      .andWhere('p.id != :id', { id: providerId })
+      .andWhere(
+        '(p.contactNumber = :withPrefix OR p.contactNumber = :bare OR p.contactNumber = :withZero)',
+        { withPrefix: `+91${phone}`, bare: phone, withZero: `91${phone}` },
+      )
+      .getOne();
+    if (existing) throw new ConflictException('This phone number is already registered with another provider');
+
+    // Update
+    await this.providerRepo.update(providerId, {
+      contactNumber: phone,
+      lastContactNumberChangeAt: new Date(),
+    });
+
+    return { message: 'Contact number updated successfully', contactNumber: phone };
   }
 
   async create(createProviderDto: CreateProviderDto) {
@@ -97,6 +142,9 @@ export class ProvidersService {
 
     const existingProvider = await this.providerRepo.findOneBy({ userId });
     if (existingProvider) throw new ConflictException(`Provider already exists for user with ID '${userId}'`);
+
+    // Content moderation
+    this.checkProviderContent(createProviderDto.brandName, createProviderDto.description);
 
     const { latitude, longitude, ...rest } = createProviderDto;
     const provider = this.providerRepo.create({
@@ -120,16 +168,18 @@ export class ProvidersService {
     // Content moderation: check brand name and description
     this.checkProviderContent(providerData.brandName, providerData.description);
 
-    // Upload files in parallel (outside transaction)
+    // Upload files in parallel (outside transaction) — compress images before storage
     const [aadhaarUpload, bannerUpload, profileUpload] = await Promise.all([
       file ? this.storage.upload('verifications', file) : Promise.resolve(null),
-      bannerImage ? this.storage.upload('providers', bannerImage) : Promise.resolve(null),
-      profileImage ? this.storage.upload('providers', profileImage) : Promise.resolve(null),
+      bannerImage ? compressImage(bannerImage, 'banner').then((c) => this.storage.upload('providers', c)) : Promise.resolve(null),
+      profileImage ? compressImage(profileImage, 'avatar').then((c) => this.storage.upload('providers', c)) : Promise.resolve(null),
     ]);
 
-    // Upload product images in parallel
+    // Upload product images in parallel — compress to standard preset
     const productImageUploads = productImages?.length
-      ? await Promise.all(productImages.map((img) => this.storage.upload('products', img)))
+      ? await compressImages(productImages, 'full').then((compressed) =>
+          Promise.all(compressed.map((img) => this.storage.upload('products', img)))
+        )
       : [];
 
     // Parse products JSON (each product may have imageCount for multi-image)
@@ -146,16 +196,38 @@ export class ProvidersService {
     const user = await this.userRepo.findOneBy({ id: userId });
     if (!user) throw new NotFoundException(`User with ID '${userId}' not found`);
 
-    const existingProvider = await this.providerRepo.findOneBy({ userId });
+    const existingProvider = await this.providerRepo
+      .createQueryBuilder('p')
+      .where('p.userId = :userId', { userId })
+      .andWhere('p.deletedAt IS NULL')
+      .getOne();
     if (existingProvider) throw new ConflictException(`Provider already exists for user with ID '${userId}'`);
 
-    return this.dataSource.transaction(async (manager) => {
+    // Check if this contact number is already used by another active provider
+    if (providerData.contactNumber) {
+      const bare = providerData.contactNumber.replace(/^\+?91/, '');
+      const phoneInUse = await this.providerRepo
+        .createQueryBuilder('p')
+        .where('p.deletedAt IS NULL')
+        .andWhere(
+          '(p.contactNumber = :withPrefix OR p.contactNumber = :bare OR p.contactNumber = :withZero)',
+          { withPrefix: `+91${bare}`, bare, withZero: `91${bare}` },
+        )
+        .getOne();
+      if (phoneInUse) {
+        throw new ConflictException('This phone number is already registered with another provider');
+      }
+    }
+
+    const result = await this.dataSource.transaction(async (manager) => {
       const { latitude, longitude, file: _file, bannerImage: _bi, profileImage: _pi, bannerImageUrl: _biu, profilePhotoUrl: _ppu, ...cleanData } = providerData as any;
+      const declaredWomenLed = providerData.isWomenLed != null ? providerData.isWomenLed : user.gender === 'female';
       const provider = manager.create(Provider, {
         ...cleanData,
         userId,
         status: 'unverified',
-        isWomenLed: providerData.isWomenLed != null ? providerData.isWomenLed : user.gender === 'female',
+        isWomenLed: declaredWomenLed,
+        womenLedStatus: declaredWomenLed ? 'pending' : 'none',
         latitude: latitude ? parseFloat(latitude) : null,
         longitude: longitude ? parseFloat(longitude) : null,
         bannerImageUrl: bannerUpload?.url || (providerData as any).bannerImageUrl || null,
@@ -171,9 +243,10 @@ export class ProvidersService {
         await manager.save(cats);
       }
 
-      // Save products with multi-image support
+      // Save products with multi-image support — batch saves
       // Images are a flat array; each product's imageCount tells us how many belong to it
-      const savedProducts: Product[] = [];
+      const productsToSave: Product[] = [];
+      const galleryPhotos: Photo[] = [];
       let imgOffset = 0;
       if (parsedProducts.length > 0) {
         for (let i = 0; i < parsedProducts.length; i++) {
@@ -182,30 +255,34 @@ export class ProvidersService {
           const productPhotos = productImageUploads.slice(imgOffset, imgOffset + count);
           imgOffset += count;
           const photoUrl = productPhotos[0]?.url || null;
-          const product = manager.create(Product, {
+          const photoUrls = productPhotos.map((ph) => ph.url);
+          productsToSave.push(manager.create(Product, {
             providerId: savedProvider.id,
             name: p.name,
             description: p.description || null,
             price: p.price != null ? p.price : null,
             currency: p.currency || 'INR',
             photoUrl,
+            photoUrls,
             productType: p.productType || 'product',
             isActive: true,
             displayOrder: i,
-          });
-          savedProducts.push(await manager.save(product));
+          }));
 
-          // Save additional product photos as provider gallery photos
+          // Collect additional product photos as provider gallery photos
           for (let j = 1; j < productPhotos.length; j++) {
-            const photo = manager.create(Photo, {
+            galleryPhotos.push(manager.create(Photo, {
               providerId: savedProvider.id,
               imageUrl: productPhotos[j].url,
               storageKey: productPhotos[j].storageKey,
               displayOrder: j,
-            });
-            await manager.save(photo);
+            }));
           }
         }
+      }
+      const savedProducts = productsToSave.length > 0 ? await manager.save(productsToSave) : [];
+      if (galleryPhotos.length > 0) {
+        await manager.save(galleryPhotos);
       }
 
       let savedVerification: Verification | null = null;
@@ -222,6 +299,28 @@ export class ProvidersService {
       }
 
       return { provider: savedProvider, verification: savedVerification, products: savedProducts };
+    });
+
+    // Trigger async website logo fetch after transaction
+    this.scheduleWebsiteLogoFetch(result.provider.id, becomeProviderDto.websiteUrl);
+
+    return result;
+  }
+
+  // Trigger async website logo fetch after becomeProvider if websiteUrl provided
+  private scheduleWebsiteLogoFetch(providerId: string, websiteUrl: string | undefined) {
+    if (!websiteUrl) return;
+    this.logger.log(`Fetching website logo for provider ${providerId}, url: ${websiteUrl}`);
+    this.websiteMetaService.fetchWebsiteMeta(websiteUrl).then((meta) => {
+      this.logger.log(`Website meta result for ${websiteUrl}: logoUrl=${meta.logoUrl}, title=${meta.title}`);
+      if (meta.logoUrl) {
+        this.providerRepo.update(providerId, { websiteLogoUrl: meta.logoUrl });
+        this.logger.log(`Saved website logo for provider ${providerId}: ${meta.logoUrl}`);
+      } else {
+        this.logger.warn(`No logo found for ${websiteUrl}`);
+      }
+    }).catch((err) => {
+      this.logger.error(`Failed to fetch website logo for ${websiteUrl}: ${err.message}`, err.stack);
     });
   }
 
@@ -272,7 +371,21 @@ export class ProvidersService {
     if (provider.deletedAt) {
       providerStatus = 'deleted';
     } else if (provider.status === 'suspended') {
-      providerStatus = 'suspended';
+      // Auto-lift check: if suspended > 48h and not confirmed by admin, auto-unsuspend
+      if (
+        provider.suspendedAt &&
+        !provider.suspensionConfirmed &&
+        Date.now() - new Date(provider.suspendedAt).getTime() > 48 * 60 * 60 * 1000
+      ) {
+        await this.providerRepo.update(provider.id, {
+          status: 'active',
+          suspendedAt: null,
+          suspensionConfirmed: false,
+        });
+        providerStatus = 'approved';
+      } else {
+        providerStatus = 'suspended';
+      }
     } else if (provider.status === 'disabled') {
       providerStatus = 'disabled';
     } else if (provider.status === 'active' || verificationStatus === 'approved') {
@@ -280,8 +393,8 @@ export class ProvidersService {
       providerStatus = 'approved';
     } else if (provider.status === 'unverified') {
       // Provider registered but never submitted verification docs
-      // They can still access the dashboard, just not verified
-      providerStatus = 'approved';
+      // They can access the dashboard but are NOT verified
+      providerStatus = 'unverified';
     } else if (verificationStatus === 'pending') {
       // Verification docs submitted, awaiting review
       providerStatus = 'pending';
@@ -292,7 +405,7 @@ export class ProvidersService {
       providerStatus = 'pending';
     }
 
-    return { providerStatus, verificationStatus, provider, verification, preferredMode: user?.preferredMode ?? 'customer' };
+    return { providerStatus, verificationStatus, provider, verification, preferredMode: providerStatus === 'disabled' || providerStatus === 'deleted' ? 'customer' : (user?.preferredMode ?? 'customer') };
   }
 
   async findOne(id: string) {
@@ -315,7 +428,7 @@ export class ProvidersService {
     });
     if (!provider) throw new NotFoundException(`Provider with ID '${id}' not found`);
 
-    const [photos, products, reviews, badges, activeOffers] = await Promise.all([
+    const [photos, products, reviews, badges, activeOffers, activeSponsor, reviewStats] = await Promise.all([
       this.photoRepo.find({
         where: { providerId: id },
         order: { displayOrder: 'ASC' },
@@ -328,6 +441,7 @@ export class ProvidersService {
         where: { providerId: id, status: 'active' },
         relations: ['reviewer', 'photos'],
         order: { postedAt: 'DESC' },
+        take: 50,
       }),
       this.badgeRepo.find({
         where: { providerId: id, isActive: true },
@@ -341,18 +455,37 @@ export class ProvidersService {
         .andWhere('o.ends_at > NOW()')
         .orderBy('o.ends_at', 'ASC')
         .getMany(),
+      this.sponsorRepo
+        .createQueryBuilder('s')
+        .where('s.provider_id = :id', { id })
+        .andWhere('s.is_active = true')
+        .andWhere('s.starts_at <= NOW()')
+        .andWhere('s.ends_at > NOW()')
+        .andWhere('s.spent_amount < s.budget_amount')
+        .andWhere("s.approval_status = 'approved'")
+        .getOne(),
+      this.reviewRepo
+        .createQueryBuilder('r')
+        .select('COUNT(r.id)::int', 'totalReviews')
+        .addSelect('COALESCE(AVG(r.star_rating)::numeric(2,1), 0)', 'avgRating')
+        .addSelect("COUNT(CASE WHEN r.star_rating = 1 THEN 1 END)::int", 'r1')
+        .addSelect("COUNT(CASE WHEN r.star_rating = 2 THEN 1 END)::int", 'r2')
+        .addSelect("COUNT(CASE WHEN r.star_rating = 3 THEN 1 END)::int", 'r3')
+        .addSelect("COUNT(CASE WHEN r.star_rating = 4 THEN 1 END)::int", 'r4')
+        .addSelect("COUNT(CASE WHEN r.star_rating = 5 THEN 1 END)::int", 'r5')
+        .where('r.providerId = :pid AND r.status = :status', { pid: id, status: 'active' })
+        .getRawOne(),
     ]);
 
-    const ratingDist = [0, 0, 0, 0, 0];
-    reviews.forEach((r) => {
-      const idx = Math.max(0, Math.min(4, (r.starRating ?? 0) - 1));
-      ratingDist[idx]++;
-    });
-    const reviewCount = reviews.length;
-    const rating =
-      reviewCount > 0
-        ? reviews.reduce((sum, r) => sum + (r.starRating ?? 0), 0) / reviewCount
-        : 0;
+    const reviewCount = parseInt(reviewStats?.totalReviews || '0', 10);
+    const rating = parseFloat(reviewStats?.avgRating || '0');
+    const ratingDist = [
+      parseInt(reviewStats?.r1 || '0', 10),
+      parseInt(reviewStats?.r2 || '0', 10),
+      parseInt(reviewStats?.r3 || '0', 10),
+      parseInt(reviewStats?.r4 || '0', 10),
+      parseInt(reviewStats?.r5 || '0', 10),
+    ];
 
     const prices = products
       .map((p) => (p.price !== null && p.price !== undefined ? Number(p.price) : null))
@@ -376,6 +509,8 @@ export class ProvidersService {
       reviews,
       badges,
       activeOffers,
+      isSponsored: !!activeSponsor,
+      sponsorEndsAt: activeSponsor?.endsAt ?? null,
       stats: {
         rating: Number(rating.toFixed(2)),
         reviewCount,
@@ -425,46 +560,96 @@ export class ProvidersService {
     if (latitude !== undefined) updateData.latitude = latitude ? parseFloat(latitude) : null;
     if (longitude !== undefined) updateData.longitude = longitude ? parseFloat(longitude) : null;
     await this.providerRepo.update(id, updateData);
+
+    // Async logo re-fetch when website URL changes
+    if (updateProviderDto.websiteUrl && updateProviderDto.websiteUrl !== existingProvider.websiteUrl) {
+      this.scheduleWebsiteLogoFetch(id, updateProviderDto.websiteUrl);
+    }
+
     return this.providerRepo.findOne({ where: { id }, relations: ['user'] });
+  }
+
+  async updateCategories(providerId: string, userId: string, categoryIds: string[]) {
+    const provider = await this.providerRepo.findOneBy({ id: providerId });
+    if (!provider) throw new NotFoundException(`Provider with ID '${providerId}' not found`);
+    if (provider.userId !== userId) throw new ForbiddenException('You can only update your own provider categories');
+    if (categoryIds.length > 2) throw new BadRequestException('Maximum 2 categories allowed');
+
+    // Remove existing categories
+    await this.providerCatRepo.delete({ providerId });
+
+    // Insert new ones
+    if (categoryIds.length > 0) {
+      const entities = categoryIds.map((categoryId) =>
+        this.providerCatRepo.create({ providerId, categoryId }),
+      );
+      await this.providerCatRepo.save(entities);
+    }
+
+    // Return updated categories
+    const updated = await this.providerCatRepo.find({
+      where: { providerId },
+      relations: ['category'],
+    });
+    return updated.map((pc) => ({
+      id: pc.category?.id,
+      name: pc.category?.name,
+      slug: pc.category?.slug,
+    }));
   }
 
   /**
    * Find providers near a lat/lng using the Haversine formula.
+   * When lat/lng are omitted, falls back to city-based or global browsing.
    * Optionally enriches with Google Distance Matrix (road distance + travel time).
    * Flow 1-c: Location-based provider discovery.
    */
   async findNearby(dto: NearbyProvidersDto) {
     const { lat, lng, radius = 10, page = 1, limit = 10, search, city, sortBy = 'distance', categoryIds, minRating, verifiedOnly, womenLedOnly } = dto;
     const offset = (page - 1) * limit;
+    const hasLocation = lat != null && lng != null;
 
-    // Haversine formula in SQL (returns distance in km)
-    const haversine = `
-      6371 * acos(
-        LEAST(1.0, cos(radians(:lat)) * cos(radians(provider.latitude))
-        * cos(radians(provider.longitude) - radians(:lng))
-        + sin(radians(:lat)) * sin(radians(provider.latitude)))
-      )
-    `;
-
-    // Review stats subqueries used for filtering and sorting
-    const avgRatingSub = `(SELECT AVG(r.star_rating) FROM reviews r WHERE r.provider_id = provider.id AND r.status = 'active')`;
-    const reviewCountSub = `(SELECT COUNT(r.id)::int FROM reviews r WHERE r.provider_id = provider.id AND r.status = 'active')`;
+    // Haversine formula in SQL (returns distance in km) — only used when coords are present
+    const haversine = hasLocation
+      ? `6371 * acos(LEAST(1.0, cos(radians(:lat)) * cos(radians(provider.latitude)) * cos(radians(provider.longitude) - radians(:lng)) + sin(radians(:lat)) * sin(radians(provider.latitude))))`
+      : null;
 
     const qb = this.providerRepo
       .createQueryBuilder('provider')
       .leftJoinAndSelect('provider.user', 'user')
-      .addSelect(haversine, 'distance')
-      .addSelect(avgRatingSub, 'avg_rating')
-      .addSelect(reviewCountSub, 'review_count')
+      .leftJoin(
+        (sub) => sub
+          .select('rv.provider_id', 'provider_id')
+          .addSelect('COALESCE(AVG(rv.star_rating)::numeric(2,1), 0)', 'avg_rating')
+          .addSelect('COALESCE(COUNT(rv.id)::int, 0)', 'review_count')
+          .from('reviews', 'rv')
+          .where("rv.status = 'active'")
+          .groupBy('rv.provider_id'),
+        'rs',
+        'rs.provider_id = provider.id',
+      )
+      .addSelect('rs.avg_rating', 'avg_rating')
+      .addSelect('COALESCE(rs.review_count, 0)', 'review_count')
       .addSelect(
         `(SELECT string_agg(DISTINCT cat.name, ', ' ORDER BY cat.name) FROM categories cat JOIN provider_categories pcat ON pcat.category_id = cat.id WHERE pcat.provider_id = provider.id)`,
         'services',
       )
-      .where('provider.latitude IS NOT NULL')
-      .andWhere('provider.longitude IS NOT NULL')
       .andWhere('provider.status IN (:...statuses)', { statuses: verifiedOnly ? ['active'] : ['active', 'unverified'] })
-      .andWhere(`${haversine} <= :radius`, { lat, lng, radius })
-      .setParameters({ lat, lng, radius });
+      .andWhere('provider.isAvailable = true');
+
+    // ── Location-based mode: Haversine distance + radius filter ──
+    if (hasLocation) {
+      qb.addSelect(haversine!, 'distance')
+        .where('provider.latitude IS NOT NULL')
+        .andWhere('provider.longitude IS NOT NULL')
+        .andWhere('provider.status IN (:...statuses)', { statuses: verifiedOnly ? ['active'] : ['active', 'unverified'] })
+        .andWhere('provider.isAvailable = true')
+        .andWhere(`${haversine} <= :radius`, { lat, lng, radius })
+        .setParameters({ lat, lng, radius });
+    } else {
+      // City-only / global mode — no distance filtering
+      qb.addSelect('NULL::float', 'distance');
+    }
 
     if (city) qb.andWhere('provider.city ILIKE :city', { city: `%${city}%` });
     if (search) {
@@ -472,7 +657,7 @@ export class ProvidersService {
       const prefixTsQuery = prefixWords.length > 0 ? prefixWords.map((w) => `${w}:*`).join(' & ') : '';
       qb.andWhere(
         `(provider.brandName ILIKE :search OR provider.description ILIKE :search
-          OR (:prefixTsQuery <> '' AND provider.search_vector @@ to_tsquery('english', :prefixTsQuery))
+          OR (:prefixTsQuery <> '' AND to_tsvector('english', COALESCE(provider.brandName, '') || ' ' || COALESCE(provider.description, '')) @@ to_tsquery('english', :prefixTsQuery))
           OR provider.id IN (
             SELECT pc.provider_id FROM provider_categories pc
             JOIN categories c ON c.id = pc.category_id
@@ -485,36 +670,68 @@ export class ProvidersService {
     }
     if (categoryIds?.length) {
       qb.andWhere(
-        `provider.id IN (SELECT pc.provider_id FROM provider_categories pc WHERE pc.category_id IN (:...categoryIds))`,
+        `provider.id IN (
+          SELECT pc.provider_id FROM provider_categories pc
+          WHERE pc.category_id IN (:...categoryIds)
+             OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id IN (:...categoryIds))
+        )`,
         { categoryIds },
       );
     }
     if (minRating != null && minRating > 0) {
-      qb.andWhere(`${avgRatingSub} >= :minRating`, { minRating });
+      qb.andWhere('rs.avg_rating >= :minRating', { minRating });
     }
     if (womenLedOnly) {
-      qb.andWhere('provider.isWomenLed = true');
+      qb.andWhere("provider.womenLedStatus = 'approved'");
     }
 
+    if (dto.sinceDays) {
+      qb.andWhere('provider.createdAt >= NOW() - INTERVAL :sinceDays', { sinceDays: `${dto.sinceDays} days` });
+    }
+
+    // Add a computed column to rank verified (active) above unverified
+    qb.addSelect("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'status_rank');
+
     // Sort - verified (active) providers always rank above unverified
-    if (sortBy === 'distance') {
-      qb.orderBy("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'ASC')
-        .addOrderBy('distance', 'ASC');
-    } else if (sortBy === 'newest') {
-      qb.orderBy("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'ASC')
-        .addOrderBy('provider.createdAt', 'DESC');
-    } else if (sortBy === 'rating') {
-      qb.orderBy("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'ASC')
-        .addOrderBy('avg_rating', 'DESC', 'NULLS LAST')
-        .addOrderBy('distance', 'ASC');
-    } else if (sortBy === 'reviews') {
-      qb.orderBy("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'ASC')
-        .addOrderBy('review_count', 'DESC', 'NULLS LAST')
-        .addOrderBy('avg_rating', 'DESC', 'NULLS LAST')
-        .addOrderBy('distance', 'ASC');
+    if (hasLocation) {
+      if (sortBy === 'distance') {
+        qb.orderBy('status_rank', 'ASC')
+          .addOrderBy('distance', 'ASC');
+      } else if (sortBy === 'newest') {
+        qb.orderBy('status_rank', 'ASC')
+          .addOrderBy('provider.createdAt', 'DESC');
+      } else if (sortBy === 'rating') {
+        qb.orderBy('status_rank', 'ASC')
+          .addOrderBy('avg_rating', 'DESC', 'NULLS LAST')
+          .addOrderBy('distance', 'ASC');
+      } else if (sortBy === 'reviews') {
+        qb.orderBy('status_rank', 'ASC')
+          .addOrderBy('review_count', 'DESC', 'NULLS LAST')
+          .addOrderBy('avg_rating', 'DESC', 'NULLS LAST')
+          .addOrderBy('distance', 'ASC');
+      } else {
+        qb.orderBy('status_rank', 'ASC')
+          .addOrderBy('distance', 'ASC');
+      }
     } else {
-      qb.orderBy("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'ASC')
-        .addOrderBy('distance', 'ASC');
+      // No location — cannot sort by distance; use featured → newest fallback
+      if (sortBy === 'rating') {
+        qb.orderBy('status_rank', 'ASC')
+          .addOrderBy('avg_rating', 'DESC', 'NULLS LAST')
+          .addOrderBy('provider.isFeatured', 'DESC');
+      } else if (sortBy === 'newest') {
+        qb.orderBy('status_rank', 'ASC')
+          .addOrderBy('provider.createdAt', 'DESC');
+      } else if (sortBy === 'reviews') {
+        qb.orderBy('status_rank', 'ASC')
+          .addOrderBy('review_count', 'DESC', 'NULLS LAST')
+          .addOrderBy('avg_rating', 'DESC', 'NULLS LAST');
+      } else {
+        // distance / relevance — fall back to featured → newest
+        qb.orderBy('status_rank', 'ASC')
+          .addOrderBy('provider.isFeatured', 'DESC')
+          .addOrderBy('provider.createdAt', 'DESC');
+      }
     }
 
     // Get total before pagination
@@ -526,7 +743,7 @@ export class ProvidersService {
     // Merge Haversine distance + review stats into entities
     let data = entities.map((provider, i) => ({
       ...provider,
-      distance: parseFloat(parseFloat(raw[i]?.distance ?? '0').toFixed(2)),
+      distance: raw[i]?.distance != null ? parseFloat(parseFloat(raw[i].distance).toFixed(2)) : null,
       rating: raw[i]?.avg_rating ? parseFloat(parseFloat(raw[i].avg_rating).toFixed(1)) : null,
       reviewCount: parseInt(raw[i]?.review_count ?? '0', 10),
       services: raw[i]?.services || null,
@@ -536,39 +753,200 @@ export class ProvidersService {
       travelTimeSeconds: null as number | null,
     }));
 
-    // Enrich with Distance Matrix (road distance + travel time)
-    try {
-      const destinations = data
-        .filter((p) => p.latitude && p.longitude)
-        .map((p) => ({ lat: Number(p.latitude), lng: Number(p.longitude) }));
+    // Enrich with Distance Matrix (road distance + travel time) — only when coordinates are available
+    if (hasLocation) {
+      try {
+        const destinations = data
+          .filter((p) => p.latitude && p.longitude)
+          .map((p) => ({ lat: Number(p.latitude), lng: Number(p.longitude) }));
 
-      if (destinations.length > 0) {
-        const matrix = await this.geocodeService.getDistanceMatrix(
-          { lat, lng },
-          destinations,
-        );
-        let mi = 0;
-        data = data.map((p) => {
-          if (p.latitude && p.longitude && mi < matrix.length) {
-            const m = matrix[mi++];
-            return {
-              ...p,
-              roadDistance: m.distanceText,
-              roadDistanceMeters: m.distanceValue,
-              travelTime: m.durationText,
-              travelTimeSeconds: m.durationValue,
-            };
-          }
-          return p;
-        });
+        if (destinations.length > 0) {
+          const matrix = await this.geocodeService.getDistanceMatrix(
+            { lat: lat!, lng: lng! },
+            destinations,
+          );
+          let mi = 0;
+          data = data.map((p) => {
+            if (p.latitude && p.longitude && mi < matrix.length) {
+              const m = matrix[mi++];
+              return {
+                ...p,
+                roadDistance: m.distanceText,
+                roadDistanceMeters: m.distanceValue,
+                travelTime: m.durationText,
+                travelTimeSeconds: m.durationValue,
+              };
+            }
+            return p;
+          });
+        }
+      } catch {
+        // Distance Matrix unavailable — Haversine distance still present
       }
-    } catch {
-      // Distance Matrix unavailable — Haversine distance still present
     }
 
     return {
       data,
       meta: { total, page, limit, totalPages: Math.ceil(total / limit), radius },
+    };
+  }
+
+  /**
+   * Women-Led Hub — paginated list of approved women-led providers with aggregate stats.
+   * Sponsored women-led businesses appear first, then the rest sorted by chosen criteria.
+   */
+  async getWomenLedHub(opts: {
+    page?: number;
+    limit?: number;
+    city?: string;
+    categoryIds?: string[];
+    sortBy?: 'rating' | 'newest' | 'reviews';
+    minRating?: number;
+    lat?: number;
+    lng?: number;
+    search?: string;
+  }) {
+    const { page = 1, limit = 12, city, categoryIds, sortBy = 'rating', minRating, lat, lng, search } = opts;
+    const offset = (page - 1) * limit;
+    const hasGeo = lat != null && lng != null;
+    const now = new Date();
+
+    const qb = this.providerRepo
+      .createQueryBuilder('p')
+      .select([
+        'p.id AS id',
+        'p.brand_name AS name',
+        'p.profile_photo_url AS image',
+        'p.banner_image_url AS "bannerImage"',
+        'p.description AS description',
+        'p.city AS city',
+        'p.area AS area',
+        'p.status AS status',
+        'p.is_featured AS "isFeatured"',
+        'p.is_available AS "isAvailable"',
+        'p.created_at AS "createdAt"',
+      ])
+      .leftJoin(
+        (sub) => sub
+          .select('rv.provider_id', 'provider_id')
+          .addSelect('COALESCE(AVG(rv.star_rating)::numeric(2,1), 0)', 'avg_rating')
+          .addSelect('COALESCE(COUNT(rv.id)::int, 0)', 'review_count')
+          .from('reviews', 'rv')
+          .where("rv.status = 'active'")
+          .groupBy('rv.provider_id'),
+        'rs',
+        'rs.provider_id = p.id',
+      )
+      .addSelect('COALESCE(rs.avg_rating, 0)', 'rating')
+      .addSelect('COALESCE(rs.review_count, 0)', 'reviewCount')
+      .addSelect(
+        `(SELECT string_agg(DISTINCT c.name, ', ' ORDER BY c.name) FROM provider_categories pc JOIN categories c ON c.id = pc.category_id WHERE pc.provider_id = p.id)`,
+        'services',
+      )
+      .addSelect(
+        `(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`,
+        'listingPhoto',
+      )
+      // Sponsored flag: check if provider has an active sponsored listing right now
+      .leftJoin(
+        'sponsored_listings', 'sl',
+        `sl.provider_id = p.id AND sl.is_active = true AND sl.approval_status = 'approved' AND sl.starts_at <= :now AND sl.ends_at >= :now AND sl.spent_amount < sl.budget_amount`,
+      )
+      .addSelect('CASE WHEN sl.id IS NOT NULL THEN true ELSE false END', 'isSponsored')
+      .setParameter('now', now)
+      .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
+      .andWhere("p.women_led_status = 'approved'");
+
+    if (city) qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
+    if (categoryIds?.length) {
+      qb.andWhere(
+        `p.id IN (SELECT pc.provider_id FROM provider_categories pc WHERE pc.category_id IN (:...categoryIds))`,
+        { categoryIds },
+      );
+    }
+    if (minRating != null && minRating > 0) {
+      qb.andWhere('rs.avg_rating >= :minRating', { minRating });
+    }
+    if (search) {
+      qb.andWhere(
+        `(p.brand_name ILIKE :search OR p.description ILIKE :search OR EXISTS (SELECT 1 FROM provider_categories pc3 JOIN categories c3 ON c3.id = pc3.category_id WHERE pc3.provider_id = p.id AND c3.name ILIKE :search))`,
+        { search: `%${search}%` },
+      );
+    }
+
+    if (hasGeo) {
+      const haversine = `6371 * acos(LEAST(1.0, cos(radians(:lat)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians(:lng)) + sin(radians(:lat)) * sin(radians(p.latitude))))`;
+      qb.addSelect(haversine, 'distance')
+        .setParameters({ lat, lng });
+    }
+
+    // Sponsored first, then by chosen sort
+    qb.orderBy('CASE WHEN sl.id IS NOT NULL THEN 0 ELSE 1 END', 'ASC');
+    if (sortBy === 'newest') {
+      qb.addOrderBy('p.created_at', 'DESC');
+    } else if (sortBy === 'reviews') {
+      qb.addOrderBy('rs.review_count', 'DESC', 'NULLS LAST').addOrderBy('rs.avg_rating', 'DESC', 'NULLS LAST');
+    } else {
+      qb.addOrderBy('rs.avg_rating', 'DESC', 'NULLS LAST').addOrderBy('p.created_at', 'DESC');
+    }
+
+    const totalQb = qb.clone();
+    qb.offset(offset).limit(limit);
+
+    const [raw, total] = await Promise.all([
+      qb.getRawMany(),
+      totalQb.getCount(),
+    ]);
+
+    // Aggregate stats — scoped to same filters (city/category) for accuracy
+    let statsWhere = `p.women_led_status = 'approved' AND p.status IN ('active', 'unverified')`;
+    const statsParams: any[] = [];
+    if (city) {
+      statsParams.push(`%${city}%`);
+      statsWhere += ` AND p.city ILIKE $${statsParams.length}`;
+    }
+    if (categoryIds?.length) {
+      statsParams.push(categoryIds);
+      statsWhere += ` AND p.id IN (SELECT pc2.provider_id FROM provider_categories pc2 WHERE pc2.category_id = ANY($${statsParams.length}))`;
+    }
+
+    const statsResult = await this.providerRepo.query(`
+      SELECT
+        COUNT(DISTINCT p.id)::int AS total,
+        COUNT(DISTINCT pc.category_id)::int AS "categoriesCovered",
+        COALESCE(AVG(rs.avg_rating)::numeric(2,1), 0) AS "avgRating"
+      FROM providers p
+      LEFT JOIN (
+        SELECT rv.provider_id, AVG(rv.star_rating)::numeric(2,1) AS avg_rating
+        FROM reviews rv WHERE rv.status = 'active' GROUP BY rv.provider_id
+      ) rs ON rs.provider_id = p.id
+      LEFT JOIN provider_categories pc ON pc.provider_id = p.id
+      WHERE ${statsWhere}
+    `, statsParams);
+
+    const providers = raw.map((r: any) => ({
+      id: r.id,
+      name: r.name,
+      image: r.bannerImage || r.image || r.listingPhoto,
+      description: r.description,
+      city: r.city,
+      area: r.area,
+      location: [r.area, r.city].filter(Boolean).join(', '),
+      rating: parseFloat(r.rating) || 0,
+      reviewCount: parseInt(r.reviewCount, 10) || 0,
+      services: r.services || null,
+      verified: r.status === 'active',
+      isFeatured: r.isFeatured,
+      isAvailable: r.isAvailable,
+      isWomenLed: true,
+      isSponsored: r.isSponsored === true || r.isSponsored === 'true',
+      distance: r.distance ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
+    }));
+
+    return {
+      providers,
+      stats: statsResult[0] || { total: 0, categoriesCovered: 0, avgRating: 0 },
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
 
@@ -597,7 +975,8 @@ export class ProvidersService {
       .andWhere('provider.isFeatured = :featured', { featured: true })
       .andWhere(`${haversine} <= :radius`)
       .setParameters({ lat, lng, radius })
-      .orderBy("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'ASC')
+      .addSelect("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'status_rank')
+      .orderBy('status_rank', 'ASC')
       .addOrderBy('distance', 'ASC')
       .limit(10)
       .getRawAndEntities();
@@ -613,7 +992,8 @@ export class ProvidersService {
         .andWhere('provider.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
         .andWhere(`${haversine} <= :radius`)
         .setParameters({ lat, lng, radius })
-        .orderBy("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'ASC')
+        .addSelect("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'status_rank')
+        .orderBy('status_rank', 'ASC')
         .addOrderBy('distance', 'ASC')
         .limit(10)
         .getRawAndEntities());
@@ -632,31 +1012,40 @@ export class ProvidersService {
     // Product count
     const totalProducts = await this.productRepo.count({ where: { providerId: provider.id } });
 
-    // Reviews
-    const reviews = await this.reviewRepo.find({
-      where: { providerId: provider.id },
-      relations: ['reviewer'],
-      order: { postedAt: 'DESC' },
-    });
+    // Reviews — SQL aggregation for stats, limited load for recent reviews
+    const [reviewStats, recentReviews, totalEnquiries] = await Promise.all([
+      this.reviewRepo
+        .createQueryBuilder('r')
+        .select('COUNT(r.id)::int', 'totalReviews')
+        .addSelect('COALESCE(AVG(r.star_rating)::numeric(2,1), 0)', 'averageRating')
+        .addSelect("COUNT(CASE WHEN r.star_rating = 1 THEN 1 END)::int", 'r1')
+        .addSelect("COUNT(CASE WHEN r.star_rating = 2 THEN 1 END)::int", 'r2')
+        .addSelect("COUNT(CASE WHEN r.star_rating = 3 THEN 1 END)::int", 'r3')
+        .addSelect("COUNT(CASE WHEN r.star_rating = 4 THEN 1 END)::int", 'r4')
+        .addSelect("COUNT(CASE WHEN r.star_rating = 5 THEN 1 END)::int", 'r5')
+        .where('r.providerId = :pid', { pid: provider.id })
+        .getRawOne(),
+      this.reviewRepo.find({
+        where: { providerId: provider.id },
+        relations: ['reviewer'],
+        order: { postedAt: 'DESC' },
+        take: 5,
+      }),
+      this.participantRepo
+        .createQueryBuilder('cp')
+        .where('cp.userId = :userId AND cp.role = :role', { userId, role: 'provider' })
+        .getCount(),
+    ]);
 
-    const totalReviews = reviews.length;
-    const averageRating =
-      totalReviews > 0
-        ? parseFloat((reviews.reduce((sum, r) => sum + r.starRating, 0) / totalReviews).toFixed(1))
-        : 0;
-
-    const ratingBreakdown = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
-    reviews.forEach((r) => {
-      if (r.starRating >= 1 && r.starRating <= 5) {
-        ratingBreakdown[r.starRating as 1 | 2 | 3 | 4 | 5]++;
-      }
-    });
-
-    // Enquiries = conversations where provider participated
-    const totalEnquiries = await this.participantRepo
-      .createQueryBuilder('cp')
-      .where('cp.userId = :userId AND cp.role = :role', { userId, role: 'provider' })
-      .getCount();
+    const totalReviews = parseInt(reviewStats?.totalReviews || '0', 10);
+    const averageRating = parseFloat(reviewStats?.averageRating || '0');
+    const ratingBreakdown = {
+      1: parseInt(reviewStats?.r1 || '0', 10),
+      2: parseInt(reviewStats?.r2 || '0', 10),
+      3: parseInt(reviewStats?.r3 || '0', 10),
+      4: parseInt(reviewStats?.r4 || '0', 10),
+      5: parseInt(reviewStats?.r5 || '0', 10),
+    };
 
     return {
       totalProducts,
@@ -664,7 +1053,7 @@ export class ProvidersService {
       averageRating,
       totalEnquiries,
       ratingBreakdown,
-      recentReviews: reviews.slice(0, 5).map((r) => ({
+      recentReviews: recentReviews.map((r) => ({
         id: r.id,
         starRating: r.starRating,
         reviewText: r.reviewText,
@@ -680,30 +1069,70 @@ export class ProvidersService {
     const provider = await this.providerRepo.findOneBy({ userId });
     if (!provider) throw new NotFoundException('Provider not found. Please register as a provider first.');
 
+    // Content moderation on offer text
+    if (dto.title) {
+      const titleCheck = this.contentSanitizer.check(dto.title);
+      if (titleCheck.flagged) {
+        throw new BadRequestException('Your deal title contains inappropriate language. Please revise.');
+      }
+    }
+    if (dto.description) {
+      const descCheck = this.contentSanitizer.check(dto.description);
+      if (descCheck.flagged) {
+        throw new BadRequestException('Your deal description contains inappropriate language. Please revise.');
+      }
+    }
+
     if (new Date(dto.endsAt) <= new Date(dto.startsAt)) {
       throw new BadRequestException('End date must be after start date');
     }
 
-    // ─── Deal limits ────────────────────────────────────────────
-    const totalOffers = await this.offerRepo.count({ where: { providerId: provider.id } });
-    if (totalOffers >= 5) {
-      throw new ForbiddenException(
-        'You have reached the maximum of 5 deals. Please upgrade your plan to create more.',
-      );
+    // ─── Deal limits (subscription-aware) ────────────────────────────
+    const subscription = await this.subscriptionRepo.findOne({
+      where: { providerId: provider.id, status: 'active' },
+      relations: ['plan'],
+    });
+
+    let maxTotalDeals = 5;
+    let maxActiveDeals = 3;
+
+    if (subscription?.plan) {
+      maxTotalDeals = subscription.plan.maxTotalDeals;
+      maxActiveDeals = subscription.plan.maxActiveDeals;
     }
 
-    const now = new Date();
-    const activeCount = await this.offerRepo
-      .createQueryBuilder('o')
-      .where('o.providerId = :pid', { pid: provider.id })
-      .andWhere('o.isActive = true')
-      .andWhere('o.endsAt > :now', { now })
-      .andWhere('o.startsAt <= :now', { now })
-      .getCount();
-    if (activeCount >= 3) {
-      throw new BadRequestException(
-        'You can have at most 3 active deals at a time. Deactivate or wait for one to expire.',
-      );
+    // Unlimited (-1) bypasses checks
+    if (maxTotalDeals !== -1) {
+      const totalOffers = await this.offerRepo.count({ where: { providerId: provider.id } });
+      if (totalOffers >= maxTotalDeals) {
+        throw new ForbiddenException(
+          `You have reached the maximum of ${maxTotalDeals} deals. Please upgrade your plan to create more.`,
+        );
+      }
+    }
+
+    if (maxActiveDeals !== -1) {
+      const now = new Date();
+      const activeCount = await this.offerRepo
+        .createQueryBuilder('o')
+        .where('o.providerId = :pid', { pid: provider.id })
+        .andWhere('o.isActive = true')
+        .andWhere('o.endsAt > :now', { now })
+        .andWhere('o.startsAt <= :now', { now })
+        .getCount();
+      if (activeCount >= maxActiveDeals) {
+        throw new BadRequestException(
+          `You can have at most ${maxActiveDeals} active deals at a time. Deactivate or wait for one to expire.`,
+        );
+      }
+    }
+
+    // Increment free deals counter if within free quota
+    const freeQuotaSetting = await this.settingRepo?.findOneBy({ key: 'free_deal_quota_lifetime' });
+    const freeQuota = freeQuotaSetting ? parseInt(freeQuotaSetting.value, 10) : 3;
+    if (provider.freeDealsCreated < freeQuota) {
+      provider.freeDealsCreated += 1;
+      await this.providerRepo.save(provider);
     }
 
     const offer = this.offerRepo.create({
@@ -739,12 +1168,29 @@ export class ProvidersService {
       .andWhere('o.startsAt <= :now', { now })
       .getCount();
 
+    // Check subscription for higher limits
+    let maxTotalDeals = 5;
+    let maxActiveDeals = 3;
+    let planName: string | null = null;
+
+    const subscription = await this.subscriptionRepo.findOne({
+      where: { providerId: provider.id, status: 'active' },
+      relations: ['plan'],
+    });
+
+    if (subscription?.plan) {
+      maxTotalDeals = subscription.plan.maxTotalDeals;
+      maxActiveDeals = subscription.plan.maxActiveDeals;
+      planName = subscription.plan.name;
+    }
+
     return {
       totalDeals: totalOffers,
-      maxTotalDeals: 5,
+      maxTotalDeals,
       activeDeals: activeCount,
-      maxActiveDeals: 3,
-      requiresPayment: totalOffers >= 5,
+      maxActiveDeals,
+      requiresPayment: totalOffers >= maxTotalDeals,
+      currentPlan: planName,
     };
   }
 
@@ -765,6 +1211,20 @@ export class ProvidersService {
     const offer = await this.offerRepo.findOneBy({ id: offerId });
     if (!offer) throw new NotFoundException('Offer not found');
     if (offer.providerId !== provider.id) throw new BadRequestException('You do not own this offer');
+
+    // Content moderation on offer text
+    if (dto.title) {
+      const titleCheck = this.contentSanitizer.check(dto.title);
+      if (titleCheck.flagged) {
+        throw new BadRequestException('Your deal title contains inappropriate language. Please revise.');
+      }
+    }
+    if (dto.description) {
+      const descCheck = this.contentSanitizer.check(dto.description);
+      if (descCheck.flagged) {
+        throw new BadRequestException('Your deal description contains inappropriate language. Please revise.');
+      }
+    }
 
     if (dto.startsAt || dto.endsAt) {
       const startsAt = dto.startsAt ? new Date(dto.startsAt) : offer.startsAt;
@@ -822,7 +1282,7 @@ export class ProvidersService {
       startsAt: new Date(dto.startsAt),
       endsAt: new Date(dto.endsAt),
       isActive: true,
-      approvalStatus: await this.requiresApproval('sponsorship_requires_approval') ? 'pending_approval' : 'approved',
+      approvalStatus: 'approved',
     });
 
     return this.sponsorRepo.save(listing);
@@ -846,19 +1306,38 @@ export class ProvidersService {
     if (!listing) throw new NotFoundException('Sponsorship not found');
     if (listing.providerId !== provider.id) throw new BadRequestException('You do not own this sponsorship');
 
-    if (dto.budgetAmount !== undefined) listing.budgetAmount = dto.budgetAmount;
-    if (dto.isActive !== undefined) listing.isActive = dto.isActive;
-    if (dto.endsAt !== undefined) {
-      if (new Date(dto.endsAt) <= listing.startsAt) {
-        throw new BadRequestException('End date must be after start date');
+    // Providers can only toggle isActive (pause/resume) — not modify budget/dates
+    // Budget and date changes require admin or a new purchase
+    if (dto.budgetAmount !== undefined || dto.endsAt !== undefined) {
+      throw new BadRequestException('Budget and date changes are not allowed. Please create a new sponsorship.');
+    }
+
+    if (dto.isActive !== undefined) {
+      // Block resume if expired
+      if (dto.isActive && new Date(listing.endsAt) <= new Date()) {
+        throw new BadRequestException('Cannot resume an expired sponsorship');
       }
-      listing.endsAt = new Date(dto.endsAt);
+      // Block resume if budget exhausted
+      if (dto.isActive && Number(listing.spentAmount) >= Number(listing.budgetAmount)) {
+        throw new BadRequestException('Cannot resume — budget is fully exhausted');
+      }
+      listing.isActive = dto.isActive;
     }
 
     return this.sponsorRepo.save(listing);
   }
 
   async getSponsorshipPlans() {
+    // Read plan configuration from system settings (JSON), fallback to defaults
+    const plansSetting = await this.settingRepo.findOneBy({ key: 'sponsorship_plans' });
+
+    if (plansSetting) {
+      try {
+        const plans = JSON.parse(plansSetting.value);
+        if (Array.isArray(plans) && plans.length > 0) return plans;
+      } catch { /* fall through to defaults */ }
+    }
+
     return [
       {
         id: 'basic',
@@ -927,6 +1406,46 @@ export class ProvidersService {
 
   // ─── Provider Disable / Enable / Delete ────────────────────────────
 
+  /** Get the configured cooldown hours from system settings */
+  private async getDisableCooldownHours(): Promise<number> {
+    const setting = await this.settingRepo.findOneBy({ key: 'provider_disable_cooldown_hours' });
+    return setting ? parseInt(setting.value, 10) || 48 : 48;
+  }
+
+  /** Check if cooldown enforcement is enabled */
+  private async isCooldownEnabled(): Promise<boolean> {
+    const setting = await this.settingRepo.findOneBy({ key: 'provider_disable_cooldown_enabled' });
+    return setting ? setting.value === 'true' : true;
+  }
+
+  /** Get cooldown status for the authenticated user's provider */
+  async getCooldownStatus(userId: string) {
+    const provider = await this.providerRepo.findOneBy({ userId });
+    if (!provider) return { canReEnable: true, disableRemainingHours: null, disabledAt: null, cooldownHours: 48 };
+
+    const cooldownHours = await this.getDisableCooldownHours();
+    const cooldownEnabled = await this.isCooldownEnabled();
+
+    if (!provider.disabledAt || !cooldownEnabled) {
+      return { canReEnable: true, disableRemainingHours: null, disabledAt: provider.disabledAt?.toISOString() || null, cooldownHours };
+    }
+
+    const elapsed = Date.now() - provider.disabledAt.getTime();
+    const cooldownMs = cooldownHours * 60 * 60 * 1000;
+    const remaining = cooldownMs - elapsed;
+
+    if (remaining <= 0) {
+      return { canReEnable: true, disableRemainingHours: 0, disabledAt: provider.disabledAt.toISOString(), cooldownHours };
+    }
+
+    return {
+      canReEnable: false,
+      disableRemainingHours: Math.ceil(remaining / (60 * 60 * 1000)),
+      disabledAt: provider.disabledAt.toISOString(),
+      cooldownHours,
+    };
+  }
+
   /** Disable the provider — hides from all listings but preserves data */
   async disableMyProvider(userId: string) {
     const provider = await this.providerRepo.findOneBy({ userId });
@@ -934,12 +1453,14 @@ export class ProvidersService {
     if (provider.deletedAt) throw new BadRequestException('Provider has been deleted');
 
     provider.status = 'disabled';
+    provider.disabledAt = new Date();
     await this.providerRepo.save(provider);
 
     // Switch user back to customer mode
     await this.userRepo.update(userId, { preferredMode: 'customer' } as any);
 
-    return { message: 'Provider disabled successfully', status: 'disabled' };
+    const cooldownHours = await this.getDisableCooldownHours();
+    return { message: 'Provider disabled successfully', status: 'disabled', cooldownHours };
   }
 
   /** Re-enable a disabled provider — restores to active/unverified */
@@ -949,9 +1470,25 @@ export class ProvidersService {
     if (provider.deletedAt) throw new BadRequestException('Provider has been deleted');
     if (provider.status !== 'disabled') throw new BadRequestException('Provider is not disabled');
 
+    // Enforce cooldown
+    const cooldownEnabled = await this.isCooldownEnabled();
+    if (cooldownEnabled && provider.disabledAt) {
+      const cooldownHours = await this.getDisableCooldownHours();
+      const elapsed = Date.now() - provider.disabledAt.getTime();
+      const cooldownMs = cooldownHours * 60 * 60 * 1000;
+      if (elapsed < cooldownMs) {
+        const remainingHours = Math.ceil((cooldownMs - elapsed) / (60 * 60 * 1000));
+        throw new BadRequestException(
+          `Provider cannot be re-enabled yet. Please wait ${remainingHours} more hour${remainingHours === 1 ? '' : 's'}. Cooldown period: ${cooldownHours} hours.`,
+        );
+      }
+    }
+
     // Check if they had a verified status before — restore accordingly
     const verification = await this.verRepo.findOneBy({ userId });
     provider.status = verification?.status === 'approved' ? 'active' : 'unverified';
+    provider.isAvailable = true;
+    provider.disabledAt = null;
     await this.providerRepo.save(provider);
 
     return { message: 'Provider enabled successfully', status: provider.status };

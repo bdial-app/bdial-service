@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsInt, Min, Max, IsOptional, IsNotEmpty } from 'class-validator';
+import { IsString, IsInt, Min, Max, IsOptional, IsNotEmpty, MaxLength } from 'class-validator';
 import { IsEnum, IsIn } from 'class-validator';
+import { Transform } from 'class-transformer';
 
 export enum ReviewStatus {
   pending = 'pending',
@@ -31,6 +32,8 @@ export class CreateReviewDto {
   @ApiPropertyOptional({ example: 'Excellent work!' })
   @IsOptional()
   @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @MaxLength(2000)
   reviewText?: string;
 }
 
@@ -38,5 +41,7 @@ export class ReportReviewDto {
   @ApiPropertyOptional({ example: 'This review is fake' })
   @IsOptional()
   @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @MaxLength(500)
   reason?: string;
 }

@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsOptional, IsBoolean, IsUUID, MaxLength, Matches, IsEnum } from 'class-validator';
+import { IsString, IsOptional, IsBoolean, IsUUID, MaxLength, Matches, IsEnum, IsUrl } from 'class-validator';
 import { Transform } from 'class-transformer';
 
 /** Trim, strip seconds (HH:MM:SS → HH:MM), and convert blank to undefined */
@@ -19,27 +19,34 @@ export class CreateProviderDto {
 
   @ApiProperty({ example: 'Fatema Beauty Salon' })
   @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @MaxLength(150)
   brandName: string;
 
   @ApiPropertyOptional({ example: 'Professional beauty services for women' })
   @IsOptional()
   @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @MaxLength(2000)
   description?: string;
 
   @ApiPropertyOptional({ example: '123 Main Street, Near City Center' })
   @IsOptional()
   @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @MaxLength(300)
   address?: string;
 
   @ApiProperty({ example: 'Mumbai' })
   @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @MaxLength(100)
   city: string;
 
   @ApiPropertyOptional({ example: 'Dadar' })
   @IsOptional()
   @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @MaxLength(100)
   area?: string;
 
@@ -104,4 +111,45 @@ export class CreateProviderDto {
   @Transform(({ value }) => value === 'true' || value === true)
   @IsBoolean()
   isWomenLed?: boolean;
+
+  @ApiPropertyOptional({ example: 'https://mybusiness.com', description: 'Business website URL' })
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @MaxLength(512)
+  websiteUrl?: string;
+
+  @ApiPropertyOptional({ example: 'mybusiness', description: 'Instagram handle (without @)' })
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim().replace(/^@/, '') : value)
+  @Matches(/^[a-zA-Z0-9._]{1,30}$/, { message: 'Instagram handle must be 1-30 alphanumeric characters, dots, or underscores' })
+  instagramHandle?: string;
+
+  @ApiPropertyOptional({ example: 'mybusinesspage', description: 'Facebook page handle or URL' })
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @MaxLength(128)
+  facebookHandle?: string;
+
+  @ApiPropertyOptional({ example: '@mybusiness', description: 'YouTube channel handle or URL' })
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @MaxLength(128)
+  youtubeHandle?: string;
+
+  @ApiPropertyOptional({ example: '+919876543210', description: 'WhatsApp Business number' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\+?\d{7,15}$/, { message: 'WhatsApp number must be 7-15 digits, optionally starting with +' })
+  whatsappNumber?: string;
+
+  @ApiPropertyOptional({ example: 'mybusiness', description: 'LinkedIn profile or company page handle/URL' })
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @MaxLength(128)
+  linkedinHandle?: string;
 }

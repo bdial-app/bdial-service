@@ -9,17 +9,20 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Type, Transform } from 'class-transformer';
 
 export class CreateOfferDto {
   @ApiProperty({ example: '20% off all services' })
   @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @MaxLength(150)
   title: string;
 
   @ApiPropertyOptional({ example: 'Valid on orders above ₹500' })
   @IsOptional()
   @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @MaxLength(500)
   description?: string;
 
   @ApiProperty({ enum: ['percentage', 'flat'], example: 'percentage' })

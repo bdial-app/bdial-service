@@ -1,11 +1,15 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsEnum, IsOptional, IsNumber, Min, IsLatitude, IsLongitude } from 'class-validator';
-import { Type } from 'class-transformer';
+import { IsString, IsEnum, IsOptional, IsNumber, Min, MinLength, MaxLength, Matches, IsLatitude, IsLongitude } from 'class-validator';
+import { Type, Transform } from 'class-transformer';
 
 export class UpdateUserDto {
   @ApiPropertyOptional({ example: 'Fatema Hussain' })
   @IsOptional()
   @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @MinLength(2, { message: 'Name must be at least 2 characters' })
+  @MaxLength(100, { message: 'Name must not exceed 100 characters' })
+  @Matches(/^[a-zA-Z\s.'\-]+$/, { message: 'Name should only contain letters' })
   name?: string;
 
   @ApiPropertyOptional({ enum: ['male', 'female', 'other'] })
@@ -16,16 +20,19 @@ export class UpdateUserDto {
   @ApiPropertyOptional({ example: 'Mumbai' })
   @IsOptional()
   @IsString()
+  @MaxLength(100, { message: 'City must not exceed 100 characters' })
   city?: string;
 
   @ApiPropertyOptional({ example: 'Dadar' })
   @IsOptional()
   @IsString()
+  @MaxLength(100, { message: 'Area must not exceed 100 characters' })
   area?: string;
 
   @ApiPropertyOptional({ example: '400014' })
   @IsOptional()
   @IsString()
+  @Matches(/^\d{6}$/, { message: 'Pincode must be exactly 6 digits' })
   pincode?: string;
 
   @ApiPropertyOptional({ example: 18.5204, description: 'User latitude' })

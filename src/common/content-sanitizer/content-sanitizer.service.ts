@@ -120,6 +120,7 @@ const MULTI_WORD_PHRASES = [
   'ibn el sharmouta', 'ibn sharmouta', 'ibn el kalb', 'bint el kalb',
   'ibn el hmar', 'kos omak', 'ayreh feek', 'telhas teezi',
   'khotay ki aulad', 'khotey da puttar', 'suwar ki aulad',
+  'aaichya gaand', 'aaichya gavat', 'aichya gavat',
 ];
 
 // ─── South Asian + Arabic words (added on top of bad-words & leo-profanity) ─
@@ -173,6 +174,22 @@ const SOUTH_ASIAN_PROFANITY = [
   'chootiya', 'chootya',
   'gadhedo', 'gadhedi',
   'rakhdi', 'raand',
+  'fattu', 'fuddi', 'fuddu', 'chinal', 'randio',
+  'chodlo', 'ghelchodyo', 'bhondhu', 'bhadvo', 'bhadvi',
+
+  // Marathi
+  'zavnya', 'zavnya', 'zhavnya', 'zhavalya', 'zavlya',
+  'chiknya', 'chikne', 'madharchod', 'aichya gavat',
+  'bhikarchot', 'bolkya', 'gandya', 'bhadvya', 'bhadvyaa',
+  'raandecha', 'randecha', 'chhinaal', 'chinaal', 'chhinal',
+  'gavat', 'gavti', 'halkat', 'halkya',
+  'khandya', 'lundya', 'pucchya', 'popat',
+  'satak', 'satakli', 'shengdana',
+  'tatya', 'thobad', 'thobadya', 'bokya',
+  'gandhya', 'gandul', 'gandu',
+  'aaichya gaand', 'aaichya gavat',
+  'maderchod', 'bhosadchya', 'bhosadya',
+  'lavdya', 'goticha', 'jhavnya',
 
   // Bengali
   'banchod', 'magi', 'magir', 'khankir chele', 'khankir',

@@ -6,12 +6,14 @@ import { Reflector } from '@nestjs/core';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import helmet from 'helmet';
 import compression from 'compression';
-import { json } from 'express';
+import { json, urlencoded } from 'express';
 import { AllExceptionsFilter } from './common/all-exceptions.filter';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     logger: ['error', 'warn', 'log'],
+    rawBody: true,
+    bodyParser: false, // We register body parsers manually below
   });
 
   const configService = app.get(ConfigService);
@@ -19,21 +21,46 @@ async function bootstrap() {
   // Global prefix
   app.setGlobalPrefix('api');
 
-  // Security headers
-  app.use(helmet());
+  // CORS — must be FIRST so error responses also get CORS headers.
+  // Mobile carriers often proxy requests, modifying headers. We must be explicit
+  // about allowed methods/headers to survive transparent proxy interference.
+  const corsOrigin = configService.get<string>('CORS_ORIGIN', '*');
+  app.enableCors({
+    origin: corsOrigin === '*'
+      ? true  // reflect request origin (works with credentials, unlike literal '*')
+      : corsOrigin.split(',').map((o) => o.trim()),
+    credentials: true,
+    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'Accept',
+      'Origin',
+      'X-Requested-With',
+      'Cache-Control',
+      'Pragma',
+    ],
+    exposedHeaders: ['Content-Disposition'],
+    maxAge: 86400, // Cache preflight for 24h — reduces OPTIONS calls on mobile
+  });
+
+  // Security headers — crossOriginResourcePolicy loosened so API responses
+  // aren't blocked by the browser when loaded from a different origin
+  app.use(helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    crossOriginOpenerPolicy: false,
+  }));
 
   // Response compression
   app.use(compression());
 
-  // Body size limit
-  app.use(json({ limit: '1mb' }));
-
-  // CORS — restrict to configured origins
-  const corsOrigin = configService.get<string>('CORS_ORIGIN', '*');
-  app.enableCors({
-    origin: corsOrigin === '*' ? '*' : corsOrigin.split(',').map((o) => o.trim()),
-    credentials: true,
-  });
+  // Body parsers — only for JSON/urlencoded; multipart is handled by Multer
+  // The verify callback stores rawBody for Razorpay webhook signature verification
+  app.use(json({
+    limit: '5mb',
+    verify: (req: any, _res, buf) => { req.rawBody = buf; },
+  }));
+  app.use(urlencoded({ extended: true, limit: '5mb' }));
 
   // Validation
   app.useGlobalPipes(

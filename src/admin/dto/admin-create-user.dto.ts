@@ -158,6 +158,9 @@ export class AdminCreateProviderWithUserDto {
     description?: string;
     price?: number;
     currency?: string;
+    productType?: 'product' | 'service';
+    categoryId?: string;
+    subcategoryId?: string;
   }>;
 
   // ── Location for both user and provider ─────────────────

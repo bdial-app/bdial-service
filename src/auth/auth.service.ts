@@ -10,6 +10,8 @@ import { Repository } from 'typeorm';
 import { JwtService } from '@nestjs/jwt';
 import { User } from '../entities';
 import { SupabaseAuthService } from '../supabase/supabase-auth.service';
+import { OtpService } from '../otp/otp.service';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import {
   SendOtpDto,
   VerifyOtpDto,
@@ -19,9 +21,13 @@ import {
   VerifyEmailOtpDto,
   CompleteProfileDto,
 } from './dto/auth.dto';
+import { ContentSanitizerService } from '../common/content-sanitizer';
 
 const OTP_RESEND_COOLDOWN_MS = 60 * 1000; // 60s cooldown between resends
-const otpStore = new Map<string, { otp: string; expiresAt: Date; sentAt: Date }>();
+
+/** In-memory store for email OTPs and pending registrations (dev/non-SMS flows) */
+const emailOtpStore = new Map<string, { otp: string; expiresAt: Date; sentAt: Date }>();
+const pendingRegStore = new Map<string, { email: string; name: string; password: string; gender: string; otp: string; expiresAt: Date }>();
 
 @Injectable()
 export class AuthService {
@@ -29,6 +35,9 @@ export class AuthService {
     @InjectRepository(User) private userRepo: Repository<User>,
     private jwtService: JwtService,
     private supabaseAuth: SupabaseAuthService,
+    private otpService: OtpService,
+    private notificationDispatch: NotificationDispatchService,
+    private contentSanitizer: ContentSanitizerService,
   ) {}
 
   async sendOtp(dto: SendOtpDto) {
@@ -49,21 +58,8 @@ export class AuthService {
       return { userExists: false, message: 'User not found. Please register.', data: { mobileNumber } };
     }
 
-    const existingOtp = otpStore.get(mobileNumber);
-    if (existingOtp && new Date() < existingOtp.expiresAt) {
-      const timeSinceSent = Date.now() - existingOtp.sentAt.getTime();
-      if (timeSinceSent < OTP_RESEND_COOLDOWN_MS) {
-        const remainingCooldown = Math.ceil((OTP_RESEND_COOLDOWN_MS - timeSinceSent) / 1000);
-        throw new BadRequestException({ statusCode: 429, message: 'OTP recently sent. Please wait before resending.', field: 'mobileNumber', retryAfterSeconds: remainingCooldown, error_code: 'OTP_RATE_LIMITED' });
-      }
-    }
-
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-
-    otpStore.set(mobileNumber, { otp, expiresAt, sentAt: new Date() });
-    console.log(`[Login OTP] ${mobileNumber}: ${otp} (Expires: ${expiresAt.toISOString()})`);
-    return { userExists: true, message: 'OTP sent successfully', data: { mobileNumber, expiresIn: '5 minutes', otp } };
+    const result = await this.otpService.sendOtpWithKey(`login_${mobileNumber}`, mobileNumber);
+    return { userExists: true, message: 'OTP sent successfully', data: { mobileNumber, expiresIn: result.expiresIn, ...(result.otp ? { otp: result.otp } : {}) } };
   }
 
   // Send OTP for new-user registration (no user-existence check)
@@ -79,20 +75,8 @@ export class AuthService {
       throw new BadRequestException({ statusCode: 400, message: 'Mobile number must be exactly 10 digits', field: 'mobileNumber', received_length: mobileNumber.length });
     }
 
-    const existingOtp = otpStore.get(mobileNumber);
-    if (existingOtp && new Date() < existingOtp.expiresAt) {
-      const timeSinceSent = Date.now() - existingOtp.sentAt.getTime();
-      if (timeSinceSent < OTP_RESEND_COOLDOWN_MS) {
-        const remainingCooldown = Math.ceil((OTP_RESEND_COOLDOWN_MS - timeSinceSent) / 1000);
-        throw new BadRequestException({ statusCode: 429, message: 'OTP recently sent. Please wait before resending.', field: 'mobileNumber', retryAfterSeconds: remainingCooldown, error_code: 'OTP_RATE_LIMITED' });
-      }
-    }
-
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-    otpStore.set(mobileNumber, { otp, expiresAt, sentAt: new Date() });
-    console.log(`[Registration OTP] ${mobileNumber}: ${otp} (Expires: ${expiresAt.toISOString()})`);
-    return { message: 'OTP sent successfully', data: { mobileNumber, expiresIn: '5 minutes', otp } };
+    const result = await this.otpService.sendOtpWithKey(`login_${mobileNumber}`, mobileNumber);
+    return { message: 'OTP sent successfully', data: { mobileNumber, expiresIn: result.expiresIn, ...(result.otp ? { otp: result.otp } : {}) } };
   }
 
   async sendAdminOtp(dto: SendOtpDto) {
@@ -107,7 +91,8 @@ export class AuthService {
     if (!user) {
       throw new NotFoundException({ statusCode: 404, message: 'User not found', field: 'mobileNumber', error_code: 'USER_NOT_FOUND' });
     }
-    if (user.role !== 'admin') {
+    const adminRoles = ['associate', 'moderator', 'admin', 'super_admin'];
+    if (!adminRoles.includes(user.role)) {
       throw new ForbiddenException({ statusCode: 403, message: 'Access denied', error_code: 'NOT_ADMIN' });
     }
     return this.sendOtp(dto);
@@ -129,18 +114,8 @@ export class AuthService {
       throw new BadRequestException({ statusCode: 400, message: 'OTP must be exactly 6 digits', field: 'otp', error_code: 'INVALID_OTP_FORMAT' });
     }
 
-    const record = otpStore.get(mobileNumber);
-    if (!record) {
-      throw new BadRequestException({ statusCode: 400, message: 'No OTP found for this phone number', error_code: 'OTP_NOT_FOUND' });
-    }
-    if (new Date() > record.expiresAt) {
-      otpStore.delete(mobileNumber);
-      throw new BadRequestException({ statusCode: 400, message: 'OTP has expired', error_code: 'OTP_EXPIRED' });
-    }
-    if (record.otp !== otp) {
-      throw new BadRequestException({ statusCode: 400, message: 'Invalid OTP', error_code: 'INVALID_OTP' });
-    }
-    otpStore.delete(mobileNumber);
+    // Verify via OtpService (dev: in-memory, prod: MSG91)
+    await this.otpService.verifyOtpWithKey(`login_${mobileNumber}`, mobileNumber, otp);
 
     try {
       const supabaseId: string | null = await this.supabaseAuth.createOrUpdateUser(
@@ -159,6 +134,7 @@ export class AuthService {
       const token = this.jwtService.sign({ sub: user.id, mobile: user.mobileNumber });
       return { accessToken: token, user };
     } catch (error) {
+      if (error instanceof BadRequestException) throw error;
       const errorMessage = error instanceof Error ? error.message : 'Authentication or database error';
       throw new BadRequestException({ statusCode: 400, message: 'Failed to complete OTP verification', detail: errorMessage, error_code: 'VERIFICATION_FAILED' });
     }
@@ -166,6 +142,12 @@ export class AuthService {
 
   async googleSignIn(dto: GoogleSignInDto) {
     if (!dto.email) throw new BadRequestException('Email is required');
+    if (dto.name) {
+      const nameCheck = this.contentSanitizer.check(dto.name);
+      if (nameCheck.flagged) {
+        throw new BadRequestException('Name contains inappropriate language. Please choose a different name.');
+      }
+    }
 
     let user = await this.userRepo.findOne({
       where: [{ email: dto.email }, ...(dto.googleId ? [{ googleId: dto.googleId }] : [])],
@@ -185,6 +167,9 @@ export class AuthService {
         googleEmail: dto.email, googleName: dto.name, ssoProvider: 'google', gender: 'other',
       });
       user = await this.userRepo.save(user);
+
+      // Send welcome notification for new users
+      this.notificationDispatch.sendTemplated(user.id, 'welcome', { userName: user.name || 'there' }, undefined, 'customer').catch(() => {});
     }
     return this.generateAuthResponse(user);
   }
@@ -195,6 +180,22 @@ export class AuthService {
       accessToken: token,
       user: { id: user.id, mobileNumber: user.mobileNumber, email: user.email || null, name: user.name, role: user.role, ssoProvider: user.ssoProvider || null },
     };
+  }
+
+  /**
+   * Refresh an existing valid JWT — issues a new token with fresh expiry.
+   * The caller must already be authenticated (JWT guard protects the route).
+   */
+  async refreshToken(userId: string) {
+    const user = await this.userRepo.findOneBy({ id: userId });
+    if (!user) {
+      throw new BadRequestException('User not found');
+    }
+    if (user.status === 'suspended') {
+      throw new ForbiddenException('Account is inactive');
+    }
+    const token = this.jwtService.sign({ sub: user.id, mobile: user.mobileNumber, email: user.email });
+    return { accessToken: token, user };
   }
 
   async handleSupabaseOAuthSession(supabaseToken: string) {
@@ -267,6 +268,10 @@ export class AuthService {
     if (name.length < 2 || name.length > 100) {
       throw new BadRequestException({ statusCode: 400, message: 'Name must be between 2 and 100 characters', field: 'name' });
     }
+    const nameCheck = this.contentSanitizer.check(name);
+    if (nameCheck.flagged) {
+      throw new BadRequestException({ statusCode: 400, message: 'Name contains inappropriate language. Please choose a different name.', field: 'name' });
+    }
     if (!['male', 'female', 'other'].includes(dto.gender.toLowerCase())) {
       throw new BadRequestException({ statusCode: 400, message: 'Gender must be one of: male, female, other', field: 'gender' });
     }
@@ -276,21 +281,10 @@ export class AuthService {
       throw new ConflictException({ statusCode: 409, message: 'This mobile number is already registered', error_code: 'PHONE_ALREADY_EXISTS' });
     }
 
-    const existingOtp = otpStore.get(`reg_phone_${mobileNumber}`);
-    if (existingOtp && new Date() < existingOtp.expiresAt) {
-      const timeSinceSent = Date.now() - existingOtp.sentAt.getTime();
-      if (timeSinceSent < OTP_RESEND_COOLDOWN_MS) {
-        const remainingCooldown = Math.ceil((OTP_RESEND_COOLDOWN_MS - timeSinceSent) / 1000);
-        throw new BadRequestException({ statusCode: 429, message: 'OTP recently sent. Please wait before resending.', retryAfterSeconds: remainingCooldown, error_code: 'OTP_RATE_LIMITED' });
-      }
-    }
+    const metadata = { name, gender: dto.gender.toLowerCase(), phone: mobileNumber };
+    const result = await this.otpService.sendOtpWithKey(`reg_phone_${mobileNumber}`, mobileNumber, metadata);
 
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-    otpStore.set(`reg_phone_${mobileNumber}`, { otp, expiresAt, sentAt: new Date(), mobileNumber, name, gender: dto.gender.toLowerCase() } as any);
-    console.log(`[Phone Registration OTP] ${mobileNumber}: ${otp}`);
-
-    return { step: 'phone_verification', message: 'OTP sent to your phone. Please verify to complete registration.', data: { mobileNumber, expiresIn: '5 minutes' } };
+    return { step: 'phone_verification', message: 'OTP sent to your phone. Please verify to complete registration.', data: { mobileNumber, expiresIn: result.expiresIn, ...(result.otp ? { otp: result.otp } : {}) } };
   }
 
   async verifyPhoneAndRegister(dto: VerifyOtpDto) {
@@ -304,18 +298,22 @@ export class AuthService {
     }
 
     const otpKey = `reg_phone_${mobileNumber}`;
-    const record = otpStore.get(otpKey) as any;
-    if (!record) throw new BadRequestException({ statusCode: 400, message: 'No OTP found', error_code: 'OTP_NOT_FOUND' });
-    if (new Date() > record.expiresAt) { otpStore.delete(otpKey); throw new BadRequestException({ statusCode: 400, message: 'OTP has expired', error_code: 'OTP_EXPIRED' }); }
-    if (record.otp !== otp) throw new BadRequestException({ statusCode: 400, message: 'Invalid OTP', error_code: 'INVALID_OTP' });
-    otpStore.delete(otpKey);
+
+    // Get stored metadata (dev mode only — in prod, metadata is stored separately before OTP send)
+    const devMetadata = this.otpService.getDevMetadata(otpKey);
+
+    // Verify OTP (dev: in-memory, prod: MSG91)
+    await this.otpService.verifyOtpWithKey(otpKey, mobileNumber, otp);
 
     const existingUser = await this.userRepo.findOneBy({ mobileNumber });
     if (existingUser) {
       throw new ConflictException({ statusCode: 409, message: 'User account already exists', error_code: 'PHONE_ALREADY_REGISTERED' });
     }
 
-    const metadata = { name: record.name, gender: record.gender, phone: mobileNumber, registration_source: 'phone_otp' };
+    const regName = devMetadata?.name || dto.mobileNumber;
+    const regGender = devMetadata?.gender || 'other';
+
+    const metadata = { name: regName, gender: regGender, phone: mobileNumber, registration_source: 'phone_otp' };
     let supabaseId: string | null;
     try {
       supabaseId = await this.supabaseAuth.createOrUpdateUser(`${mobileNumber}@tijarahconnect.local`, mobileNumber, metadata);
@@ -329,11 +327,14 @@ export class AuthService {
 
     let user: User;
     try {
-      user = this.userRepo.create({ mobileNumber, name: record.name, gender: record.gender, supabaseId: supabaseId || undefined, status: 'active' });
+      user = this.userRepo.create({ mobileNumber, name: regName, gender: regGender, supabaseId: supabaseId || undefined, status: 'active' });
       user = await this.userRepo.save(user);
     } catch (error) {
       throw new BadRequestException({ statusCode: 400, message: 'Failed to create user account in database', error_code: 'DATABASE_ERROR' });
     }
+
+    // Send welcome notification
+    this.notificationDispatch.sendTemplated(user.id, 'welcome', { userName: user.name || 'there' }, undefined, 'customer').catch(() => {});
 
     const token = this.jwtService.sign({ sub: user.id, mobile: user.mobileNumber });
     return {
@@ -361,7 +362,7 @@ export class AuthService {
     const existingUser = await this.userRepo.findOneBy({ email });
     if (existingUser) throw new ConflictException({ statusCode: 409, message: 'This email is already registered', error_code: 'EMAIL_ALREADY_EXISTS' });
 
-    const existingOtp = otpStore.get(`reg_email_${email}`);
+    const existingOtp = emailOtpStore.get(email);
     if (existingOtp && new Date() < existingOtp.expiresAt) {
       const timeSinceSent = Date.now() - existingOtp.sentAt.getTime();
       if (timeSinceSent < OTP_RESEND_COOLDOWN_MS) {
@@ -372,8 +373,8 @@ export class AuthService {
 
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
-    otpStore.set(`reg_email_${email}`, { otp, expiresAt, sentAt: new Date() });
-    otpStore.set(`pending_reg_${email}`, { email, name, password, gender: dto.gender.toLowerCase(), otp, expiresAt } as any);
+    emailOtpStore.set(email, { otp, expiresAt, sentAt: new Date() });
+    pendingRegStore.set(email, { email, name, password, gender: dto.gender.toLowerCase(), otp, expiresAt });
     console.log(`[Email Registration OTP] ${email}: ${otp}`);
 
     return { step: 'email_verification', message: 'Verification OTP sent to your email.', data: { email, expiresIn: '15 minutes' } };
@@ -388,14 +389,13 @@ export class AuthService {
     if (!emailRegex.test(email)) throw new BadRequestException({ statusCode: 400, message: 'Invalid email format', field: 'email' });
     if (otp.length !== 6 || !/^\d+$/.test(otp)) throw new BadRequestException({ statusCode: 400, message: 'OTP must be exactly 6 digits', error_code: 'INVALID_OTP_FORMAT' });
 
-    const otpKey = `reg_email_${email}`;
-    const record = otpStore.get(otpKey);
-    const pendingReg = otpStore.get(`pending_reg_${email}`) as any;
+    const record = emailOtpStore.get(email);
+    const pendingReg = pendingRegStore.get(email);
     if (!record || !pendingReg) throw new BadRequestException({ statusCode: 400, message: 'No pending registration found', error_code: 'NO_PENDING_REGISTRATION' });
-    if (new Date() > record.expiresAt) { otpStore.delete(otpKey); otpStore.delete(`pending_reg_${email}`); throw new BadRequestException({ statusCode: 400, message: 'OTP has expired', error_code: 'OTP_EXPIRED' }); }
+    if (new Date() > record.expiresAt) { emailOtpStore.delete(email); pendingRegStore.delete(email); throw new BadRequestException({ statusCode: 400, message: 'OTP has expired', error_code: 'OTP_EXPIRED' }); }
     if (record.otp !== otp) throw new BadRequestException({ statusCode: 400, message: 'Invalid OTP', error_code: 'INVALID_OTP' });
-    otpStore.delete(otpKey);
-    otpStore.delete(`pending_reg_${email}`);
+    emailOtpStore.delete(email);
+    pendingRegStore.delete(email);
 
     const existingUser = await this.userRepo.findOneBy({ email });
     if (existingUser) throw new ConflictException({ statusCode: 409, message: 'User already exists', error_code: 'EMAIL_ALREADY_REGISTERED' });
@@ -416,6 +416,9 @@ export class AuthService {
     } catch (error) {
       throw new BadRequestException({ statusCode: 400, message: 'Failed to create user in database', error_code: 'DATABASE_ERROR' });
     }
+
+    // Send welcome notification
+    this.notificationDispatch.sendTemplated(user.id, 'welcome', { userName: user.name || 'there' }, undefined, 'customer').catch(() => {});
 
     const token = this.jwtService.sign({ sub: user.id, email: user.email });
     return {

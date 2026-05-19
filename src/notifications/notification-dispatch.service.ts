@@ -3,8 +3,10 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { FirebaseService, PushPayload } from './firebase.service';
 import { NotificationsService } from './notifications.service';
+import { NotificationTemplateService } from './notification-template.service';
 import { NotificationPreference } from '../entities/notification-preference.entity';
 import { NotificationType } from '../entities/notification.entity';
+import { NotificationTargetMode } from '../entities/notification.entity';
 import { User } from '../entities/user.entity';
 
 /** Maps notification type → preference field name */
@@ -18,6 +20,10 @@ const TYPE_TO_PREFERENCE: Record<NotificationType, keyof NotificationPreference 
   system_announcement: 'systemAnnouncements',
   report_update: null, // Always sent
   new_enquiry: 'chatMessages', // Uses chat preference
+  payment_update: 'systemAnnouncements', // Transactional — uses system pref
+  voucher_update: 'promotional', // Marketing — uses promotional pref
+  subscription_update: 'systemAnnouncements', // Transactional
+  invite_update: 'promotional', // Engagement
 };
 
 @Injectable()
@@ -27,9 +33,49 @@ export class NotificationDispatchService {
   constructor(
     private readonly firebaseService: FirebaseService,
     private readonly notificationsService: NotificationsService,
+    private readonly templateService: NotificationTemplateService,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
   ) {}
+
+  /**
+   * Send a templated notification to a user.
+   * Checks admin control (template.isActive) before sending.
+   * This is the preferred method for all automated notifications.
+   */
+  async sendTemplated(
+    userId: string,
+    slug: string,
+    variables: Record<string, string> = {},
+    data?: Record<string, any>,
+    targetMode?: NotificationTargetMode,
+  ): Promise<boolean> {
+    // 1. Resolve template — returns null if admin disabled it
+    const resolved = await this.templateService.resolve(slug, variables);
+    if (!resolved) {
+      this.logger.debug(`Notification "${slug}" is disabled by admin — skipping`);
+      return false;
+    }
+
+    // 2. Get template to determine type
+    const template = await this.templateService.getBySlug(slug);
+    if (!template) return false;
+
+    // Merge route into data payload
+    const payload = { ...data };
+    if (resolved.route) payload.route = resolved.route;
+
+    return this.sendToUser(
+      userId,
+      template.type as NotificationType,
+      resolved.title,
+      resolved.body,
+      payload,
+      resolved.imageUrl,
+      undefined,
+      targetMode,
+    );
+  }
 
   /**
    * Send a push notification to a specific user.
@@ -43,6 +89,7 @@ export class NotificationDispatchService {
     data?: Record<string, any>,
     imageUrl?: string,
     batchId?: string,
+    targetMode?: NotificationTargetMode,
   ): Promise<boolean> {
     try {
       // 1. Check user preferences
@@ -50,7 +97,7 @@ export class NotificationDispatchService {
 
       if (!prefs.pushEnabled) {
         this.logger.debug(`Push disabled for user ${userId} — saving to inbox only`);
-        await this.saveNotification(userId, type, title, body, data, imageUrl, batchId);
+        await this.saveNotification(userId, type, title, body, data, imageUrl, batchId, targetMode);
         return false;
       }
 
@@ -58,19 +105,19 @@ export class NotificationDispatchService {
       const prefField = TYPE_TO_PREFERENCE[type];
       if (prefField && !prefs[prefField]) {
         this.logger.debug(`${type} notifications disabled for user ${userId} — saving to inbox only`);
-        await this.saveNotification(userId, type, title, body, data, imageUrl, batchId);
+        await this.saveNotification(userId, type, title, body, data, imageUrl, batchId, targetMode);
         return false;
       }
 
       // Check quiet hours
       if (this.isQuietHours(prefs)) {
         this.logger.debug(`Quiet hours active for user ${userId} — saving to inbox only`);
-        await this.saveNotification(userId, type, title, body, data, imageUrl, batchId);
+        await this.saveNotification(userId, type, title, body, data, imageUrl, batchId, targetMode);
         return false;
       }
 
       // 2. Save notification to inbox
-      await this.saveNotification(userId, type, title, body, data, imageUrl, batchId);
+      await this.saveNotification(userId, type, title, body, data, imageUrl, batchId, targetMode);
 
       // 3. Get device tokens and send push
       const tokens = await this.notificationsService.getActiveTokens(userId);
@@ -83,7 +130,7 @@ export class NotificationDispatchService {
         title,
         body,
         imageUrl,
-        data: this.serializeData(type, data),
+        data: this.serializeData(type, data, targetMode),
       };
 
       const tokenStrings = tokens.map((t) => t.token);
@@ -195,6 +242,7 @@ export class NotificationDispatchService {
     data?: Record<string, any>,
     imageUrl?: string,
     batchId?: string,
+    targetMode?: NotificationTargetMode,
   ) {
     return this.notificationsService.createNotification({
       userId,
@@ -205,6 +253,7 @@ export class NotificationDispatchService {
       data: data || null,
       batchId: batchId || null,
       source: batchId ? 'admin' : 'system',
+      targetMode: targetMode || null,
     });
   }
 
@@ -259,9 +308,11 @@ export class NotificationDispatchService {
   private serializeData(
     type: NotificationType,
     data?: Record<string, any>,
+    targetMode?: NotificationTargetMode,
   ): Record<string, string> {
     const serialized: Record<string, string> = { type };
 
+    if (targetMode) serialized.targetMode = targetMode;
     if (data) {
       if (data.route) serialized.route = String(data.route);
       if (data.params) serialized.params = JSON.stringify(data.params);

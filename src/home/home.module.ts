@@ -9,7 +9,13 @@ import {
   PromoBanner,
   Booking,
   Photo,
+  ProviderOffer,
+  SponsoredListing,
+  UserCategoryInteraction,
+  User,
+  Product,
 } from '../entities';
+import { CategoryPersonalizationService } from '../users/category-personalization.service';
 
 @Module({
   imports: [
@@ -20,10 +26,15 @@ import {
       PromoBanner,
       Booking,
       Photo,
+      ProviderOffer,
+      SponsoredListing,
+      UserCategoryInteraction,
+      User,
+      Product,
     ]),
   ],
   controllers: [HomeController],
-  providers: [HomeService],
+  providers: [HomeService, CategoryPersonalizationService],
   exports: [HomeService],
 })
 export class HomeModule {}

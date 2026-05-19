@@ -60,13 +60,13 @@ SQL_FILES=(
   "migration-search-keywords.sql"
   "migration-admin-controls.sql"
   "migration-product-type.sql"
+  "migration-category-keywords-seed.sql"
 
   # 3. Search vectors (triggers, weighted tsvector, synonyms table)
   "migration-search-vectors.sql"
 
   # 4. Seed data
   "seed.sql"
-  "seed-categories-keywords.sql"
   "seed-search-synonyms.sql"
   "seed-explore.sql"
   "seed-home.sql"

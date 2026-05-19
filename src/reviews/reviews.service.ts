@@ -12,6 +12,8 @@ import { CreateReviewDto, ReportReviewDto } from './dto/review.dto';
 import { StorageService } from '../storage/storage.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { ContentSanitizerService } from '../common/content-sanitizer';
+import { compressImage } from '../common/image-processor';
+import { GoogleReviewsService } from '../google-reviews/google-reviews.service';
 
 @Injectable()
 export class ReviewsService {
@@ -23,6 +25,7 @@ export class ReviewsService {
     private storageService: StorageService,
     private notificationDispatch: NotificationDispatchService,
     private contentSanitizer: ContentSanitizerService,
+    private googleReviewsService: GoogleReviewsService,
   ) {}
 
   async create(userId: string, dto: CreateReviewDto) {
@@ -57,6 +60,9 @@ export class ReviewsService {
     });
     const saved = await this.reviewRepo.save(review);
 
+    // Recompute combined rating (includes Google aggregates if linked)
+    this.googleReviewsService.recomputeByProviderId(dto.providerId).catch(() => {});
+
     // Notify the provider about the new review
     const provider = await this.providerRepo.findOneBy({ id: dto.providerId });
     if (provider) {
@@ -66,6 +72,9 @@ export class ReviewsService {
         'New Review Received',
         `You received a ${dto.starRating}-star review${dto.reviewText ? ': ' + dto.reviewText.substring(0, 80) : ''}`,
         { route: '/provider-details', params: { id: dto.providerId, tab: 'reviews' } },
+        undefined,
+        undefined,
+        'provider',
       ).catch(() => {}); // Fire-and-forget
     }
 
@@ -120,7 +129,8 @@ export class ReviewsService {
     const review = await this.reviewRepo.findOneBy({ id: reviewId });
     if (!review) throw new NotFoundException('Review not found');
 
-    const { url, storageKey } = await this.storageService.upload('reviews', file);
+    const compressed = await compressImage(file, 'standard');
+    const { url, storageKey } = await this.storageService.upload('reviews', compressed);
     const photo = this.reviewPhotoRepo.create({ reviewId, imageUrl: url, storageKey });
     const saved = await this.reviewPhotoRepo.save(photo);
 

@@ -74,6 +74,15 @@ export class Provider {
   @Column({ name: 'is_women_led', type: 'boolean', default: false })
   isWomenLed: boolean;
 
+  @Column({ name: 'women_led_status', type: 'varchar', length: 20, default: 'none' })
+  womenLedStatus: 'none' | 'pending' | 'approved' | 'rejected';
+
+  @Column({ name: 'women_led_reviewed_at', type: 'timestamptz', nullable: true })
+  womenLedReviewedAt: Date | null;
+
+  @Column({ name: 'women_led_reviewed_by', type: 'uuid', nullable: true })
+  womenLedReviewedBy: string | null;
+
   @Column({ name: 'community_verified', type: 'boolean', default: false })
   communityVerified: boolean;
 
@@ -86,6 +95,18 @@ export class Provider {
   @Column({ type: 'text', array: true, nullable: true, default: null })
   keywords: string[] | null;
 
+  @Column({ name: 'gateway_customer_id', type: 'varchar', length: 255, nullable: true })
+  gatewayCustomerId: string | null;
+
+  @Column({ name: 'free_leads_used_this_month', type: 'int', default: 0 })
+  freeLeadsUsedThisMonth: number;
+
+  @Column({ name: 'free_leads_reset_at', type: 'timestamptz', nullable: true })
+  freeLeadsResetAt: Date | null;
+
+  @Column({ name: 'free_deals_created', type: 'int', default: 0 })
+  freeDealsCreated: number;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
@@ -94,6 +115,69 @@ export class Provider {
 
   @Column({ name: 'deleted_at', type: 'timestamptz', nullable: true })
   deletedAt: Date | null;
+
+  @Column({ name: 'disabled_at', type: 'timestamptz', nullable: true })
+  disabledAt: Date | null;
+
+  @Column({ name: 'suspended_at', type: 'timestamptz', nullable: true })
+  suspendedAt: Date | null;
+
+  @Column({ name: 'suspension_confirmed', type: 'boolean', default: false })
+  suspensionConfirmed: boolean;
+
+  @Column({ name: 'last_contact_number_change_at', type: 'timestamptz', nullable: true })
+  lastContactNumberChangeAt: Date | null;
+
+  @Column({ name: 'website_url', type: 'varchar', length: 512, nullable: true })
+  websiteUrl: string | null;
+
+  @Column({ name: 'website_logo_url', type: 'varchar', length: 512, nullable: true })
+  websiteLogoUrl: string | null;
+
+  @Column({ name: 'instagram_handle', type: 'varchar', length: 64, nullable: true })
+  instagramHandle: string | null;
+
+  @Column({ name: 'facebook_handle', type: 'varchar', length: 128, nullable: true })
+  facebookHandle: string | null;
+
+  @Column({ name: 'youtube_handle', type: 'varchar', length: 128, nullable: true })
+  youtubeHandle: string | null;
+
+  @Column({ name: 'whatsapp_number', type: 'varchar', length: 20, nullable: true })
+  whatsappNumber: string | null;
+
+  @Column({ name: 'linkedin_handle', type: 'varchar', length: 128, nullable: true })
+  linkedinHandle: string | null;
+
+  // ── Google Reviews Integration ──
+  @Column({ name: 'google_place_id', type: 'varchar', length: 255, nullable: true })
+  googlePlaceId: string | null;
+
+  @Column({ name: 'google_rating', type: 'decimal', precision: 2, scale: 1, nullable: true })
+  googleRating: number | null;
+
+  @Column({ name: 'google_review_count', type: 'int', nullable: true })
+  googleReviewCount: number | null;
+
+  @Column({ name: 'google_verified_at', type: 'timestamptz', nullable: true })
+  googleVerifiedAt: Date | null;
+
+  @Column({ name: 'google_last_fetched_at', type: 'timestamptz', nullable: true })
+  googleLastFetchedAt: Date | null;
+
+  @Column({ name: 'combined_rating', type: 'decimal', precision: 2, scale: 1, nullable: true })
+  combinedRating: number | null;
+
+  @Column({ name: 'combined_review_count', type: 'int', nullable: true })
+  combinedReviewCount: number | null;
+
+  @Column({
+    name: 'trust_level',
+    type: 'enum',
+    enum: ['unverified', 'basic', 'verified', 'trusted'],
+    default: 'unverified',
+  })
+  trustLevel: 'unverified' | 'basic' | 'verified' | 'trusted';
 
   @OneToOne(() => User, (u) => u.provider, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })

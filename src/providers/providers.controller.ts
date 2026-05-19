@@ -29,6 +29,7 @@ import {
 } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import { ProvidersService } from './providers.service';
+import { WebsiteMetaService } from './website-meta.service';
 import { CreateProviderDto } from './dto/create-provider.dto';
 import { UpdateProviderDto } from './dto/update-provider.dto';
 import { ProviderPaginationDto } from './dto/provider-pagination.dto';
@@ -43,7 +44,10 @@ import { Throttle } from '@nestjs/throttler';
 @ApiTags('Providers')
 @Controller('providers')
 export class ProvidersController {
-  constructor(private readonly providersService: ProvidersService) {}
+  constructor(
+    private readonly providersService: ProvidersService,
+    private readonly websiteMetaService: WebsiteMetaService,
+  ) {}
 
   @Post()
   @Public()
@@ -76,6 +80,37 @@ export class ProvidersController {
     return this.providersService.verifyProviderOtp(body.mobileNumber, body.otp);
   }
 
+  @Patch(':id/contact-number')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @Throttle({ default: { ttl: 60000, limit: 3 } })
+  @ApiOperation({ summary: 'Update provider contact number with OTP verification (24h cooldown)' })
+  @ApiResponse({ status: 200, description: 'Contact number updated' })
+  @ApiResponse({ status: 400, description: 'Invalid input or cooldown active' })
+  @ApiParam({ name: 'id', description: 'Provider ID (UUID)' })
+  updateContactNumber(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Request() req,
+    @Body() body: { contactNumber: string; otp: string },
+  ) {
+    return this.providersService.updateContactNumber(id, req.user.id, body.contactNumber, body.otp);
+  }
+
+  @Post('website-meta')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @Throttle({ default: { ttl: 60000, limit: 5 } })
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Fetch website logo and title from a domain (for provider profile)' })
+  @ApiResponse({ status: 200, description: 'Website metadata fetched' })
+  @ApiResponse({ status: 400, description: 'Invalid domain' })
+  async fetchWebsiteMeta(@Body() body: { domain: string }) {
+    if (!body.domain || typeof body.domain !== 'string' || body.domain.trim().length < 3) {
+      throw new BadRequestException('A valid domain is required');
+    }
+    return this.websiteMetaService.fetchWebsiteMeta(body.domain);
+  }
+
   @Post('become-provider')
   @ApiBearerAuth()
   @UseGuards(AuthGuard('jwt'))
@@ -85,7 +120,9 @@ export class ProvidersController {
     { name: 'bannerImage', maxCount: 1 },
     { name: 'profileImage', maxCount: 1 },
     { name: 'productImages', maxCount: 20 },
-  ]))
+  ], {
+    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB per file
+  }))
   @ApiOperation({ summary: 'Become a provider (creates provider, uploads photos, creates products, and verification records)' })
   @ApiResponse({ status: 201, description: 'Provider and verification created successfully' })
   @ApiResponse({ status: 400, description: 'Bad Request' })
@@ -118,6 +155,42 @@ export class ProvidersController {
   @ApiResponse({ status: 200, description: 'Nearby providers with distance in km' })
   getNearbyProviders(@Query() dto: NearbyProvidersDto) {
     return this.providersService.findNearby(dto);
+  }
+
+  @Get('women-led')
+  @Public()
+  @ApiOperation({ summary: 'Get approved women-led providers with stats (Women-Led Hub)' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'city', required: false, type: String })
+  @ApiQuery({ name: 'categoryIds', required: false, type: String, description: 'Comma-separated category IDs' })
+  @ApiQuery({ name: 'sortBy', required: false, type: String, enum: ['rating', 'newest', 'reviews'] })
+  @ApiQuery({ name: 'minRating', required: false, type: Number })
+  @ApiQuery({ name: 'lat', required: false, type: Number })
+  @ApiQuery({ name: 'lng', required: false, type: Number })
+  @ApiQuery({ name: 'search', required: false, type: String, description: 'Search by business name or service' })
+  getWomenLedProviders(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('city') city?: string,
+    @Query('categoryIds') categoryIds?: string,
+    @Query('sortBy') sortBy?: string,
+    @Query('minRating') minRating?: string,
+    @Query('lat') lat?: string,
+    @Query('lng') lng?: string,
+    @Query('search') search?: string,
+  ) {
+    return this.providersService.getWomenLedHub({
+      page: page ? parseInt(page, 10) : 1,
+      limit: limit ? parseInt(limit, 10) : 12,
+      city,
+      categoryIds: categoryIds ? categoryIds.split(',') : undefined,
+      sortBy: sortBy as any,
+      minRating: minRating ? parseFloat(minRating) : undefined,
+      lat: lat ? parseFloat(lat) : undefined,
+      lng: lng ? parseFloat(lng) : undefined,
+      search: search?.trim() || undefined,
+    });
   }
 
   @Get('featured')
@@ -275,7 +348,9 @@ export class ProvidersController {
   @ApiBearerAuth()
   @UseGuards(AuthGuard('jwt'))
   @ApiConsumes('multipart/form-data')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', {
+    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  }))
   @ApiOperation({ summary: 'Submit identity verification document for existing provider' })
   @ApiResponse({ status: 201, description: 'Verification submitted successfully' })
   @ApiResponse({ status: 400, description: 'Bad Request' })
@@ -288,6 +363,28 @@ export class ProvidersController {
   ) {
     if (!file) throw new BadRequestException('Identity document file is required');
     return this.providersService.submitVerification(req.user.id, file, docType);
+  }
+
+  @Get('my-warnings')
+  @ApiOperation({ summary: 'Get warnings for the authenticated provider' })
+  getMyWarnings(@Request() req) {
+    return this.providersService.getMyWarnings(req.user.id);
+  }
+
+  @Get('my-warnings/unread-count')
+  @ApiOperation({ summary: 'Get unread warning count for the authenticated provider' })
+  getMyWarningsUnreadCount(@Request() req) {
+    return this.providersService.getMyWarningsUnreadCount(req.user.id);
+  }
+
+  @Patch('my-warnings/:warningId/read')
+  @ApiOperation({ summary: 'Mark a warning as read' })
+  @ApiParam({ name: 'warningId', description: 'Warning ID (UUID)' })
+  markWarningRead(
+    @Param('warningId', ParseUUIDPipe) warningId: string,
+    @Request() req,
+  ) {
+    return this.providersService.markWarningRead(req.user.id, warningId);
   }
 
   @Get(':id')
@@ -314,6 +411,8 @@ export class ProvidersController {
   }
 
   @Patch(':id')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
   @ApiOperation({ summary: 'Update provider by ID' })
   @ApiResponse({ status: 200, description: 'Provider updated successfully' })
   @ApiResponse({ status: 404, description: 'Provider not found' })
@@ -326,29 +425,34 @@ export class ProvidersController {
     return this.providersService.update(id, updateProviderDto);
   }
 
-  @Get('my-warnings')
-  @ApiOperation({ summary: 'Get warnings for the authenticated provider' })
-  getMyWarnings(@Request() req) {
-    return this.providersService.getMyWarnings(req.user.id);
-  }
-
-  @Get('my-warnings/unread-count')
-  @ApiOperation({ summary: 'Get unread warning count for the authenticated provider' })
-  getMyWarningsUnreadCount(@Request() req) {
-    return this.providersService.getMyWarningsUnreadCount(req.user.id);
-  }
-
-  @Patch('my-warnings/:warningId/read')
-  @ApiOperation({ summary: 'Mark a warning as read' })
-  @ApiParam({ name: 'warningId', description: 'Warning ID (UUID)' })
-  markWarningRead(
-    @Param('warningId', ParseUUIDPipe) warningId: string,
+  @Patch(':id/categories')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @ApiOperation({ summary: 'Update provider categories (max 2)' })
+  @ApiResponse({ status: 200, description: 'Categories updated successfully' })
+  @ApiResponse({ status: 400, description: 'Max 2 categories allowed' })
+  @ApiParam({ name: 'id', description: 'Provider ID (UUID)' })
+  updateProviderCategories(
+    @Param('id', ParseUUIDPipe) id: string,
     @Request() req,
+    @Body() body: { categoryIds: string[] },
   ) {
-    return this.providersService.markWarningRead(req.user.id, warningId);
+    if (!body.categoryIds || !Array.isArray(body.categoryIds) || body.categoryIds.length > 2) {
+      throw new BadRequestException('You can select up to 2 categories');
+    }
+    return this.providersService.updateCategories(id, req.user.id, body.categoryIds);
   }
 
   // ─── Provider Disable / Enable / Delete ────────────────────────
+
+  @Get('my-provider/cooldown-status')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @ApiOperation({ summary: 'Get cooldown status for provider disable/enable' })
+  @ApiResponse({ status: 200, description: 'Cooldown status returned' })
+  getCooldownStatus(@Request() req) {
+    return this.providersService.getCooldownStatus(req.user.id);
+  }
 
   @Post('my-provider/disable')
   @ApiBearerAuth()

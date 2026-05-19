@@ -222,4 +222,19 @@ export class AuthController {
   async getOAuthConfig() {
     return this.authService.getOAuthConfiguration();
   }
+
+  // ─────────────────────── TOKEN REFRESH ────────────────────────
+
+  @Post('refresh')
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @ApiOperation({
+    summary: 'Refresh JWT token',
+    description: 'Exchange a valid (non-expired) JWT for a fresh token with renewed expiry. Call this proactively before token expiry to keep users signed in.',
+  })
+  @ApiResponse({ status: 200, description: 'Returns a new access token' })
+  async refreshToken(@Request() req) {
+    return this.authService.refreshToken(req.user.id);
+  }
 }

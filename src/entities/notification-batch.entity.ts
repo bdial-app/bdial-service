@@ -40,8 +40,8 @@ export class NotificationBatch {
   @Column({ name: 'target_criteria', type: 'jsonb', nullable: true })
   targetCriteria: Record<string, any> | null;
 
-  @Column({ name: 'sent_by', type: 'uuid' })
-  sentBy: string;
+  @Column({ name: 'sent_by', type: 'uuid', nullable: true })
+  sentBy: string | null;
 
   @Column({ name: 'total_recipients', type: 'int', default: 0 })
   totalRecipients: number;
@@ -74,7 +74,7 @@ export class NotificationBatch {
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
 
-  @ManyToOne(() => User)
+  @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'sent_by' })
-  sender: User;
+  sender: User | null;
 }

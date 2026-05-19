@@ -6,6 +6,11 @@ export class CreateCategoryDto {
   @IsString()
   name?: string;
 
+  @ApiPropertyOptional({ description: 'Category description' })
+  @IsOptional()
+  @IsString()
+  description?: string;
+
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
@@ -31,6 +36,11 @@ export class CreateCategoryDto {
   @IsString()
   imageUrl?: string;
 
+  @ApiPropertyOptional({ description: 'Icon color/gradient key (e.g. amber, emerald, rose)' })
+  @IsOptional()
+  @IsString()
+  iconColor?: string;
+
   @ApiPropertyOptional({ description: 'Search keywords / synonyms', example: ['glass', 'mirror', 'glazier'] })
   @IsOptional()
   @IsArray()
@@ -43,6 +53,11 @@ export class UpdateCategoryDto {
   @IsOptional()
   @IsString()
   name?: string;
+
+  @ApiPropertyOptional({ description: 'Category description' })
+  @IsOptional()
+  @IsString()
+  description?: string;
 
   @ApiPropertyOptional({ description: 'Is the category active?' })
   @IsOptional()
@@ -68,6 +83,11 @@ export class UpdateCategoryDto {
   @IsOptional()
   @IsString()
   imageUrl?: string;
+
+  @ApiPropertyOptional({ description: 'Icon color/gradient key (e.g. amber, emerald, rose)' })
+  @IsOptional()
+  @IsString()
+  iconColor?: string;
 
   @ApiPropertyOptional({ description: 'Search keywords / synonyms', example: ['glass', 'mirror', 'glazier'] })
   @IsOptional()

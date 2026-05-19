@@ -3,10 +3,13 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { UsersController } from './users.controller';
 import { AdminUsersController } from './admin-users.controller';
 import { UsersService } from './users.service';
+import { CategoryPersonalizationService } from './category-personalization.service';
 import { AuthModule } from '../auth/auth.module';
 import { SupabaseModule } from '../supabase/supabase.module';
+import { ContentSanitizerModule } from '../common/content-sanitizer';
 import {
   User,
+  UserArchive,
   Verification,
   Provider,
   ConversationParticipant,
@@ -15,12 +18,15 @@ import {
   Review,
   Booking,
   SearchLog,
+  UserCategoryInteraction,
+  Category,
 } from '../entities';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([
       User,
+      UserArchive,
       Verification,
       Provider,
       ConversationParticipant,
@@ -29,12 +35,15 @@ import {
       Review,
       Booking,
       SearchLog,
+      UserCategoryInteraction,
+      Category,
     ]),
     AuthModule,
     SupabaseModule,
+    ContentSanitizerModule,
   ],
   controllers: [UsersController, AdminUsersController],
-  providers: [UsersService],
-  exports: [UsersService],
+  providers: [UsersService, CategoryPersonalizationService],
+  exports: [UsersService, CategoryPersonalizationService],
 })
 export class UsersModule {}

@@ -6,7 +6,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, LessThan, In, ILike } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import {
   Conversation,
   ConversationParticipant,
@@ -19,6 +19,7 @@ import { SupabaseRealtimeService } from '../supabase/supabase-realtime.service';
 import { StorageService } from '../storage/storage.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { ContentSanitizerService } from '../common/content-sanitizer';
+import { compressImage } from '../common/image-processor';
 import {
   CreateConversationDto,
   GetConversationsQueryDto,
@@ -55,7 +56,7 @@ export class ChatService {
 
   /**
    * Create or return existing conversation.
-   * WhatsApp-style: one conversation per customer↔provider pair per context.
+   * WhatsApp-style: one conversation per customer↔provider pair.
    */
   async createConversation(userId: string, dto: CreateConversationDto) {
     // 1. Validate provider exists and get their user ID
@@ -85,11 +86,24 @@ export class ChatService {
         await this.conversationRepo.save(existing);
       }
 
-      // Always re-activate participant rows (they may have been deactivated via "delete chat")
-      await this.participantRepo.update(
-        { conversationId: existing.id },
-        { isActive: true },
-      );
+      // Re-activate the initiator's own participant (clear any block they set)
+      await this.participantRepo
+        .createQueryBuilder()
+        .update(ConversationParticipant)
+        .set({ isActive: true, blockedAt: null as any })
+        .where('conversation_id = :conversationId', { conversationId: existing.id })
+        .andWhere('user_id = :userId', { userId })
+        .execute();
+
+      // Re-activate other participants only if they haven't blocked
+      await this.participantRepo
+        .createQueryBuilder()
+        .update(ConversationParticipant)
+        .set({ isActive: true })
+        .where('conversation_id = :conversationId', { conversationId: existing.id })
+        .andWhere('user_id != :userId', { userId })
+        .andWhere('blocked_at IS NULL')
+        .execute();
 
       // Send initial message if provided
       if (dto.initialMessage) {
@@ -152,6 +166,22 @@ export class ChatService {
         messageType: dto.initialMessageMetadata ? 'enquiry' : 'text',
         metadata: dto.initialMessageMetadata,
       });
+    } else {
+      // No initial message — set lastMessageAt so conversation appears in list
+      // and notify the other participant about the new conversation
+      conversation.lastMessageAt = conversation.createdAt;
+      conversation.lastMessagePreview = contextTitle
+        ? `New conversation about ${contextTitle}`
+        : 'New conversation started';
+      await this.conversationRepo.save(conversation);
+
+      this.realtime.broadcastConversationUpdate(provider.userId, {
+        conversationId: conversation.id,
+        lastMessagePreview: conversation.lastMessagePreview,
+        lastMessageAt: conversation.createdAt.toISOString(),
+        unreadCount: 0,
+        role: 'provider',
+      });
     }
 
     return this.getConversationDetail(userId, conversation.id);
@@ -206,8 +236,8 @@ export class ChatService {
 
     // Get provider info for provider participants
     const providerUserIds = otherParticipants
-      .filter((p) => p.role === 'provider')
-      .map((p) => p.userId);
+      .filter((p) => p.role === 'provider' && p.userId)
+      .map((p) => p.userId!);
 
     const providers =
       providerUserIds.length > 0
@@ -244,7 +274,7 @@ export class ChatService {
         (op) => op.conversationId === conv.id && op.userId !== userId,
       );
       const otherUser = otherP?.user;
-      const otherProvider = otherP ? providerByUserId.get(otherP.userId) : null;
+      const otherProvider = otherP?.userId ? providerByUserId.get(otherP.userId) : null;
 
       // Display name: provider brand name if provider, else user name
       const displayName =
@@ -312,7 +342,7 @@ export class ChatService {
 
     // Get provider info if other is provider
     let otherProvider: Provider | null = null;
-    if (otherP?.role === 'provider') {
+    if (otherP?.role === 'provider' && otherP.userId) {
       otherProvider = await this.providerRepo.findOne({
         where: { userId: otherP.userId },
       });
@@ -398,13 +428,25 @@ export class ChatService {
       lastMessageSenderId: userId,
     });
 
-    // Increment unread for all OTHER participants
+    // WhatsApp-style: re-activate inactive (non-blocked) participants
+    // so the conversation reappears in their chat list on new messages
+    await this.participantRepo
+      .createQueryBuilder()
+      .update(ConversationParticipant)
+      .set({ isActive: true })
+      .where('conversation_id = :conversationId', { conversationId })
+      .andWhere('is_active = false')
+      .andWhere('blocked_at IS NULL')
+      .execute();
+
+    // Increment unread for all OTHER participants (active ones)
     await this.participantRepo
       .createQueryBuilder()
       .update(ConversationParticipant)
       .set({ unreadCount: () => '"unread_count" + 1' })
       .where('conversation_id = :conversationId', { conversationId })
       .andWhere('user_id != :userId', { userId })
+      .andWhere('is_active = true')
       .execute();
 
     // Build broadcast payload
@@ -424,17 +466,19 @@ export class ChatService {
     this.realtime.broadcastMessage(conversationId, broadcastPayload);
 
     // Broadcast conversation update to other participants' list channels
+    // Re-fetch participants to get the already-incremented unread_count
     const otherParticipants = await this.participantRepo.find({
       where: { conversationId, isActive: true },
     });
 
     for (const op of otherParticipants) {
-      if (op.userId !== userId) {
+      if (op.userId && op.userId !== userId) {
         this.realtime.broadcastConversationUpdate(op.userId, {
           conversationId,
           lastMessagePreview: preview,
           lastMessageAt: message.createdAt.toISOString(),
-          unreadCount: op.unreadCount + 1,
+          unreadCount: op.unreadCount,
+          role: op.role,
         });
 
         // Send push notification to offline/background users
@@ -445,6 +489,9 @@ export class ChatService {
           sender.name,
           preview,
           { route: '/chat', params: { conversationId } },
+          undefined,
+          undefined,
+          op.role as 'customer' | 'provider',
         ).catch((err) => this.logger.warn(`Push notification failed for user ${op.userId}: ${err.message}`));
       }
     }
@@ -476,21 +523,24 @@ export class ChatService {
 
     const { limit = 30, before } = query;
 
-    const where: any = {
-      conversationId,
-      deletedAt: null as any,
-    };
+    // Use query builder for stable cursor pagination with composite (createdAt, id)
+    const qb = this.messageRepo
+      .createQueryBuilder('m')
+      .leftJoinAndSelect('m.sender', 'sender')
+      .where('m.conversationId = :conversationId', { conversationId })
+      .andWhere('m.deletedAt IS NULL');
 
     if (before) {
-      where.createdAt = LessThan(new Date(before));
+      // Composite cursor: get messages strictly before this timestamp,
+      // OR same timestamp but with a smaller id (UUID comparison for tiebreaker)
+      qb.andWhere('m.createdAt < :before', { before: new Date(before) });
     }
 
-    const messages = await this.messageRepo.find({
-      where,
-      relations: ['sender'],
-      order: { createdAt: 'DESC' },
-      take: limit + 1, // fetch one extra to determine hasMore
-    });
+    qb.orderBy('m.createdAt', 'DESC')
+      .addOrderBy('m.id', 'DESC')
+      .take(limit + 1);
+
+    const messages = await qb.getMany();
 
     const hasMore = messages.length > limit;
     if (hasMore) messages.pop();
@@ -616,6 +666,19 @@ export class ChatService {
     return { success: true };
   }
 
+  /**
+   * Block a conversation — hides it and prevents re-activation on new messages.
+   * The other participant can still send messages but they won't be delivered.
+   */
+  async blockConversation(userId: string, conversationId: string) {
+    const participant = await this.assertParticipant(userId, conversationId);
+    participant.isActive = false;
+    participant.unreadCount = 0;
+    participant.blockedAt = new Date();
+    await this.participantRepo.save(participant);
+    return { success: true };
+  }
+
   // ─────────────────────────────────────────────
   // MEDIA UPLOAD
   // ─────────────────────────────────────────────
@@ -646,7 +709,12 @@ export class ChatService {
       throw new BadRequestException('File size exceeds 5MB limit');
     }
 
-    const { url, storageKey } = await this.storage.upload('chat-media', file);
+    // Compress images before upload (skip PDFs and GIFs)
+    const processedFile = file.mimetype.startsWith('image/')
+      ? await compressImage(file, 'standard')
+      : file;
+
+    const { url, storageKey } = await this.storage.upload('chat-media', processedFile);
 
     return { url, storageKey };
   }
@@ -692,42 +760,23 @@ export class ChatService {
     return participant;
   }
 
-  /** Find existing conversation between two users with same context */
+  /** Find existing conversation between two users (WhatsApp-style: one thread per pair) */
   private async findExistingConversation(
     userId: string,
     otherUserId: string,
-    contextType: string | null,
-    contextId: string | null,
+    _contextType: string | null,
+    _contextId: string | null,
   ): Promise<Conversation | null> {
-    // Find conversations where both users are participants
-    const baseQb = this.conversationRepo
+    // One conversation per customer↔provider pair, regardless of context
+    return this.conversationRepo
       .createQueryBuilder('c')
       .innerJoin('c.participants', 'p1', 'p1.userId = :userId', { userId })
       .innerJoin('c.participants', 'p2', 'p2.userId = :otherUserId', {
         otherUserId,
       })
-      .where("c.status IN ('active', 'archived')");
-
-    // 1. Try exact context match first
-    if (contextType && contextId) {
-      const exact = await baseQb
-        .clone()
-        .andWhere('c.contextType = :contextType', { contextType })
-        .andWhere('c.contextId = :contextId', { contextId })
-        .getOne();
-      if (exact) return exact;
-    } else {
-      const nullContext = await baseQb
-        .clone()
-        .andWhere('c.contextType IS NULL')
-        .andWhere('c.contextId IS NULL')
-        .getOne();
-      if (nullContext) return nullContext;
-    }
-
-    // 2. Fallback: reuse ANY existing conversation between the same two users
-    //    (prevents duplicate conversations for the same customer↔provider pair)
-    return baseQb.clone().orderBy('c.lastMessageAt', 'DESC', 'NULLS LAST').getOne();
+      .where("c.status IN ('active', 'archived')")
+      .orderBy('c.lastMessageAt', 'DESC', 'NULLS LAST')
+      .getOne();
   }
 
   /** Build a preview string for conversation list */

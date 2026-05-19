@@ -1,14 +1,16 @@
-import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Logger, InternalServerErrorException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Not, Repository } from 'typeorm';
-import sharp = require('sharp');
 import { Product, Provider, Review, Photo, ProviderCategory } from '../entities';
 import { CreateProductDto, UpdateProductDto } from './dto/product.dto';
 import { StorageService } from '../storage/storage.service';
 import { ContentSanitizerService } from '../common/content-sanitizer';
+import { compressImage } from '../common/image-processor';
 
 @Injectable()
 export class ProductsService {
+  private readonly logger = new Logger(ProductsService.name);
+
   constructor(
     @InjectRepository(Product) private productRepo: Repository<Product>,
     @InjectRepository(Provider) private providerRepo: Repository<Provider>,
@@ -28,21 +30,8 @@ export class ProductsService {
   }
 
   async uploadImage(userId: string, file: Express.Multer.File) {
-    // Compress to max 1200px wide, 80% quality WebP
-    const compressed = await sharp(file.buffer)
-      .resize({ width: 1200, withoutEnlargement: true })
-      .webp({ quality: 80 })
-      .toBuffer();
-
-    const compressedFile: Express.Multer.File = {
-      ...file,
-      buffer: compressed,
-      mimetype: 'image/webp',
-      originalname: file.originalname.replace(/\.[^.]+$/, '.webp'),
-      size: compressed.length,
-    };
-
-    return this.storageService.upload('products', compressedFile);
+    const compressed = await compressImage(file, 'full');
+    return this.storageService.upload('products', compressed);
   }
 
   async create(userId: string, dto: CreateProductDto) {
@@ -51,6 +40,16 @@ export class ProductsService {
     // Content moderation: check product name and description
     this.checkProductContent(dto.name, dto.description);
 
+    // Enforce hero product limit (max 3 per provider)
+    if (dto.isHero) {
+      const heroCount = await this.productRepo.count({
+        where: { providerId: dto.providerId, isHero: true },
+      });
+      if (heroCount >= 3) {
+        throw new BadRequestException('Maximum 3 hero products allowed. Remove hero status from another product first.');
+      }
+    }
+
     // Backward compat: if photoUrls not provided, derive from photoUrl
     const photoUrls = dto.photoUrls?.length
       ? dto.photoUrls
@@ -58,13 +57,25 @@ export class ProductsService {
         ? [dto.photoUrl]
         : [];
 
+    // Strip undefined keys so TypeORM doesn't send NULL for NOT-NULL columns
+    const cleanDto = Object.fromEntries(
+      Object.entries(dto).filter(([, v]) => v !== undefined),
+    );
+
     const product = this.productRepo.create({
-      ...dto,
+      ...cleanDto,
       photoUrl: photoUrls[0] ?? null,
       photoUrls,
+      productType: dto.productType ?? 'product',
       isActive: true,
     });
-    return this.productRepo.save(product);
+
+    try {
+      return await this.productRepo.save(product);
+    } catch (err) {
+      this.logger.error(`Failed to save product: ${err.message}`, err.stack);
+      throw new InternalServerErrorException(`Failed to create product: ${err.message}`);
+    }
   }
 
   async update(userId: string, productId: string, dto: UpdateProductDto) {
@@ -75,6 +86,16 @@ export class ProductsService {
     // Content moderation: check product name and description
     this.checkProductContent(dto.name, dto.description);
 
+    // Enforce hero product limit (max 3 per provider) when promoting to hero
+    if (dto.isHero === true && !product.isHero) {
+      const heroCount = await this.productRepo.count({
+        where: { providerId: product.providerId, isHero: true },
+      });
+      if (heroCount >= 3) {
+        throw new BadRequestException('Maximum 3 hero products allowed. Remove hero status from another product first.');
+      }
+    }
+
     // Keep photoUrl in sync with photoUrls[0]
     if (dto.photoUrls !== undefined) {
       dto.photoUrl = dto.photoUrls[0] ?? null;
@@ -82,8 +103,18 @@ export class ProductsService {
       dto.photoUrls = dto.photoUrl ? [dto.photoUrl] : [];
     }
 
-    Object.assign(product, dto);
-    return this.productRepo.save(product);
+    // Strip undefined keys so TypeORM doesn't overwrite with NULL
+    const cleanDto = Object.fromEntries(
+      Object.entries(dto).filter(([, v]) => v !== undefined),
+    );
+    Object.assign(product, cleanDto);
+
+    try {
+      return await this.productRepo.save(product);
+    } catch (err) {
+      this.logger.error(`Failed to update product ${productId}: ${err.message}`, err.stack);
+      throw new InternalServerErrorException(`Failed to update product: ${err.message}`);
+    }
   }
 
   async remove(userId: string, productId: string) {
@@ -97,7 +128,7 @@ export class ProductsService {
   async findByProvider(providerId: string, page = 1, limit = 20) {
     const [data, total] = await this.productRepo.findAndCount({
       where: { providerId },
-      order: { displayOrder: 'ASC', name: 'ASC' },
+      order: { isHero: 'DESC', displayOrder: 'ASC', name: 'ASC' },
       take: limit,
       skip: (page - 1) * limit,
     });
@@ -139,10 +170,10 @@ export class ProductsService {
       }),
     ]);
 
-    // Related products: other active products from the same provider
+    // Related products: other active products from the same provider (hero first)
     const related = await this.productRepo.find({
       where: { providerId: provider.id, isActive: true, id: Not(product.id) },
-      order: { displayOrder: 'ASC' },
+      order: { isHero: 'DESC', displayOrder: 'ASC' },
       take: 8,
     });
 

@@ -26,8 +26,8 @@ export class NotificationsController {
 
   @Get('unread-count')
   @ApiOperation({ summary: 'Get unread notification count' })
-  getUnreadCount(@Request() req) {
-    return this.notificationsService.getUnreadCount(req.user.id);
+  getUnreadCount(@Request() req, @Query('targetMode') targetMode?: 'customer' | 'provider') {
+    return this.notificationsService.getUnreadCount(req.user.id, targetMode);
   }
 
   @Get('preferences')
@@ -43,9 +43,9 @@ export class NotificationsController {
   }
 
   @Patch('read-all')
-  @ApiOperation({ summary: 'Mark all notifications as read' })
-  markAllAsRead(@Request() req) {
-    return this.notificationsService.markAllAsRead(req.user.id);
+  @ApiOperation({ summary: 'Mark all notifications as read (optionally scoped to targetMode)' })
+  markAllAsRead(@Request() req, @Query('targetMode') targetMode?: 'customer' | 'provider') {
+    return this.notificationsService.markAllAsRead(req.user.id, targetMode);
   }
 
   @Patch(':id/read')

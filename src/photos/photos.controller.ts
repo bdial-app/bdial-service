@@ -9,11 +9,12 @@ import {
   Request,
   UseInterceptors,
   UploadedFiles,
+  UploadedFile,
   ParseFilePipe,
   MaxFileSizeValidator,
   FileTypeValidator,
 } from '@nestjs/common';
-import { FilesInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import {
   ApiTags,
   ApiOperation,
@@ -52,7 +53,7 @@ export class PhotosController {
     @UploadedFiles(
       new ParseFilePipe({
         validators: [
-          new MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 }), // 5 MB
+          new MaxFileSizeValidator({ maxSize: 10 * 1024 * 1024 }), // 10 MB — we compress server-side
           new FileTypeValidator({ fileType: /^image\/(jpeg|jpg|png|webp)$/ }),
         ],
       }),
@@ -84,6 +85,36 @@ export class PhotosController {
     return this.photosService.reorderPhotos(providerId, req.user.id, orderedIds);
   }
 
+  @Post('provider/:providerId/profile-image')
+  @ApiOperation({ summary: 'Upload or replace provider banner or profile image' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary' },
+        field: { type: 'string', enum: ['bannerImageUrl', 'profilePhotoUrl'] },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
+  uploadProviderProfileImage(
+    @Param('providerId') providerId: string,
+    @Request() req,
+    @Body('field') field: string,
+    @UploadedFile(
+      new ParseFilePipe({
+        validators: [
+          new MaxFileSizeValidator({ maxSize: 10 * 1024 * 1024 }), // 10 MB — compressed server-side
+          new FileTypeValidator({ fileType: /^image\/(jpeg|jpg|png|webp)$/ }),
+        ],
+      }),
+    )
+    file: Express.Multer.File,
+  ) {
+    return this.photosService.uploadProviderProfileImage(providerId, req.user.id, field, file);
+  }
+
   // ─── Review Photos ────────────────────────────────
 
   @Post('review/:reviewId')
@@ -104,7 +135,7 @@ export class PhotosController {
     @UploadedFiles(
       new ParseFilePipe({
         validators: [
-          new MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 }),
+          new MaxFileSizeValidator({ maxSize: 10 * 1024 * 1024 }), // 10 MB — compressed server-side
           new FileTypeValidator({ fileType: /^image\/(jpeg|jpg|png|webp)$/ }),
         ],
       }),

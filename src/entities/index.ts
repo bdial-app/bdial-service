@@ -1,4 +1,5 @@
 export { User } from './user.entity';
+export { UserArchive } from './user-archive.entity';
 export { Category } from './category.entity';
 export { ProviderCategory } from './provider-category.entity';
 export { Verification } from './verification.entity';
@@ -28,3 +29,11 @@ export { ProviderWarning } from './provider-warning.entity';
 export { AuditLog } from './audit-log.entity';
 export { SystemSetting } from './system-setting.entity';
 export { SearchSynonym } from './search-synonym.entity';
+export { Payment } from './payment.entity';
+export { SubscriptionPlan } from './subscription-plan.entity';
+export { Subscription } from './subscription.entity';
+export { Voucher } from './voucher.entity';
+export { VoucherRedemption } from './voucher-redemption.entity';
+export { UserCategoryInteraction } from './user-category-interaction.entity';
+export { ServiceableCity } from './serviceable-city.entity';
+export { CityRequest } from './city-request.entity';

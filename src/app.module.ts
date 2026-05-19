@@ -3,6 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { CacheModule } from '@nestjs/cache-manager';
+import { ScheduleModule } from '@nestjs/schedule';
 import { APP_GUARD } from '@nestjs/core';
 import { buildTypeOrmOptions } from './config/data-source';
 import { AppController } from './app.controller';
@@ -18,6 +19,8 @@ import { StorageModule } from './storage/storage.module';
 import { PhotosModule } from './photos/photos.module';
 import { ProvidersModule } from './providers/providers.module';
 import { SupabaseModule } from './supabase/supabase.module';
+import { Msg91Module } from './msg91/msg91.module';
+import { OtpModule } from './otp/otp.module';
 import { GeocodeModule } from './geocode/geocode.module';
 import { SavedLocationsModule } from './saved-locations/saved-locations.module';
 import { HomeModule } from './home/home.module';
@@ -32,8 +35,13 @@ import { HealthModule } from './health/health.module';
 import { ReportsModule } from './reports/reports.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import { RolesGuard } from './common/guards/roles.guard';
 import { ContentSanitizerModule } from './common/content-sanitizer';
 import { BugReportsModule } from './bug-reports/bug-reports.module';
+import { PaymentModule } from './payment/payment.module';
+import { VoucherModule } from './voucher/voucher.module';
+import { ServiceableCitiesModule } from './serviceable-cities/serviceable-cities.module';
+import { GoogleReviewsModule } from './google-reviews/google-reviews.module';
 import { SystemSetting } from './entities';
 
 @Module({
@@ -47,14 +55,20 @@ import { SystemSetting } from './entities';
       }),
     }),
 
-    // Rate limiting — 100 requests per minute globally
-    ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]),
+    // Rate limiting — 300 requests per minute globally (per IP)
+    // Sensitive endpoints (auth, become-provider) have tighter per-route limits.
+    ThrottlerModule.forRoot([{ ttl: 60000, limit: 300 }]),
 
     // In-memory cache with 5-minute default TTL
     CacheModule.register({ isGlobal: true, ttl: 300000 }),
 
+    // Scheduled tasks (materialized view refresh, etc.)
+    ScheduleModule.forRoot(),
+
     StorageModule,
     PhotosModule,
+    Msg91Module,
+    OtpModule,
     SupabaseModule,
     AuthModule,
     AdminAuthModule,
@@ -79,6 +93,10 @@ import { SystemSetting } from './entities';
     NotificationsModule,
     ContentSanitizerModule,
     BugReportsModule,
+    PaymentModule,
+    VoucherModule,
+    ServiceableCitiesModule,
+    GoogleReviewsModule,
     TypeOrmModule.forFeature([SystemSetting]),
   ],
   controllers: [AppController],
@@ -86,6 +104,8 @@ import { SystemSetting } from './entities';
     AppService,
     // Global JWT auth guard — all endpoints require auth unless marked @Public()
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+    // Global roles guard — checks @Roles() decorator metadata for admin role hierarchy
+    { provide: APP_GUARD, useClass: RolesGuard },
     // Global rate limiter guard
     { provide: APP_GUARD, useClass: ThrottlerGuard },
   ],

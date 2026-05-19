@@ -18,8 +18,8 @@ export class ReviewReport {
   @Column({ name: 'review_id', type: 'uuid' })
   reviewId: string;
 
-  @Column({ name: 'reporter_id', type: 'uuid' })
-  reporterId: string;
+  @Column({ name: 'reporter_id', type: 'uuid', nullable: true })
+  reporterId: string | null;
 
   @Column({ type: 'text', nullable: true })
   reason: string | null;
@@ -34,7 +34,7 @@ export class ReviewReport {
   @JoinColumn({ name: 'review_id' })
   review: Review;
 
-  @ManyToOne(() => User, (u) => u.reviewReports)
+  @ManyToOne(() => User, (u) => u.reviewReports, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'reporter_id' })
-  reporter: User;
+  reporter: User | null;
 }

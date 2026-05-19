@@ -12,7 +12,7 @@ import {
   IsIn,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Type, Transform } from 'class-transformer';
 
 export class CreateProductDto {
   @ApiProperty()
@@ -21,12 +21,14 @@ export class CreateProductDto {
 
   @ApiProperty()
   @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @MaxLength(150)
   name: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @MaxLength(2000)
   description?: string;
 
@@ -60,18 +62,43 @@ export class CreateProductDto {
   @IsOptional()
   @IsIn(['product', 'service'])
   productType?: 'product' | 'service';
+
+  @ApiPropertyOptional({ description: 'Mark as hero/showcase product (max 3 per provider)' })
+  @IsOptional()
+  @IsBoolean()
+  @Transform(({ value }) => value === 'true' || value === true)
+  isHero?: boolean;
+
+  @ApiPropertyOptional({ description: 'Parent category ID for the product' })
+  @IsOptional()
+  @IsUUID()
+  categoryId?: string;
+
+  @ApiPropertyOptional({ description: 'Sub-category ID for the product' })
+  @IsOptional()
+  @IsUUID()
+  subcategoryId?: string;
+
+  @ApiPropertyOptional({ description: 'Search keywords for discoverability', example: ['rida', 'abaya', 'custom stitching'] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @ArrayMaxSize(15)
+  keywords?: string[];
 }
 
 export class UpdateProductDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @MaxLength(150)
   name?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @MaxLength(2000)
   description?: string;
 
@@ -117,4 +144,27 @@ export class UpdateProductDto {
   @IsInt()
   @Min(0)
   displayOrder?: number;
+
+  @ApiPropertyOptional({ description: 'Mark as hero/showcase product (max 3 per provider)' })
+  @IsOptional()
+  @IsBoolean()
+  @Transform(({ value }) => value === 'true' || value === true)
+  isHero?: boolean;
+
+  @ApiPropertyOptional({ description: 'Parent category ID for the product' })
+  @IsOptional()
+  @IsUUID()
+  categoryId?: string;
+
+  @ApiPropertyOptional({ description: 'Sub-category ID for the product' })
+  @IsOptional()
+  @IsUUID()
+  subcategoryId?: string;
+
+  @ApiPropertyOptional({ description: 'Search keywords for discoverability', example: ['rida', 'abaya', 'custom stitching'] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @ArrayMaxSize(15)
+  keywords?: string[];
 }

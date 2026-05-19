@@ -8,6 +8,7 @@ import { AuthService } from './auth.service';
 import { JwtStrategy } from './jwt.strategy';
 import { SupabaseJwtStrategy } from './supabase-jwt.strategy';
 import { SupabaseModule } from '../supabase/supabase.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { User } from '../entities';
 
 @Module({
@@ -15,10 +16,11 @@ import { User } from '../entities';
     PassportModule,
     TypeOrmModule.forFeature([User]),
     SupabaseModule,
+    NotificationsModule,
     JwtModule.registerAsync({
       useFactory: (configService: ConfigService) => ({
         secret: configService.get<string>('JWT_SECRET') || 'bohri-connect-secret',
-        signOptions: { expiresIn: '30d' },
+        signOptions: { expiresIn: '365d' },
       }),
       inject: [ConfigService],
     }),

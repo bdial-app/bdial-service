@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsString,
   MinLength,
+  MaxLength,
   IsOptional,
   IsLatitude,
   IsLongitude,
@@ -19,6 +20,7 @@ export class SearchQueryDto {
   @ApiProperty({ example: 'beauty', description: 'Search query' })
   @IsString()
   @MinLength(1)
+  @MaxLength(200)
   q: string;
 
   @ApiPropertyOptional({ example: 18.5204 })
@@ -94,4 +96,14 @@ export class SearchQueryDto {
   @IsOptional()
   @IsString()
   city?: string;
+
+  @ApiPropertyOptional({ description: 'Filter to verified providers only' })
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  verifiedOnly?: boolean;
+
+  @ApiPropertyOptional({ description: 'Filter to women-led providers only' })
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  womenLedOnly?: boolean;
 }
