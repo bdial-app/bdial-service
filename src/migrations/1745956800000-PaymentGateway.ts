@@ -4,34 +4,49 @@ export class PaymentGateway1745956800000 implements MigrationInterface {
   name = 'PaymentGateway1745956800000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
-    // Create payment_status enum
+    // Create payment_status enum (idempotent)
     await queryRunner.query(`
-      CREATE TYPE "payment_status_enum" AS ENUM ('pending', 'processing', 'succeeded', 'failed', 'refunded')
+      DO $$ BEGIN
+        CREATE TYPE "payment_status_enum" AS ENUM ('pending', 'processing', 'succeeded', 'failed', 'refunded');
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$
     `);
 
-    // Create payment_type enum
+    // Create payment_type enum (idempotent)
     await queryRunner.query(`
-      CREATE TYPE "payment_type_enum" AS ENUM ('sponsorship', 'lead_unlock', 'badge', 'subscription', 'deal_unlock')
+      DO $$ BEGIN
+        CREATE TYPE "payment_type_enum" AS ENUM ('sponsorship', 'lead_unlock', 'badge', 'subscription', 'deal_unlock');
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$
     `);
 
-    // Create subscription_status enum
+    // Create subscription_status enum (idempotent)
     await queryRunner.query(`
-      CREATE TYPE "subscription_status_enum" AS ENUM ('active', 'past_due', 'canceled', 'trialing', 'paused')
+      DO $$ BEGIN
+        CREATE TYPE "subscription_status_enum" AS ENUM ('active', 'past_due', 'canceled', 'trialing', 'paused');
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$
     `);
 
-    // Create billing_interval enum
+    // Create billing_interval enum (idempotent)
     await queryRunner.query(`
-      CREATE TYPE "billing_interval_enum" AS ENUM ('monthly', 'yearly')
+      DO $$ BEGIN
+        CREATE TYPE "billing_interval_enum" AS ENUM ('monthly', 'yearly');
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$
     `);
 
-    // Create voucher_discount_type enum
+    // Create voucher_discount_type enum (idempotent)
     await queryRunner.query(`
-      CREATE TYPE "voucher_discount_type_enum" AS ENUM ('percentage', 'fixed_amount')
+      DO $$ BEGIN
+        CREATE TYPE "voucher_discount_type_enum" AS ENUM ('percentage', 'fixed_amount');
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$
     `);
 
     // ─── payments table ──────────────────────
     await queryRunner.query(`
-      CREATE TABLE "payments" (
+      CREATE TABLE IF NOT EXISTS "payments" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "provider_id" uuid NOT NULL,
         "stripe_payment_intent_id" varchar(255),
@@ -52,13 +67,22 @@ export class PaymentGateway1745956800000 implements MigrationInterface {
       )
     `);
 
-    await queryRunner.query(`CREATE INDEX "IDX_payments_provider_status" ON "payments" ("provider_id", "status")`);
-    await queryRunner.query(`CREATE INDEX "IDX_payments_stripe_pi" ON "payments" ("stripe_payment_intent_id")`);
-    await queryRunner.query(`CREATE INDEX "IDX_payments_stripe_cs" ON "payments" ("stripe_checkout_session_id")`);
+    await queryRunner.query(`CREATE INDEX IF NOT EXISTS "IDX_payments_provider_status" ON "payments" ("provider_id", "status")`);
+    // Only create Stripe indexes if the old columns exist (skipped if already migrated to Razorpay)
+    await queryRunner.query(`
+      DO $$ BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='payments' AND column_name='stripe_payment_intent_id') THEN
+          CREATE INDEX IF NOT EXISTS "IDX_payments_stripe_pi" ON "payments" ("stripe_payment_intent_id");
+        END IF;
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='payments' AND column_name='stripe_checkout_session_id') THEN
+          CREATE INDEX IF NOT EXISTS "IDX_payments_stripe_cs" ON "payments" ("stripe_checkout_session_id");
+        END IF;
+      END $$
+    `);
 
     // ─── subscription_plans table ────────────
     await queryRunner.query(`
-      CREATE TABLE "subscription_plans" (
+      CREATE TABLE IF NOT EXISTS "subscription_plans" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "name" varchar(100) NOT NULL,
         "slug" varchar(100) NOT NULL,
@@ -83,7 +107,7 @@ export class PaymentGateway1745956800000 implements MigrationInterface {
 
     // ─── subscriptions table ─────────────────
     await queryRunner.query(`
-      CREATE TABLE "subscriptions" (
+      CREATE TABLE IF NOT EXISTS "subscriptions" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "provider_id" uuid NOT NULL,
         "plan_id" uuid NOT NULL,
@@ -104,11 +128,17 @@ export class PaymentGateway1745956800000 implements MigrationInterface {
       )
     `);
 
-    await queryRunner.query(`CREATE INDEX "IDX_subscriptions_stripe" ON "subscriptions" ("stripe_subscription_id")`);
+    await queryRunner.query(`
+      DO $$ BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='subscriptions' AND column_name='stripe_subscription_id') THEN
+          CREATE INDEX IF NOT EXISTS "IDX_subscriptions_stripe" ON "subscriptions" ("stripe_subscription_id");
+        END IF;
+      END $$
+    `);
 
     // ─── vouchers table ──────────────────────
     await queryRunner.query(`
-      CREATE TABLE "vouchers" (
+      CREATE TABLE IF NOT EXISTS "vouchers" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "code" varchar(50) NOT NULL,
         "description" text,
@@ -131,11 +161,11 @@ export class PaymentGateway1745956800000 implements MigrationInterface {
       )
     `);
 
-    await queryRunner.query(`CREATE INDEX "IDX_vouchers_active_dates" ON "vouchers" ("is_active", "valid_from", "valid_until")`);
+    await queryRunner.query(`CREATE INDEX IF NOT EXISTS "IDX_vouchers_active_dates" ON "vouchers" ("is_active", "valid_from", "valid_until")`);
 
     // ─── voucher_redemptions table ───────────
     await queryRunner.query(`
-      CREATE TABLE "voucher_redemptions" (
+      CREATE TABLE IF NOT EXISTS "voucher_redemptions" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "voucher_id" uuid NOT NULL,
         "provider_id" uuid NOT NULL,
@@ -146,23 +176,69 @@ export class PaymentGateway1745956800000 implements MigrationInterface {
       )
     `);
 
-    await queryRunner.query(`CREATE INDEX "IDX_voucher_redemptions_voucher_provider" ON "voucher_redemptions" ("voucher_id", "provider_id")`);
+    await queryRunner.query(`CREATE INDEX IF NOT EXISTS "IDX_voucher_redemptions_voucher_provider" ON "voucher_redemptions" ("voucher_id", "provider_id")`);
 
-    // ─── Add stripe_customer_id to providers ─
-    await queryRunner.query(`ALTER TABLE "providers" ADD "stripe_customer_id" varchar(255)`);
+    // ─── Add stripe_customer_id to providers (may already be gateway_customer_id from Razorpay migration) ─
+    await queryRunner.query(`
+      DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='providers' AND column_name='gateway_customer_id') THEN
+          ALTER TABLE "providers" ADD COLUMN IF NOT EXISTS "stripe_customer_id" varchar(255);
+        END IF;
+      END $$
+    `);
 
     // ─── Add payment_id to sponsored_listings ─
-    await queryRunner.query(`ALTER TABLE "sponsored_listings" ADD "payment_id" uuid`);
+    await queryRunner.query(`ALTER TABLE "sponsored_listings" ADD COLUMN IF NOT EXISTS "payment_id" uuid`);
 
-    // ─── Foreign key constraints ─────────────
-    await queryRunner.query(`ALTER TABLE "payments" ADD CONSTRAINT "FK_payments_provider" FOREIGN KEY ("provider_id") REFERENCES "providers"("id") ON DELETE CASCADE`);
-    await queryRunner.query(`ALTER TABLE "subscriptions" ADD CONSTRAINT "FK_subscriptions_provider" FOREIGN KEY ("provider_id") REFERENCES "providers"("id") ON DELETE CASCADE`);
-    await queryRunner.query(`ALTER TABLE "subscriptions" ADD CONSTRAINT "FK_subscriptions_plan" FOREIGN KEY ("plan_id") REFERENCES "subscription_plans"("id")`);
-    await queryRunner.query(`ALTER TABLE "vouchers" ADD CONSTRAINT "FK_vouchers_creator" FOREIGN KEY ("created_by") REFERENCES "users"("id") ON DELETE SET NULL`);
-    await queryRunner.query(`ALTER TABLE "voucher_redemptions" ADD CONSTRAINT "FK_vr_voucher" FOREIGN KEY ("voucher_id") REFERENCES "vouchers"("id") ON DELETE CASCADE`);
-    await queryRunner.query(`ALTER TABLE "voucher_redemptions" ADD CONSTRAINT "FK_vr_provider" FOREIGN KEY ("provider_id") REFERENCES "providers"("id") ON DELETE CASCADE`);
-    await queryRunner.query(`ALTER TABLE "voucher_redemptions" ADD CONSTRAINT "FK_vr_payment" FOREIGN KEY ("payment_id") REFERENCES "payments"("id") ON DELETE CASCADE`);
-    await queryRunner.query(`ALTER TABLE "sponsored_listings" ADD CONSTRAINT "FK_sponsored_payment" FOREIGN KEY ("payment_id") REFERENCES "payments"("id")`);
+    // ─── Foreign key constraints (idempotent) ─
+    await queryRunner.query(`
+      DO $$ BEGIN
+        ALTER TABLE "payments" ADD CONSTRAINT "FK_payments_provider" FOREIGN KEY ("provider_id") REFERENCES "providers"("id") ON DELETE CASCADE;
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$
+    `);
+    await queryRunner.query(`
+      DO $$ BEGIN
+        ALTER TABLE "subscriptions" ADD CONSTRAINT "FK_subscriptions_provider" FOREIGN KEY ("provider_id") REFERENCES "providers"("id") ON DELETE CASCADE;
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$
+    `);
+    await queryRunner.query(`
+      DO $$ BEGIN
+        ALTER TABLE "subscriptions" ADD CONSTRAINT "FK_subscriptions_plan" FOREIGN KEY ("plan_id") REFERENCES "subscription_plans"("id");
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$
+    `);
+    await queryRunner.query(`
+      DO $$ BEGIN
+        ALTER TABLE "vouchers" ADD CONSTRAINT "FK_vouchers_creator" FOREIGN KEY ("created_by") REFERENCES "users"("id") ON DELETE SET NULL;
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$
+    `);
+    await queryRunner.query(`
+      DO $$ BEGIN
+        ALTER TABLE "voucher_redemptions" ADD CONSTRAINT "FK_vr_voucher" FOREIGN KEY ("voucher_id") REFERENCES "vouchers"("id") ON DELETE CASCADE;
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$
+    `);
+    await queryRunner.query(`
+      DO $$ BEGIN
+        ALTER TABLE "voucher_redemptions" ADD CONSTRAINT "FK_vr_provider" FOREIGN KEY ("provider_id") REFERENCES "providers"("id") ON DELETE CASCADE;
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$
+    `);
+    await queryRunner.query(`
+      DO $$ BEGIN
+        ALTER TABLE "voucher_redemptions" ADD CONSTRAINT "FK_vr_payment" FOREIGN KEY ("payment_id") REFERENCES "payments"("id") ON DELETE CASCADE;
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$
+    `);
+    await queryRunner.query(`
+      DO $$ BEGIN
+        ALTER TABLE "sponsored_listings" ADD CONSTRAINT "FK_sponsored_payment" FOREIGN KEY ("payment_id") REFERENCES "payments"("id");
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$
+    `);
 
     // ─── Seed default subscription plans ─────
     await queryRunner.query(`
@@ -172,6 +248,7 @@ export class PaymentGateway1745956800000 implements MigrationInterface {
         ('Starter', 'starter', 299, 2990, '{"maxPhotos": 15, "analytics": "standard", "prioritySupport": false}', 5, 15, 5, '{inline}', 1),
         ('Growth', 'growth', 799, 7990, '{"maxPhotos": 50, "analytics": "advanced", "prioritySupport": true}', 10, 50, 20, '{carousel,inline,top_result}', 2),
         ('Pro', 'pro', 1999, 19990, '{"maxPhotos": -1, "analytics": "advanced", "prioritySupport": true, "dedicatedSupport": true}', -1, -1, -1, '{carousel,inline,top_result}', 3)
+      ON CONFLICT ("slug") DO NOTHING
     `);
 
     // ─── Seed pricing settings ───────────────

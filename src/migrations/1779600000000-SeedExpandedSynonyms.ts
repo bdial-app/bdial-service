@@ -15,6 +15,9 @@ export class SeedExpandedSynonyms1779600000000 implements MigrationInterface {
       .replace(/^\s*COMMIT\s*;?\s*$/gim, '')
       .trim();
 
+    // Avoid duplicates on re-run: delete expanded synonyms first
+    await queryRunner.query(`DELETE FROM search_synonyms WHERE id IS NOT NULL`);
+
     await queryRunner.query(cleanSql);
   }
 

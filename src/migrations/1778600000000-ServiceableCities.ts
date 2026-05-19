@@ -2,14 +2,17 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
 
 export class ServiceableCities1778600000000 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
-    // 1. Create enum type
+    // 1. Create enum type (idempotent)
     await queryRunner.query(`
-      CREATE TYPE "serviceable_city_status_enum" AS ENUM ('active', 'coming_soon', 'disabled')
+      DO $$ BEGIN
+        CREATE TYPE "serviceable_city_status_enum" AS ENUM ('active', 'coming_soon', 'disabled');
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$
     `);
 
     // 2. Create serviceable_cities table
     await queryRunner.query(`
-      CREATE TABLE "serviceable_cities" (
+      CREATE TABLE IF NOT EXISTS "serviceable_cities" (
         "id" uuid NOT NULL DEFAULT gen_random_uuid(),
         "name" varchar(100) NOT NULL,
         "slug" varchar(100) NOT NULL,
@@ -27,28 +30,35 @@ export class ServiceableCities1778600000000 implements MigrationInterface {
     `);
 
     await queryRunner.query(`
-      CREATE INDEX "IDX_serviceable_cities_status" ON "serviceable_cities" ("status")
+      CREATE INDEX IF NOT EXISTS "IDX_serviceable_cities_status" ON "serviceable_cities" ("status")
     `);
 
     // 3. Create city_requests table
     await queryRunner.query(`
-      CREATE TABLE "city_requests" (
+      CREATE TABLE IF NOT EXISTS "city_requests" (
         "id" uuid NOT NULL DEFAULT gen_random_uuid(),
         "city" varchar(100) NOT NULL,
         "user_id" uuid,
         "device_id" varchar(255),
         "created_at" timestamptz NOT NULL DEFAULT now(),
-        CONSTRAINT "PK_city_requests" PRIMARY KEY ("id"),
-        CONSTRAINT "FK_city_requests_user" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE SET NULL
+        CONSTRAINT "PK_city_requests" PRIMARY KEY ("id")
       )
     `);
 
+    // Add FK separately (idempotent)
     await queryRunner.query(`
-      CREATE INDEX "IDX_city_requests_city_created" ON "city_requests" ("city", "created_at")
+      DO $$ BEGIN
+        ALTER TABLE "city_requests" ADD CONSTRAINT "FK_city_requests_user" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE SET NULL;
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$
     `);
 
     await queryRunner.query(`
-      CREATE INDEX "IDX_city_requests_user_city" ON "city_requests" ("user_id", "city")
+      CREATE INDEX IF NOT EXISTS "IDX_city_requests_city_created" ON "city_requests" ("city", "created_at")
+    `);
+
+    await queryRunner.query(`
+      CREATE INDEX IF NOT EXISTS "IDX_city_requests_user_city" ON "city_requests" ("user_id", "city")
     `);
 
     // 4. Seed serviceable cities
@@ -175,6 +185,7 @@ export class ServiceableCities1778600000000 implements MigrationInterface {
         -- J&K
         ('Srinagar', 'srinagar', 'coming_soon', 34.0837, 74.7973, 50),
         ('Jammu', 'jammu', 'coming_soon', 32.7266, 74.8570, 50)
+      ON CONFLICT ("slug") DO NOTHING
     `);
   }
 

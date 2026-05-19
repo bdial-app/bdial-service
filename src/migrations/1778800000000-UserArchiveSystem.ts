@@ -196,77 +196,84 @@ export class UserArchiveSystem1778800000000 implements MigrationInterface {
     // ════════════════════════════════════════════════════════════════════════
     // 4. Migrate existing soft-deleted users to user_archives, then hard-delete
     // ════════════════════════════════════════════════════════════════════════
-    await queryRunner.query(`
-      INSERT INTO "user_archives" ("id", "role", "gender", "archive_reason", "deleted_by", "original_created_at", "deleted_at")
-      SELECT
-        "id",
-        "role",
-        "gender",
-        COALESCE("archive_reason", 'legacy_migration'),
-        NULL,
-        "created_at",
-        COALESCE("deleted_at", now())
-      FROM "users"
-      WHERE "status" = 'deleted'
-      ON CONFLICT ("id") DO NOTHING
+    // Only run if the old deleted_at column still exists on public.users (skipped on fresh sync'd DBs)
+    const hasDeletedAt = await queryRunner.query(`
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'deleted_at'
     `);
+    if (hasDeletedAt.length > 0) {
+      await queryRunner.query(`
+        INSERT INTO "user_archives" ("id", "role", "gender", "archive_reason", "deleted_by", "original_created_at", "deleted_at")
+        SELECT
+          "id",
+          "role",
+          "gender",
+          COALESCE("archive_reason", 'legacy_migration'),
+          NULL,
+          "created_at",
+          COALESCE("deleted_at", now())
+        FROM "users"
+        WHERE "status" = 'deleted'
+        ON CONFLICT ("id") DO NOTHING
+      `);
 
-    // Clean up provider child tables that lack ON DELETE CASCADE
-    // before hard-deleting users (users → providers cascades, but
-    // these children of providers would block it).
-    const deletedProviderIds = `
-      SELECT p."id" FROM "providers" p
-      WHERE p."user_id" IN (SELECT "id" FROM "users" WHERE "status" = 'deleted')
-    `;
+      // Clean up provider child tables that lack ON DELETE CASCADE
+      // before hard-deleting users (users → providers cascades, but
+      // these children of providers would block it).
+      const deletedProviderIds = `
+        SELECT p."id" FROM "providers" p
+        WHERE p."user_id" IN (SELECT "id" FROM "users" WHERE "status" = 'deleted')
+      `;
 
-    // review children first (review_photos, review_reports → reviews)
-    await queryRunner.query(`
-      DELETE FROM "review_photos" WHERE "review_id" IN (
-        SELECT "id" FROM "reviews" WHERE "provider_id" IN (${deletedProviderIds})
-      )
-    `);
-    await queryRunner.query(`
-      DELETE FROM "review_reports" WHERE "review_id" IN (
-        SELECT "id" FROM "reviews" WHERE "provider_id" IN (${deletedProviderIds})
-      )
-    `);
+      // review children first (review_photos, review_reports → reviews)
+      await queryRunner.query(`
+        DELETE FROM "review_photos" WHERE "review_id" IN (
+          SELECT "id" FROM "reviews" WHERE "provider_id" IN (${deletedProviderIds})
+        )
+      `);
+      await queryRunner.query(`
+        DELETE FROM "review_reports" WHERE "review_id" IN (
+          SELECT "id" FROM "reviews" WHERE "provider_id" IN (${deletedProviderIds})
+        )
+      `);
 
-    // direct provider children without CASCADE
-    await queryRunner.query(`DELETE FROM "reviews" WHERE "provider_id" IN (${deletedProviderIds})`);
-    await queryRunner.query(`DELETE FROM "photos" WHERE "provider_id" IN (${deletedProviderIds})`);
-    await queryRunner.query(`DELETE FROM "products" WHERE "provider_id" IN (${deletedProviderIds})`);
-    await queryRunner.query(`DELETE FROM "provider_categories" WHERE "provider_id" IN (${deletedProviderIds})`);
+      // direct provider children without CASCADE
+      await queryRunner.query(`DELETE FROM "reviews" WHERE "provider_id" IN (${deletedProviderIds})`);
+      await queryRunner.query(`DELETE FROM "photos" WHERE "provider_id" IN (${deletedProviderIds})`);
+      await queryRunner.query(`DELETE FROM "products" WHERE "provider_id" IN (${deletedProviderIds})`);
+      await queryRunner.query(`DELETE FROM "provider_categories" WHERE "provider_id" IN (${deletedProviderIds})`);
 
-    // Now hard-delete the migrated users (CASCADE will clean up providers
-    // and their remaining CASCADE children; SET NULL preserves business records)
-    await queryRunner.query(`
-      DELETE FROM "users" WHERE "status" = 'deleted'
-    `);
+      // Now hard-delete the migrated users (CASCADE will clean up providers
+      // and their remaining CASCADE children; SET NULL preserves business records)
+      await queryRunner.query(`
+        DELETE FROM "users" WHERE "status" = 'deleted'
+      `);
 
-    // ════════════════════════════════════════════════════════════════════════
-    // 5. Drop archive columns from users table (no longer needed)
-    // ════════════════════════════════════════════════════════════════════════
-    await queryRunner.query(`ALTER TABLE "users" DROP COLUMN IF EXISTS "deleted_at"`);
-    await queryRunner.query(`ALTER TABLE "users" DROP COLUMN IF EXISTS "archive_reason"`);
+      // ════════════════════════════════════════════════════════════════════════
+      // 5. Drop archive columns from users table (no longer needed)
+      // ════════════════════════════════════════════════════════════════════════
+      await queryRunner.query(`ALTER TABLE "users" DROP COLUMN IF EXISTS "deleted_at"`);
+      await queryRunner.query(`ALTER TABLE "users" DROP COLUMN IF EXISTS "archive_reason"`);
 
-    // ════════════════════════════════════════════════════════════════════════
-    // 6. Remove 'deleted' from users_status_enum
-    //    PostgreSQL requires recreating the enum type
-    // ════════════════════════════════════════════════════════════════════════
-    await queryRunner.query(`ALTER TABLE "users" ALTER COLUMN "status" DROP DEFAULT`);
-    await queryRunner.query(`
-      ALTER TABLE "users" ALTER COLUMN "status" TYPE varchar(20)
-    `);
-    await queryRunner.query(`DROP TYPE IF EXISTS "users_status_enum_old"`);
-    await queryRunner.query(`ALTER TYPE "users_status_enum" RENAME TO "users_status_enum_old"`);
-    await queryRunner.query(`CREATE TYPE "users_status_enum" AS ENUM ('active', 'suspended', 'paused')`);
-    await queryRunner.query(`
-      ALTER TABLE "users"
-        ALTER COLUMN "status" TYPE "users_status_enum"
-        USING "status"::"users_status_enum"
-    `);
-    await queryRunner.query(`ALTER TABLE "users" ALTER COLUMN "status" SET DEFAULT 'active'`);
-    await queryRunner.query(`DROP TYPE "users_status_enum_old"`);
+      // ════════════════════════════════════════════════════════════════════════
+      // 6. Remove 'deleted' from users_status_enum
+      //    PostgreSQL requires recreating the enum type
+      // ════════════════════════════════════════════════════════════════════════
+      await queryRunner.query(`ALTER TABLE "users" ALTER COLUMN "status" DROP DEFAULT`);
+      await queryRunner.query(`
+        ALTER TABLE "users" ALTER COLUMN "status" TYPE varchar(20)
+      `);
+      await queryRunner.query(`DROP TYPE IF EXISTS "users_status_enum_old"`);
+      await queryRunner.query(`ALTER TYPE "users_status_enum" RENAME TO "users_status_enum_old"`);
+      await queryRunner.query(`CREATE TYPE "users_status_enum" AS ENUM ('active', 'suspended', 'paused')`);
+      await queryRunner.query(`
+        ALTER TABLE "users"
+          ALTER COLUMN "status" TYPE "users_status_enum"
+          USING "status"::"users_status_enum"
+      `);
+      await queryRunner.query(`ALTER TABLE "users" ALTER COLUMN "status" SET DEFAULT 'active'`);
+      await queryRunner.query(`DROP TYPE "users_status_enum_old"`);
+    }
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {

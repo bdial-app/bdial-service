@@ -4,12 +4,12 @@ export class AddNotificationTargetMode1778200000000 implements MigrationInterfac
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
       ALTER TABLE notifications
-      ADD COLUMN target_mode VARCHAR(20) DEFAULT NULL
+      ADD COLUMN IF NOT EXISTS target_mode VARCHAR(20) DEFAULT NULL
     `);
 
     // Index for filtering notifications by user + target_mode
     await queryRunner.query(`
-      CREATE INDEX idx_notifications_user_target_mode
+      CREATE INDEX IF NOT EXISTS idx_notifications_user_target_mode
       ON notifications (user_id, target_mode)
       WHERE target_mode IS NOT NULL
     `);

@@ -4,7 +4,7 @@ export class AddProviderLinkedinHandle1779000000000 implements MigrationInterfac
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
       ALTER TABLE providers
-      ADD COLUMN linkedin_handle VARCHAR(128) DEFAULT NULL
+      ADD COLUMN IF NOT EXISTS linkedin_handle VARCHAR(128) DEFAULT NULL
     `);
   }
 
