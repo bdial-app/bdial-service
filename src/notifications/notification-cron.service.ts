@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, LessThan, MoreThan, IsNull, Not, In } from 'typeorm';
+import { Repository, LessThan, MoreThan, IsNull, Not, In, Between } from 'typeorm';
 import { User } from '../entities/user.entity';
 import { Provider } from '../entities/provider.entity';
 import { Subscription } from '../entities/subscription.entity';
@@ -141,7 +141,7 @@ export class NotificationCronService {
     const vouchers = await this.voucherRepo.find({
       where: {
         isActive: true,
-        validUntil: MoreThan(oneDayFromNow) && LessThan(twoDaysFromNow) as any,
+        validUntil: Between(oneDayFromNow, twoDaysFromNow),
       },
     });
 

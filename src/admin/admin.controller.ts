@@ -284,6 +284,14 @@ export class AdminController {
     return this.adminService.updateProviderAdmin(req.user, id, body);
   }
 
+  @Patch('providers/:id/contact-number')
+  @ApiOperation({ summary: 'Admin update provider contact number with OTP verification' })
+  @ApiParam({ name: 'id', description: 'Provider ID' })
+  @ApiBody({ schema: { properties: { contactNumber: { type: 'string' }, otp: { type: 'string' } } } })
+  updateContactNumber(@Param('id') id: string, @Request() req, @Body() body: { contactNumber: string; otp: string }) {
+    return this.adminService.updateProviderContactNumber(req.user, id, body.contactNumber, body.otp);
+  }
+
   // ============================================
   // Products Management
   // ============================================

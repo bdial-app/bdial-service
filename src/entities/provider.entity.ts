@@ -125,6 +125,9 @@ export class Provider {
   @Column({ name: 'suspension_confirmed', type: 'boolean', default: false })
   suspensionConfirmed: boolean;
 
+  @Column({ name: 'last_contact_number_change_at', type: 'timestamptz', nullable: true })
+  lastContactNumberChangeAt: Date | null;
+
   @Column({ name: 'website_url', type: 'varchar', length: 512, nullable: true })
   websiteUrl: string | null;
 
