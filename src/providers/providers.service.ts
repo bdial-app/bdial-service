@@ -1155,7 +1155,7 @@ export class ProvidersService {
       endsAt: new Date(dto.endsAt),
       usageLimit: dto.usageLimit ?? null,
       isActive: true,
-      approvalStatus: await this.requiresApproval('offers_require_approval') ? 'pending_approval' : 'approved',
+      approvalStatus: 'approved' as const,
     });
 
     return this.offerRepo.save(offer);
