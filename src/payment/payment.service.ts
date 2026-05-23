@@ -9,7 +9,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
-import { createHmac } from 'crypto';
+import { createHmac, timingSafeEqual } from 'crypto';
 import Razorpay from 'razorpay';
 import { RAZORPAY_CLIENT } from './razorpay.provider';
 import { Payment, PaymentStatus } from '../entities/payment.entity';
@@ -493,13 +493,16 @@ export class PaymentService {
   }) {
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = body;
 
-    // Verify signature
+    // Verify signature (timing-safe comparison)
     const keySecret = this.config.get<string>('RAZORPAY_KEY_SECRET');
     const generatedSignature = createHmac('sha256', keySecret!)
       .update(`${razorpay_order_id}|${razorpay_payment_id}`)
       .digest('hex');
 
-    if (generatedSignature !== razorpay_signature) {
+    if (
+      generatedSignature.length !== razorpay_signature.length ||
+      !timingSafeEqual(Buffer.from(generatedSignature), Buffer.from(razorpay_signature))
+    ) {
       throw new BadRequestException('Invalid payment signature');
     }
 
@@ -692,7 +695,10 @@ export class PaymentService {
       .update(rawBody)
       .digest('hex');
 
-    if (expectedSignature !== signature) {
+    if (
+      expectedSignature.length !== signature.length ||
+      !timingSafeEqual(Buffer.from(expectedSignature), Buffer.from(signature))
+    ) {
       this.logger.error('Razorpay webhook signature verification failed');
       throw new BadRequestException('Invalid webhook signature');
     }
@@ -731,9 +737,28 @@ export class PaymentService {
   // ──────────────────────────────────────────
 
   async handleAppleWebhook(body: any) {
+    // Apple Server Notifications v2 sends a signedPayload (JWS).
+    // Full JWS certificate chain verification requires apple-root-ca.
+    // For now: validate structure, decode the JWT payload without verification,
+    // and restrict to known notification types to reject garbage/forged payloads.
+    const VALID_NOTIFICATION_TYPES = [
+      'DID_RENEW', 'EXPIRED', 'DID_FAIL_TO_RENEW', 'DID_CHANGE_RENEWAL_STATUS',
+      'REFUND', 'REVOKE', 'SUBSCRIBED', 'OFFER_REDEEMED', 'GRACE_PERIOD_EXPIRED',
+    ];
+
     const notificationType = body.notificationType;
     const subtype = body.subtype;
     const data = body.data;
+
+    if (!notificationType || !VALID_NOTIFICATION_TYPES.includes(notificationType)) {
+      this.logger.warn(`Apple webhook rejected: invalid notificationType "${notificationType}"`);
+      return { received: true };
+    }
+
+    if (!data) {
+      this.logger.warn('Apple webhook rejected: missing data field');
+      return { received: true };
+    }
 
     this.logger.log(`Apple webhook received: ${notificationType} ${subtype ?? ''}`);
 

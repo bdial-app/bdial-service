@@ -30,7 +30,7 @@ export class AllowPausedGuard implements CanActivate {
     let payload: { sub: string };
     try {
       payload = this.jwtService.verify(token, {
-        secret: this.configService.get<string>('JWT_SECRET') || 'bohri-connect-secret',
+        secret: this.configService.get<string>('JWT_SECRET'),
       });
     } catch {
       throw new UnauthorizedException('Invalid or expired token');

@@ -29,6 +29,8 @@ export class OtpService {
   private readonly countryCode: string;
   private readonly otpExpiryMs: number;
   private readonly resendCooldownMs: number;
+  private readonly reviewPhone: string | undefined;
+  private readonly reviewOtp: string | undefined;
 
   /** In-memory store used ONLY in development mode */
   private readonly devOtpStore = new Map<string, OtpRecord>();
@@ -41,6 +43,8 @@ export class OtpService {
     this.countryCode = config.get<string>('SMS_COUNTRY_CODE', '+91');
     this.otpExpiryMs = 5 * 60 * 1000; // 5 minutes
     this.resendCooldownMs = 60 * 1000; // 60 seconds
+    this.reviewPhone = config.get<string>('APPLE_REVIEW_PHONE');
+    this.reviewOtp = config.get<string>('APPLE_REVIEW_OTP');
 
     if (!this.isDevelopment) {
       if (!this.msg91.isConfigured()) {
@@ -69,6 +73,11 @@ export class OtpService {
         message: 'Mobile number must be exactly 10 digits',
         field: 'mobileNumber',
       });
+    }
+
+    // Apple App Review demo account — skip actual SMS
+    if (this.isReviewPhone(phone)) {
+      return { success: true, message: 'OTP sent successfully', expiresIn: '5 minutes' };
     }
 
     if (this.isDevelopment) {
@@ -100,6 +109,11 @@ export class OtpService {
       });
     }
 
+    // Apple App Review demo account bypass
+    if (this.isReviewAccount(phone, otp)) {
+      return { valid: true, message: 'OTP verified successfully' };
+    }
+
     if (this.isDevelopment) {
       return this.verifyOtpDev(phone, otp);
     }
@@ -124,6 +138,11 @@ export class OtpService {
       });
     }
 
+    // Apple App Review demo account — skip actual SMS
+    if (this.isReviewPhone(phone)) {
+      return { success: true, message: 'OTP sent successfully', expiresIn: '5 minutes' };
+    }
+
     if (this.isDevelopment) {
       return this.sendOtpDev(key, metadata);
     }
@@ -145,6 +164,11 @@ export class OtpService {
         field: 'otp',
         error_code: 'INVALID_OTP_FORMAT',
       });
+    }
+
+    // Apple App Review demo account bypass
+    if (this.isReviewAccount(phone, otp)) {
+      return { valid: true, message: 'OTP verified successfully' };
     }
 
     if (this.isDevelopment) {
@@ -172,6 +196,21 @@ export class OtpService {
     const elapsed = Date.now() - record.sentAt.getTime();
     if (elapsed >= this.resendCooldownMs) return 0;
     return Math.ceil((this.resendCooldownMs - elapsed) / 1000);
+  }
+
+  // ─── Apple App Review bypass ───────────────────────────────────
+
+  private isReviewAccount(phone: string, otp: string): boolean {
+    return !!(
+      this.reviewPhone &&
+      this.reviewOtp &&
+      phone === this.reviewPhone &&
+      otp === this.reviewOtp
+    );
+  }
+
+  private isReviewPhone(phone: string): boolean {
+    return !!(this.reviewPhone && phone === this.reviewPhone);
   }
 
   // ─── Development mode (in-memory) ────────────────────────────────

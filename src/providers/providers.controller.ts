@@ -50,13 +50,16 @@ export class ProvidersController {
   ) {}
 
   @Post()
-  @Public()
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
   @ApiOperation({ summary: 'Create a new provider' })
   @ApiResponse({ status: 201, description: 'Provider created successfully' })
   @ApiResponse({ status: 400, description: 'Bad Request' })
   @ApiResponse({ status: 404, description: 'User not found' })
   @ApiResponse({ status: 409, description: 'Provider already exists for user' })
-  create(@Body() createProviderDto: CreateProviderDto) {
+  create(@Request() req, @Body() createProviderDto: CreateProviderDto) {
+    // Always use the authenticated user's ID
+    createProviderDto.userId = req.user.id;
     return this.providersService.create(createProviderDto);
   }
 
@@ -415,14 +418,16 @@ export class ProvidersController {
   @UseGuards(AuthGuard('jwt'))
   @ApiOperation({ summary: 'Update provider by ID' })
   @ApiResponse({ status: 200, description: 'Provider updated successfully' })
+  @ApiResponse({ status: 403, description: 'Not the owner of this provider' })
   @ApiResponse({ status: 404, description: 'Provider not found' })
   @ApiResponse({ status: 409, description: 'Provider already exists for user' })
   @ApiParam({ name: 'id', description: 'Provider ID (UUID)' })
   updateProvider(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() updateProviderDto: UpdateProviderDto,
+    @Request() req,
   ) {
-    return this.providersService.update(id, updateProviderDto);
+    return this.providersService.update(id, updateProviderDto, req.user.id);
   }
 
   @Patch(':id/categories')

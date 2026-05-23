@@ -125,9 +125,14 @@ export class ReviewsService {
     return this.reviewRepo.save(review);
   }
 
-  async uploadPhoto(reviewId: string, file: Express.Multer.File) {
+  async uploadPhoto(reviewId: string, file: Express.Multer.File, userId?: string) {
     const review = await this.reviewRepo.findOneBy({ id: reviewId });
     if (!review) throw new NotFoundException('Review not found');
+
+    // Only the review author can upload photos to their review
+    if (userId && review.reviewerId !== userId) {
+      throw new ForbiddenException('You can only upload photos to your own reviews');
+    }
 
     const compressed = await compressImage(file, 'standard');
     const { url, storageKey } = await this.storageService.upload('reviews', compressed);
