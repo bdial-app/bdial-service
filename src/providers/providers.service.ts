@@ -219,8 +219,11 @@ export class ProvidersService {
       }
     }
 
+    this.logger.log(`becomeProvider files received: banner=${!!bannerImage}, profile=${!!profileImage}, aadhaar=${!!file}`);
+    this.logger.log(`becomeProvider uploads: banner=${bannerUpload?.url || 'none'}, profile=${profileUpload?.url || 'none'}`);
+
     const result = await this.dataSource.transaction(async (manager) => {
-      const { latitude, longitude, file: _file, bannerImage: _bi, profileImage: _pi, bannerImageUrl: _biu, profilePhotoUrl: _ppu, ...cleanData } = providerData as any;
+      const { latitude, longitude, file: _file, bannerImage: _bi, profileImage: _pi, productImages: _pImgs, bannerImageUrl: _biu, profilePhotoUrl: _ppu, ...cleanData } = providerData as any;
       const declaredWomenLed = providerData.isWomenLed != null ? providerData.isWomenLed : user.gender === 'female';
       const provider = manager.create(Provider, {
         ...cleanData,
