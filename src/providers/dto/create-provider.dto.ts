@@ -143,13 +143,28 @@ export class CreateProviderDto {
   @ApiPropertyOptional({ example: '+919876543210', description: 'WhatsApp Business number' })
   @IsOptional()
   @IsString()
-  @Matches(/^\+?\d{7,15}$/, { message: 'WhatsApp number must be 7-15 digits, optionally starting with +' })
+  @Transform(({ value }) => {
+    if (typeof value !== 'string') return value;
+    // Strip spaces, dashes, parens — keep leading + and digits
+    const cleaned = value.replace(/[\s\-().]/g, '');
+    // Ensure it starts with + if it has a country code
+    return cleaned;
+  })
+  @Matches(/^\+\d{7,15}$/, { message: 'WhatsApp number must start with + followed by 7-15 digits (e.g. +919876543210)' })
   whatsappNumber?: string;
 
-  @ApiPropertyOptional({ example: 'mybusiness', description: 'LinkedIn profile or company page handle/URL' })
+  @ApiPropertyOptional({ example: 'in/mybusiness', description: 'LinkedIn profile or company page path (e.g. in/name or company/name)' })
   @IsOptional()
   @IsString()
-  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @Transform(({ value }) => {
+    if (typeof value !== 'string') return value;
+    // Strip full URL prefix — normalize to just the path
+    return value.trim()
+      .replace(/^https?:\/\/(www\.)?linkedin\.com\/?/, '')
+      .replace(/^(www\.)?linkedin\.com\/?/, '')
+      .replace(/\/+$/, '')
+      .replace(/^\/+/, '');
+  })
   @MaxLength(128)
   linkedinHandle?: string;
 }
