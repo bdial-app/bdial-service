@@ -219,8 +219,11 @@ export class ProvidersService {
       }
     }
 
+    this.logger.log(`becomeProvider files received: banner=${!!bannerImage}, profile=${!!profileImage}, aadhaar=${!!file}`);
+    this.logger.log(`becomeProvider uploads: banner=${bannerUpload?.url || 'none'}, profile=${profileUpload?.url || 'none'}`);
+
     const result = await this.dataSource.transaction(async (manager) => {
-      const { latitude, longitude, file: _file, bannerImage: _bi, profileImage: _pi, bannerImageUrl: _biu, profilePhotoUrl: _ppu, ...cleanData } = providerData as any;
+      const { latitude, longitude, file: _file, bannerImage: _bi, profileImage: _pi, productImages: _pImgs, bannerImageUrl: _biu, profilePhotoUrl: _ppu, ...cleanData } = providerData as any;
       const declaredWomenLed = providerData.isWomenLed != null ? providerData.isWomenLed : user.gender === 'female';
       const provider = manager.create(Provider, {
         ...cleanData,
@@ -609,9 +612,9 @@ export class ProvidersService {
     const offset = (page - 1) * limit;
     const hasLocation = lat != null && lng != null;
 
-    // Haversine formula in SQL (returns distance in km) — only used when coords are present
+    // Haversine × 1.4 circuity factor — approximate road distance (km)
     const haversine = hasLocation
-      ? `6371 * acos(LEAST(1.0, cos(radians(:lat)) * cos(radians(provider.latitude)) * cos(radians(provider.longitude) - radians(:lng)) + sin(radians(:lat)) * sin(radians(provider.latitude))))`
+      ? `1.4 * 6371 * acos(LEAST(1.0, cos(radians(:lat)) * cos(radians(provider.latitude)) * cos(radians(provider.longitude) - radians(:lng)) + sin(radians(:lat)) * sin(radians(provider.latitude))))`
       : null;
 
     const qb = this.providerRepo
@@ -875,7 +878,7 @@ export class ProvidersService {
     }
 
     if (hasGeo) {
-      const haversine = `6371 * acos(LEAST(1.0, cos(radians(:lat)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians(:lng)) + sin(radians(:lat)) * sin(radians(p.latitude))))`;
+      const haversine = `1.4 * 6371 * acos(LEAST(1.0, cos(radians(:lat)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians(:lng)) + sin(radians(:lat)) * sin(radians(p.latitude))))`;
       qb.addSelect(haversine, 'distance')
         .setParameters({ lat, lng });
     }
@@ -957,7 +960,7 @@ export class ProvidersService {
    */
   async findFeatured(lat: number, lng: number, radius: number = 25) {
     const haversine = `
-      6371 * acos(
+      1.4 * 6371 * acos(
         LEAST(1.0, cos(radians(:lat)) * cos(radians(provider.latitude))
         * cos(radians(provider.longitude) - radians(:lng))
         + sin(radians(:lat)) * sin(radians(provider.latitude)))

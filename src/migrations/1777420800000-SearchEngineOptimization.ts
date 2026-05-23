@@ -19,6 +19,10 @@ export class SearchEngineOptimization1777420800000 implements MigrationInterface
   name = 'SearchEngineOptimization1777420800000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
+    // ── 0. Ensure required extensions exist ─────────────────────────────────
+    await queryRunner.query(`CREATE EXTENSION IF NOT EXISTS pg_trgm`);
+    await queryRunner.query(`CREATE EXTENSION IF NOT EXISTS unaccent`);
+
     // ── 1. Trigram GIN indexes ──────────────────────────────────────────────
     await queryRunner.query(`
       CREATE INDEX IF NOT EXISTS idx_providers_brand_name_trgm

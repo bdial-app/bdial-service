@@ -8,6 +8,7 @@ import { AdminCreateUserDto, AdminCreateProviderWithUserDto } from './dto/admin-
 import { StorageService } from '../storage/storage.service';
 import { OtpService } from '../otp/otp.service';
 import { compressImage, compressImages } from '../common/image-processor';
+import { ROLE_HIERARCHY } from '../common/enums/admin-role.enum';
 import { SupabaseAuthService } from '../supabase/supabase-auth.service';
 import { ServiceableCitiesService } from '../serviceable-cities/serviceable-cities.service';
 import { ContentSanitizerService } from '../common/content-sanitizer';
@@ -54,7 +55,9 @@ export class AdminService {
   ) {}
 
   private assertAdmin(user: any) {
-    if (user.role !== 'admin') throw new ForbiddenException('Admin access required');
+    if ((ROLE_HIERARCHY[user.role] ?? 0) < ROLE_HIERARCHY['admin']) {
+      throw new ForbiddenException('Admin access required');
+    }
   }
 
   async getDashboard(admin: any) {

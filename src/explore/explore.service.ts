@@ -46,9 +46,9 @@ export class ExploreService {
 
   // ─── Performance Helpers ─────────────────────────────────────
 
-  /** Parameterized haversine — use with qb.setParameter('lat', lat).setParameter('lng', lng) */
+  /** Parameterized haversine × 1.4 circuity factor — approximate road distance */
   private static readonly HAVERSINE =
-    `6371 * acos(LEAST(1.0, cos(radians(:lat)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians(:lng)) + sin(radians(:lat)) * sin(radians(p.latitude))))`;
+    `1.4 * 6371 * acos(LEAST(1.0, cos(radians(:lat)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians(:lng)) + sin(radians(:lat)) * sin(radians(p.latitude))))`;
 
   /** Pre-aggregated review stats JOIN — eliminates N correlated subqueries per request */
   private withReviewStats(qb: any): void {

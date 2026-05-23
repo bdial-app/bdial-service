@@ -95,11 +95,13 @@ export class FirebaseService implements OnModuleInit {
             },
             sound: 'default',
             badge: 1,
+            'content-available': 1,
             'mutable-content': 1,
           },
         },
         headers: {
           'apns-priority': '10',
+          'apns-push-type': 'alert',
         },
       },
       webpush: {
@@ -166,11 +168,13 @@ export class FirebaseService implements OnModuleInit {
             },
             sound: 'default',
             badge: 1,
+            'content-available': 1,
             'mutable-content': 1,
           },
         },
         headers: {
           'apns-priority': '10',
+          'apns-push-type': 'alert',
         },
       },
       webpush: {
