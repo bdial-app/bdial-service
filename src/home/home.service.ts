@@ -43,8 +43,10 @@ export class HomeService {
 
   // ─── Performance Helpers ─────────────────────────────────────
 
+  // Haversine × 1.4 circuity factor — converts straight-line to approximate road distance
+  // (1.4 is the standard urban detour index for Indian cities)
   private static readonly HAVERSINE =
-    `6371 * acos(LEAST(1.0, cos(radians(:lat)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians(:lng)) + sin(radians(:lat)) * sin(radians(p.latitude))))`;
+    `1.4 * 6371 * acos(LEAST(1.0, cos(radians(:lat)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians(:lng)) + sin(radians(:lat)) * sin(radians(p.latitude))))`;
 
   private withReviewStats(qb: any): void {
     qb.leftJoin(
@@ -335,7 +337,7 @@ export class HomeService {
     let pi = 2;
 
     if (hasLocation) {
-      distExpr = `6371 * acos(LEAST(1.0, cos(radians($${pi})) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians($${pi + 1})) + sin(radians($${pi})) * sin(radians(p.latitude))))`;
+      distExpr = `1.4 * 6371 * acos(LEAST(1.0, cos(radians($${pi})) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians($${pi + 1})) + sin(radians($${pi})) * sin(radians(p.latitude))))`;
       params.push(lat, lng);
       pi += 2;
     }

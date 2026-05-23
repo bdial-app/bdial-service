@@ -448,7 +448,7 @@ export class SearchService implements OnModuleInit {
     // Distance expression
     let distExpr = 'NULL';
     if (opts.hasGeo) {
-      distExpr = `6371 * acos(LEAST(1.0, cos(radians($3)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians($4)) + sin(radians($3)) * sin(radians(p.latitude))))`;
+      distExpr = `1.4 * 6371 * acos(LEAST(1.0, cos(radians($3)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians($4)) + sin(radians($3)) * sin(radians(p.latitude))))`;
       allParams.push(opts.lat, opts.lng);
     }
 
@@ -699,7 +699,7 @@ export class SearchService implements OnModuleInit {
       let distExpr = 'NULL';
 
       if (opts.hasGeo) {
-        distExpr = `6371 * acos(LEAST(1.0, cos(radians($3)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians($4)) + sin(radians($3)) * sin(radians(p.latitude))))`;
+        distExpr = `1.4 * 6371 * acos(LEAST(1.0, cos(radians($3)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians($4)) + sin(radians($3)) * sin(radians(p.latitude))))`;
         allParams.push(opts.lat, opts.lng);
       }
 
@@ -833,7 +833,7 @@ export class SearchService implements OnModuleInit {
       let distExpr = 'NULL';
 
       if (opts.hasGeo) {
-        distExpr = `6371 * acos(LEAST(1.0, cos(radians($3)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians($4)) + sin(radians($3)) * sin(radians(p.latitude))))`;
+        distExpr = `1.4 * 6371 * acos(LEAST(1.0, cos(radians($3)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians($4)) + sin(radians($3)) * sin(radians(p.latitude))))`;
         allParams.push(opts.lat, opts.lng);
       }
 
@@ -979,7 +979,7 @@ export class SearchService implements OnModuleInit {
       let pi = 2;
 
       if (hasGeo) {
-        distExpr = `6371 * acos(LEAST(1.0, cos(radians($${pi})) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians($${pi + 1})) + sin(radians($${pi})) * sin(radians(p.latitude))))`;
+        distExpr = `1.4 * 6371 * acos(LEAST(1.0, cos(radians($${pi})) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians($${pi + 1})) + sin(radians($${pi})) * sin(radians(p.latitude))))`;
         params.push(lat, lng);
         pi += 2;
       }
@@ -1077,7 +1077,7 @@ export class SearchService implements OnModuleInit {
 
     let distExpr = 'NULL';
     if (opts.hasGeo) {
-      distExpr = `6371 * acos(LEAST(1.0, cos(radians($3)) * cos(radians(prov.latitude)) * cos(radians(prov.longitude) - radians($4)) + sin(radians($3)) * sin(radians(prov.latitude))))`;
+      distExpr = `1.4 * 6371 * acos(LEAST(1.0, cos(radians($3)) * cos(radians(prov.latitude)) * cos(radians(prov.longitude) - radians($4)) + sin(radians($3)) * sin(radians(prov.latitude))))`;
       allParams.push(opts.lat, opts.lng);
     }
 
@@ -1288,7 +1288,7 @@ export class SearchService implements OnModuleInit {
     let distExpr = 'NULL';
     const params: any[] = [q, prefixTsQuery];
     if (hasGeo) {
-      distExpr = `6371 * acos(LEAST(1.0, cos(radians($3)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians($4)) + sin(radians($3)) * sin(radians(p.latitude))))`;
+      distExpr = `1.4 * 6371 * acos(LEAST(1.0, cos(radians($3)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians($4)) + sin(radians($3)) * sin(radians(p.latitude))))`;
       params.push(lat, lng);
     }
 
@@ -1617,7 +1617,7 @@ export class SearchService implements OnModuleInit {
         let distExpr = 'NULL';
 
         if (useGeo) {
-          distExpr = `6371 * acos(LEAST(1.0, cos(radians($3)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians($4)) + sin(radians($3)) * sin(radians(p.latitude))))`;
+          distExpr = `1.4 * 6371 * acos(LEAST(1.0, cos(radians($3)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians($4)) + sin(radians($3)) * sin(radians(p.latitude))))`;
           params.push(opts.lat, opts.lng);
         }
 
@@ -1742,7 +1742,7 @@ export class SearchService implements OnModuleInit {
 
   private async getNearbyPopular(lat: number, lng: number, radius: number): Promise<ProviderSearchResult[]> {
     try {
-      const distExpr = `6371 * acos(LEAST(1.0, cos(radians($1)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians($2)) + sin(radians($1)) * sin(radians(p.latitude))))`;
+      const distExpr = `1.4 * 6371 * acos(LEAST(1.0, cos(radians($1)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians($2)) + sin(radians($1)) * sin(radians(p.latitude))))`;
       const sql = `
         SELECT
           p.id, p.brand_name, p.description, p.profile_photo_url, p.banner_image_url,

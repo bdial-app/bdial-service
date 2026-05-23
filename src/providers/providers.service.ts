@@ -612,9 +612,9 @@ export class ProvidersService {
     const offset = (page - 1) * limit;
     const hasLocation = lat != null && lng != null;
 
-    // Haversine formula in SQL (returns distance in km) — only used when coords are present
+    // Haversine × 1.4 circuity factor — approximate road distance (km)
     const haversine = hasLocation
-      ? `6371 * acos(LEAST(1.0, cos(radians(:lat)) * cos(radians(provider.latitude)) * cos(radians(provider.longitude) - radians(:lng)) + sin(radians(:lat)) * sin(radians(provider.latitude))))`
+      ? `1.4 * 6371 * acos(LEAST(1.0, cos(radians(:lat)) * cos(radians(provider.latitude)) * cos(radians(provider.longitude) - radians(:lng)) + sin(radians(:lat)) * sin(radians(provider.latitude))))`
       : null;
 
     const qb = this.providerRepo
@@ -878,7 +878,7 @@ export class ProvidersService {
     }
 
     if (hasGeo) {
-      const haversine = `6371 * acos(LEAST(1.0, cos(radians(:lat)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians(:lng)) + sin(radians(:lat)) * sin(radians(p.latitude))))`;
+      const haversine = `1.4 * 6371 * acos(LEAST(1.0, cos(radians(:lat)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians(:lng)) + sin(radians(:lat)) * sin(radians(p.latitude))))`;
       qb.addSelect(haversine, 'distance')
         .setParameters({ lat, lng });
     }
@@ -960,7 +960,7 @@ export class ProvidersService {
    */
   async findFeatured(lat: number, lng: number, radius: number = 25) {
     const haversine = `
-      6371 * acos(
+      1.4 * 6371 * acos(
         LEAST(1.0, cos(radians(:lat)) * cos(radians(provider.latitude))
         * cos(radians(provider.longitude) - radians(:lng))
         + sin(radians(:lat)) * sin(radians(provider.latitude)))
