@@ -30,6 +30,7 @@ import { CreateReviewDto, ReportReviewDto } from './dto/review.dto';
 import { UpdateReviewStatusDto } from './dto/review.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Public } from '../common/decorators/public.decorator';
+import { Roles } from '../common/decorators/roles.decorator';
 
 @ApiTags('Reviews')
 @Controller('reviews')
@@ -89,8 +90,9 @@ export class ReviewsController {
   // ✅ 5. Admin: Change status (MODERATION)
   @Patch(':id/status')
   @ApiBearerAuth()
-  @UseGuards(AuthGuard('jwt')) // later replace with AdminGuard
-  @ApiOperation({ summary: 'Change review status (admin)' })
+  @UseGuards(AuthGuard('jwt'))
+  @Roles('moderator')
+  @ApiOperation({ summary: 'Change review status (admin/moderator only)' })
   @Patch(':id/status')
   updateStatus(
     @Param('id') id: string,
@@ -105,8 +107,10 @@ export class ReviewsController {
   }
 
   @Post('upload-photo')
+  @UseGuards(AuthGuard('jwt'))
   @UseInterceptors(FileInterceptor('file'))
   @ApiConsumes('multipart/form-data')
+  @ApiBearerAuth()
   @ApiBody({
     schema: {
       type: 'object',
@@ -117,6 +121,7 @@ export class ReviewsController {
     },
   })
   uploadPhoto(
+    @Request() req,
     @Body('reviewId') reviewId: string,
     @UploadedFile(
       new ParseFilePipe({
@@ -128,7 +133,7 @@ export class ReviewsController {
     )
     file: Express.Multer.File,
   ) {
-    return this.reviewsService.uploadPhoto(reviewId, file);
+    return this.reviewsService.uploadPhoto(reviewId, file, req.user.id);
   }
 
   @Get()

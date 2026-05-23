@@ -18,10 +18,14 @@ import { User } from '../entities';
     SupabaseModule,
     NotificationsModule,
     JwtModule.registerAsync({
-      useFactory: (configService: ConfigService) => ({
-        secret: configService.get<string>('JWT_SECRET') || 'bohri-connect-secret',
-        signOptions: { expiresIn: '365d' },
-      }),
+      useFactory: (configService: ConfigService) => {
+        const secret = configService.get<string>('JWT_SECRET');
+        if (!secret) throw new Error('JWT_SECRET environment variable is required');
+        return {
+          secret,
+          signOptions: { expiresIn: '365d' },
+        };
+      },
       inject: [ConfigService],
     }),
   ],

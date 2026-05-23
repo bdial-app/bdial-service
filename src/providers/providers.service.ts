@@ -544,9 +544,14 @@ export class ProvidersService {
     return { data: providers, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
   }
 
-  async update(id: string, updateProviderDto: UpdateProviderDto) {
+  async update(id: string, updateProviderDto: UpdateProviderDto, requestingUserId?: string) {
     const existingProvider = await this.providerRepo.findOneBy({ id });
     if (!existingProvider) throw new NotFoundException(`Provider with ID '${id}' not found`);
+
+    // Ownership check — only the provider owner can update their profile
+    if (requestingUserId && existingProvider.userId !== requestingUserId) {
+      throw new ForbiddenException('You can only update your own provider');
+    }
 
     // Content moderation: check brand name and description
     this.checkProviderContent(updateProviderDto.brandName, updateProviderDto.description);

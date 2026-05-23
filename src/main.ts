@@ -24,11 +24,14 @@ async function bootstrap() {
   // CORS — must be FIRST so error responses also get CORS headers.
   // Mobile carriers often proxy requests, modifying headers. We must be explicit
   // about allowed methods/headers to survive transparent proxy interference.
-  const corsOrigin = configService.get<string>('CORS_ORIGIN', '*');
+  const corsOrigin = configService.get<string>('CORS_ORIGIN');
+  if (!corsOrigin) {
+    console.warn('⚠️  CORS_ORIGIN env var not set — CORS will reject cross-origin requests. Set it to your frontend URL(s).');
+  }
   app.enableCors({
-    origin: corsOrigin === '*'
-      ? true  // reflect request origin (works with credentials, unlike literal '*')
-      : corsOrigin.split(',').map((o) => o.trim()),
+    origin: corsOrigin
+      ? corsOrigin.split(',').map((o) => o.trim())
+      : false, // Reject cross-origin if not configured (safe default)
     credentials: true,
     methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
     allowedHeaders: [
