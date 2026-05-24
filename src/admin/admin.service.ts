@@ -74,7 +74,7 @@ export class AdminService {
       activeOffers, activeSponsorships, activeBanners,
       pendingSponsorships, pendingOffers,
     ] = await Promise.all([
-      this.providerRepo.count({ where: { status: 'pending' } }),
+      this.verificationRepo.count({ where: { status: 'in_review' } }),
       this.providerRepo.count(),
       this.userRepo.count({ where: { status: 'active' } }),
       this.verificationRepo.count({ where: { aadhaarStatus: 'pending' } }),
@@ -156,8 +156,13 @@ export class AdminService {
 
   async getPendingProviders(admin: any) {
     this.assertAdmin(admin);
+    const verifications = await this.verificationRepo.find({
+      where: { status: 'in_review' },
+    });
+    if (!verifications.length) return [];
+    const userIds = verifications.map(v => v.userId);
     return this.providerRepo.find({
-      where: { status: In(['pending', 'in_review']) },
+      where: { userId: In(userIds) },
       relations: ['user', 'providerCategories', 'providerCategories.category'],
       order: { createdAt: 'ASC' },
     });
@@ -243,7 +248,11 @@ export class AdminService {
       .leftJoinAndSelect('v.user', 'user');
 
     if (status) {
-      qb.andWhere('v.aadhaar_status = :status', { status });
+      if (status === 'in_review') {
+        qb.andWhere('v.status = :status', { status });
+      } else {
+        qb.andWhere('v.aadhaar_status = :status', { status });
+      }
     }
     if (search) {
       qb.andWhere('(user.name ILIKE :search OR user.mobile_number ILIKE :search)', { search: `%${search}%` });
@@ -315,7 +324,7 @@ export class AdminService {
     // If approved, also activate the provider
     if (verification && aadhaarStatus === 'approved') {
       const provider = await this.providerRepo.findOneBy({ userId: verification.userId });
-      if (provider && provider.status === 'unverified') {
+      if (provider && provider.status !== 'active') {
         provider.status = 'active';
         await this.providerRepo.save(provider);
       }
@@ -927,7 +936,7 @@ export class AdminService {
     const pageSize = Math.min(100, Math.max(1, limit || 10));
     const skip = (currentPage - 1) * pageSize;
 
-    const VALID_STATUSES = ['pending', 'in_review', 'active', 'suspended', 'unverified', 'disabled'];
+    const VALID_STATUSES = ['active', 'suspended', 'unverified', 'disabled'];
     const safeStatus = status && VALID_STATUSES.includes(status) ? status : undefined;
 
     const qb = this.providerRepo.createQueryBuilder('p')
@@ -3356,7 +3365,7 @@ export class AdminService {
       pendingOffers,
       openBugReports,
     ] = await Promise.all([
-      this.providerRepo.count({ where: { status: 'pending' } }),
+      this.verificationRepo.count({ where: { status: 'in_review' } }),
       this.verificationRepo.count({ where: { aadhaarStatus: 'pending' } }),
       this.entityReportRepo.count({ where: { status: 'pending' } }),
       this.reportRepo.count({ where: { status: 'pending' } }),
@@ -3370,7 +3379,7 @@ export class AdminService {
     return {
       totalPending,
       items: [
-        { type: 'providers', label: 'Pending Providers', count: pendingProviders, route: '/providers?status=pending' },
+        { type: 'providers', label: 'Pending Providers', count: pendingProviders, route: '/providers?status=unverified' },
         { type: 'verifications', label: 'Pending Verifications', count: pendingVerifications, route: '/registrations?status=pending' },
         { type: 'reports', label: 'Open Reports', count: openReports, route: '/reports?status=pending' },
         { type: 'reviews', label: 'Flagged Reviews', count: flaggedReviews, route: '/reviews?status=flagged' },

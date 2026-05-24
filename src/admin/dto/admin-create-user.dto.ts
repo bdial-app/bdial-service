@@ -141,9 +141,9 @@ export class AdminCreateProviderWithUserDto {
   @IsOptional()
   categoryIds?: string[];
 
-  @ApiPropertyOptional({ description: 'Initial provider status', enum: ['pending', 'active', 'unverified'], default: 'active' })
+  @ApiPropertyOptional({ description: 'Initial provider status', enum: ['unverified', 'active'], default: 'active' })
   @IsOptional()
-  @IsEnum(['pending', 'active', 'unverified'])
+  @IsEnum(['unverified', 'active'])
   providerStatus?: string;
 
   // ── Products ────────────────────────────────────────────

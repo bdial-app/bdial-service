@@ -10,8 +10,8 @@ export class UpdateVerificationStatusDto {
   ijamatStatus?: 'pending' | 'approved' | 'rejected' | 'not_submitted';
 
   @IsOptional()
-  @IsEnum(['pending', 'approved', 'rejected'])
-  status?: 'pending' | 'approved' | 'rejected';
+  @IsEnum(['pending', 'in_review', 'approved', 'rejected'])
+  status?: 'pending' | 'in_review' | 'approved' | 'rejected';
 
   @IsUUID()
   id: string;

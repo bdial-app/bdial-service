@@ -20,6 +20,7 @@ export class VerificationsService {
       existing.ijamatExpiry = dto.ijamatExpiry ? new Date(dto.ijamatExpiry) : existing.ijamatExpiry;
       existing.ijamatDocUrl = dto.ijamatDocUrl ?? existing.ijamatDocUrl;
       existing.ijamatStatus = dto.ijamatDocUrl ? 'pending' : 'not_submitted';
+      existing.status = 'in_review';
       return this.verRepo.save(existing);
     }
 
@@ -30,7 +31,7 @@ export class VerificationsService {
       ijamatExpiry: dto.ijamatExpiry ? new Date(dto.ijamatExpiry) : undefined,
       ijamatDocUrl: dto.ijamatDocUrl,
       ijamatStatus: dto.ijamatDocUrl ? 'pending' : 'not_submitted',
-      status: 'pending',
+      status: 'in_review',
     });
     return this.verRepo.save(verification);
   }

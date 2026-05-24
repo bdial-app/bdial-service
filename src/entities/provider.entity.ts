@@ -86,8 +86,8 @@ export class Provider {
   @Column({ name: 'community_verified', type: 'boolean', default: false })
   communityVerified: boolean;
 
-  @Column({ type: 'enum', enum: ['pending', 'in_review', 'active', 'suspended', 'unverified', 'disabled'], default: 'pending' })
-  status: 'pending' | 'in_review' | 'active' | 'suspended' | 'unverified' | 'disabled';
+  @Column({ type: 'enum', enum: ['unverified', 'active', 'suspended', 'disabled'], default: 'unverified' })
+  status: 'unverified' | 'active' | 'suspended' | 'disabled';
 
   @Column({ name: 'is_featured', type: 'boolean', default: false })
   isFeatured: boolean;

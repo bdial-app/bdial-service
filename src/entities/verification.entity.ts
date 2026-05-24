@@ -40,7 +40,7 @@ export class Verification {
   @Column({ name: 'ijamat_status', type: 'enum', enum: ['pending', 'approved', 'rejected', 'not_submitted'], default: 'not_submitted' })
   ijamatStatus: string;
 
-  @Column({ type: 'enum', enum: ['pending', 'approved', 'rejected'], default: 'pending' })
+  @Column({ type: 'enum', enum: ['pending', 'in_review', 'approved', 'rejected'], default: 'pending' })
   status: string;
 
   @Column({ name: 'admin_notes', type: 'text', nullable: true })
