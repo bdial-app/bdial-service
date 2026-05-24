@@ -9,10 +9,11 @@ export class VerificationStatusRefactor1780000000000 implements MigrationInterfa
     await queryRunner.query(`UPDATE providers SET status = 'unverified' WHERE status IN ('pending', 'in_review')`);
 
     // 3. Recreate provider status enum without 'pending' and 'in_review'
-    // We need to: create new enum, alter column, drop old enum
+    // Drop default first, then change type, then set new default
     await queryRunner.query(`CREATE TYPE "providers_status_enum_new" AS ENUM ('unverified', 'active', 'suspended', 'disabled')`);
-    await queryRunner.query(`ALTER TABLE "providers" ALTER COLUMN "status" SET DEFAULT 'unverified'`);
+    await queryRunner.query(`ALTER TABLE "providers" ALTER COLUMN "status" DROP DEFAULT`);
     await queryRunner.query(`ALTER TABLE "providers" ALTER COLUMN "status" TYPE "providers_status_enum_new" USING "status"::text::"providers_status_enum_new"`);
+    await queryRunner.query(`ALTER TABLE "providers" ALTER COLUMN "status" SET DEFAULT 'unverified'`);
     await queryRunner.query(`DROP TYPE "providers_status_enum"`);
     await queryRunner.query(`ALTER TYPE "providers_status_enum_new" RENAME TO "providers_status_enum"`);
   }
