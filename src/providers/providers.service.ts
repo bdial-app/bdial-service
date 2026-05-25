@@ -296,7 +296,7 @@ export class ProvidersService {
           ijamatNumber,
           ijamatExpiry: ijamatExpiry ? new Date(ijamatExpiry) : null,
           ijamatDocUrl,
-          status: 'pending',
+          status: 'in_review',
         });
         savedVerification = await manager.save(verification);
       }
@@ -339,22 +339,16 @@ export class ProvidersService {
     const uploadResult = await this.storage.upload('verifications', file);
     const aadhaarDocUrl = uploadResult.url;
 
-    // Update provider status from 'unverified' to 'pending' when docs are submitted
-    if (provider.status === 'unverified') {
-      provider.status = 'pending';
-      await this.providerRepo.save(provider);
-    }
-
     if (existingVerification) {
       existingVerification.aadhaarDocUrl = aadhaarDocUrl;
-      existingVerification.status = 'pending';
+      existingVerification.status = 'in_review';
       return this.verRepo.save(existingVerification);
     }
 
     const verification = this.verRepo.create({
       userId,
       aadhaarDocUrl,
-      status: 'pending',
+      status: 'in_review',
     });
     return this.verRepo.save(verification);
   }
@@ -394,18 +388,14 @@ export class ProvidersService {
     } else if (provider.status === 'active' || verificationStatus === 'approved') {
       // Fully approved & verified
       providerStatus = 'approved';
-    } else if (provider.status === 'unverified') {
-      // Provider registered but never submitted verification docs
-      // They can access the dashboard but are NOT verified
-      providerStatus = 'unverified';
-    } else if (verificationStatus === 'pending') {
-      // Verification docs submitted, awaiting review
-      providerStatus = 'pending';
+    } else if (verificationStatus === 'in_review') {
+      // Docs submitted, awaiting admin review
+      providerStatus = 'in_review';
     } else if (verificationStatus === 'rejected') {
       providerStatus = 'rejected';
     } else {
-      // Fallback: provider exists with pending/in_review status
-      providerStatus = 'pending';
+      // Provider registered but not yet submitted docs (or verification pending)
+      providerStatus = 'unverified';
     }
 
     return { providerStatus, verificationStatus, provider, verification, preferredMode: providerStatus === 'disabled' || providerStatus === 'deleted' ? 'customer' : (user?.preferredMode ?? 'customer') };
@@ -1155,7 +1145,7 @@ export class ProvidersService {
       endsAt: new Date(dto.endsAt),
       usageLimit: dto.usageLimit ?? null,
       isActive: true,
-      approvalStatus: await this.requiresApproval('offers_require_approval') ? 'pending_approval' : 'approved',
+      approvalStatus: 'approved' as const,
     });
 
     return this.offerRepo.save(offer);
