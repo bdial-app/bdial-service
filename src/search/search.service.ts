@@ -24,6 +24,8 @@ export interface SearchSuggestion {
   id: string;
   subtitle?: string;
   imageUrl?: string;
+  icon?: string;
+  iconColor?: string;
   isSponsored?: boolean;
   hasActiveOffer?: boolean;
   productType?: 'product' | 'service';
@@ -1429,6 +1431,8 @@ export class SearchService implements OnModuleInit {
         c.id,
         c.name,
         c.icon,
+        c.icon_color,
+        c.image_url,
         COALESCE(cc.cnt, 0) AS provider_count,
         GREATEST(
           similarity(c.name, $1),
@@ -1463,7 +1467,9 @@ export class SearchService implements OnModuleInit {
         type: 'category' as const,
         id: r.id,
         subtitle: `${r.provider_count} providers`,
-        imageUrl: r.icon,
+        imageUrl: r.image_url || null,
+        icon: r.icon || null,
+        iconColor: r.icon_color || null,
       }));
     } catch {
       return [];
