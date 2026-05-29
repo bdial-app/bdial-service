@@ -308,6 +308,7 @@ export class AdminService {
       adminNotes,
       reviewedAt: new Date(),
       reviewedBy: admin.id,
+      reviewerName: admin.name ?? null,
     };
     if (ijamatStatus) data.ijamatStatus = ijamatStatus;
 

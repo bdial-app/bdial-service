@@ -12,6 +12,7 @@ import {
   ProviderOffer,
   SponsoredListing,
   Product,
+  SystemSetting,
 } from '../entities';
 import { CategoryPersonalizationService } from '../users/category-personalization.service';
 import { HomeFeedDto } from './dto/home-feed.dto';
@@ -36,6 +37,7 @@ export class HomeService {
     @InjectRepository(ProviderOffer) private offerRepo: Repository<ProviderOffer>,
     @InjectRepository(SponsoredListing) private sponsoredRepo: Repository<SponsoredListing>,
     @InjectRepository(Product) private productRepo: Repository<Product>,
+    @InjectRepository(SystemSetting) private settingRepo: Repository<SystemSetting>,
     private readonly categoryPersonalization: CategoryPersonalizationService,
     private readonly dataSource: DataSource,
     @Inject(CACHE_MANAGER) private cacheManager: Cache,
@@ -905,6 +907,16 @@ export class HomeService {
     city?: string,
     limit = 6,
   ) {
+    // Feature flag gate — cached for 5 min to avoid per-request DB hits
+    const cacheKey = 'setting:sponsorships_enabled';
+    let flagValue = await this.cacheManager.get<string>(cacheKey);
+    if (flagValue == null) {
+      const row = await this.settingRepo.findOneBy({ key: 'sponsorships_enabled' });
+      flagValue = row?.value ?? 'false';
+      await this.cacheManager.set(cacheKey, flagValue, HomeService.TTL_5MIN);
+    }
+    if (flagValue !== 'true') return [];
+
     const now = new Date();
     const hasLocation = lat != null && lng != null;
 

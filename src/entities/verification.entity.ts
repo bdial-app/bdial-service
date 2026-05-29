@@ -52,6 +52,9 @@ export class Verification {
   @Column({ name: 'reviewed_by', type: 'uuid', nullable: true })
   reviewedBy: string | null;
 
+  @Column({ name: 'reviewer_name', type: 'varchar', length: 255, nullable: true })
+  reviewerName: string | null;
+
   @ManyToOne(() => User, (u) => u.verification)
   @JoinColumn({ name: 'user_id' })
   user: User;
