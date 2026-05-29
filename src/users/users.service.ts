@@ -159,7 +159,18 @@ export class UsersService {
         }
       }
 
-      // 3. Remove provider child records that lack ON DELETE CASCADE at DB level
+      // 3a. Remove verification row (FK has no ON DELETE CASCADE)
+      await queryRunner.query(
+        `DELETE FROM verifications WHERE user_id = $1`,
+        [userId],
+      );
+      // Nullify reviewed_by on verifications this user may have approved/rejected
+      await queryRunner.query(
+        `UPDATE verifications SET reviewed_by = NULL WHERE reviewed_by = $1`,
+        [userId],
+      );
+
+      // 3b. Remove provider child records that lack ON DELETE CASCADE at DB level
       if (user.provider) {
         const providerId = user.provider.id;
         await queryRunner.query(

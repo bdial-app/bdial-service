@@ -31,6 +31,10 @@ export class OtpService {
   private readonly resendCooldownMs: number;
   private readonly reviewPhone: string | undefined;
   private readonly reviewOtp: string | undefined;
+  private readonly reviewPhone2: string | undefined;
+  private readonly reviewOtp2: string | undefined;
+  private readonly reviewPhone3: string | undefined;
+  private readonly reviewOtp3: string | undefined;
 
   /** In-memory store used ONLY in development mode */
   private readonly devOtpStore = new Map<string, OtpRecord>();
@@ -45,6 +49,10 @@ export class OtpService {
     this.resendCooldownMs = 60 * 1000; // 60 seconds
     this.reviewPhone = config.get<string>('APPLE_REVIEW_PHONE');
     this.reviewOtp = config.get<string>('APPLE_REVIEW_OTP');
+    this.reviewPhone2 = config.get<string>('APPLE_REVIEW_PHONE_2');
+    this.reviewOtp2 = config.get<string>('APPLE_REVIEW_OTP_2');
+    this.reviewPhone3 = config.get<string>('APPLE_REVIEW_PHONE_3');
+    this.reviewOtp3 = config.get<string>('APPLE_REVIEW_OTP_3');
 
     if (!this.isDevelopment) {
       if (!this.msg91.isConfigured()) {
@@ -201,16 +209,19 @@ export class OtpService {
   // ─── Apple App Review bypass ───────────────────────────────────
 
   private isReviewAccount(phone: string, otp: string): boolean {
-    return !!(
-      this.reviewPhone &&
-      this.reviewOtp &&
-      phone === this.reviewPhone &&
-      otp === this.reviewOtp
+    return (
+      !!(this.reviewPhone && this.reviewOtp && phone === this.reviewPhone && otp === this.reviewOtp) ||
+      !!(this.reviewPhone2 && this.reviewOtp2 && phone === this.reviewPhone2 && otp === this.reviewOtp2) ||
+      !!(this.reviewPhone3 && this.reviewOtp3 && phone === this.reviewPhone3 && otp === this.reviewOtp3)
     );
   }
 
   private isReviewPhone(phone: string): boolean {
-    return !!(this.reviewPhone && phone === this.reviewPhone);
+    return (
+      !!(this.reviewPhone && phone === this.reviewPhone) ||
+      !!(this.reviewPhone2 && phone === this.reviewPhone2) ||
+      !!(this.reviewPhone3 && phone === this.reviewPhone3)
+    );
   }
 
   // ─── Development mode (in-memory) ────────────────────────────────

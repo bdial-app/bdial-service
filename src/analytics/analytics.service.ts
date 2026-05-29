@@ -368,7 +368,8 @@ export class AnalyticsService {
       .createQueryBuilder('l')
       .leftJoinAndSelect('l.user', 'u')
       .where('l.providerId = :pid', { pid: provider.id })
-      .andWhere('l.userId IS NOT NULL');
+      .andWhere('l.userId IS NOT NULL')
+      .andWhere('l.userId != :ownerId', { ownerId: provider.userId });
 
     if (tier) qb.andWhere('l.tier = :tier', { tier });
     if (status === 'unlocked') qb.andWhere('l.isUnlocked = true');

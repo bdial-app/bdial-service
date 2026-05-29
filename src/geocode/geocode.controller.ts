@@ -22,6 +22,6 @@ export class GeocodeController {
   @ApiOperation({ summary: 'Search locations by text query with autocomplete (Flow 2-a)' })
   @ApiResponse({ status: 200, description: 'Returns list of location suggestions with lat/lng' })
   searchLocations(@Query() dto: SearchLocationDto) {
-    return this.geocodeService.searchLocations(dto.query);
+    return this.geocodeService.searchLocations(dto.query, dto.sessionToken);
   }
 }

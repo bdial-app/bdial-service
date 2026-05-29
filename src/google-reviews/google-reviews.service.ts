@@ -4,10 +4,12 @@ import {
   BadRequestException,
   ForbiddenException,
   Logger,
+  Inject,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
+import { CACHE_MANAGER, Cache } from '@nestjs/cache-manager';
 import { Provider, Review } from '../entities';
 import {
   GooglePlaceCandidate,
@@ -21,10 +23,15 @@ export class GoogleReviewsService {
   private readonly apiKey: string | undefined;
   private readonly CACHE_TTL_DAYS = 7; // On-demand cache: refresh if older than 7 days
 
+  // Cache TTLs for Google API responses
+  private static readonly REVIEWS_CACHE_TTL = 6 * 60 * 60 * 1000; // 6 hours
+  private static readonly AGGREGATES_CACHE_TTL = 12 * 60 * 60 * 1000; // 12 hours
+
   constructor(
     @InjectRepository(Provider) private providerRepo: Repository<Provider>,
     @InjectRepository(Review) private reviewRepo: Repository<Review>,
     private config: ConfigService,
+    @Inject(CACHE_MANAGER) private cacheManager: Cache,
   ) {
     this.apiKey = this.config.get<string>('GOOGLE_MAPS_API_KEY');
   }
@@ -143,6 +150,7 @@ export class GoogleReviewsService {
   /**
    * Fetch Google reviews on-demand for a provider.
    * Refreshes cached aggregates if stale (>7 days).
+   * Reviews are cached for 6 hours to reduce API calls.
    */
   async getGoogleReviews(providerId: string): Promise<GoogleReviewResponse[]> {
     this.ensureApiKey();
@@ -151,6 +159,11 @@ export class GoogleReviewsService {
     if (!provider) throw new NotFoundException('Provider not found');
     if (!provider.googlePlaceId) return [];
 
+    // Check in-memory cache for reviews
+    const cacheKey = `google-reviews:${provider.googlePlaceId}`;
+    const cached = await this.cacheManager.get<GoogleReviewResponse[]>(cacheKey);
+    if (cached) return cached;
+
     // Check if aggregates need refresh (stale cache)
     if (this.isCacheStale(provider.googleLastFetchedAt)) {
       this.refreshAggregatesInBackground(provider).catch((err) =>
@@ -158,7 +171,7 @@ export class GoogleReviewsService {
       );
     }
 
-    // Fetch live reviews from Place Details
+    // Fetch live reviews from Place Details — only request 'reviews' field (cheapest tier)
     const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${provider.googlePlaceId}&fields=reviews&key=${this.apiKey}`;
     const res = await this.fetchWithTimeout(url);
     const data = await res.json();
@@ -167,7 +180,7 @@ export class GoogleReviewsService {
       return [];
     }
 
-    return data.result.reviews.map((r: any) => ({
+    const reviews: GoogleReviewResponse[] = data.result.reviews.map((r: any) => ({
       source: 'google' as const,
       authorName: r.author_name || 'Anonymous',
       authorPhotoUrl: r.profile_photo_url || null,
@@ -181,6 +194,11 @@ export class GoogleReviewsService {
         photoUrl: r.profile_photo_url || null,
       },
     }));
+
+    // Cache reviews for 6 hours
+    await this.cacheManager.set(cacheKey, reviews, GoogleReviewsService.REVIEWS_CACHE_TTL);
+
+    return reviews;
   }
 
   /**
@@ -405,6 +423,12 @@ export class GoogleReviewsService {
   private async fetchPlaceAggregates(
     placeId: string,
   ): Promise<{ rating: number | null; userRatingsTotal: number | null }> {
+    // Check cache first
+    const cacheKey = `google-aggregates:${placeId}`;
+    const cached = await this.cacheManager.get<{ rating: number | null; userRatingsTotal: number | null }>(cacheKey);
+    if (cached) return cached;
+
+    // Only request rating + user_ratings_total fields (Basic tier — cheapest)
     const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${placeId}&fields=rating,user_ratings_total&key=${this.apiKey}`;
     const res = await this.fetchWithTimeout(url);
     const data = await res.json();
@@ -413,10 +437,15 @@ export class GoogleReviewsService {
       return { rating: null, userRatingsTotal: null };
     }
 
-    return {
+    const result = {
       rating: data.result.rating ?? null,
       userRatingsTotal: data.result.user_ratings_total ?? null,
     };
+
+    // Cache aggregates for 12 hours
+    await this.cacheManager.set(cacheKey, result, GoogleReviewsService.AGGREGATES_CACHE_TTL);
+
+    return result;
   }
 
   private normalizePhoneForSearch(phone: string): string {

@@ -14,6 +14,7 @@ import {
   UserCategoryInteraction,
   User,
   Product,
+  SystemSetting,
 } from '../entities';
 import { CategoryPersonalizationService } from '../users/category-personalization.service';
 
@@ -31,6 +32,7 @@ import { CategoryPersonalizationService } from '../users/category-personalizatio
       UserCategoryInteraction,
       User,
       Product,
+      SystemSetting,
     ]),
   ],
   controllers: [HomeController],
