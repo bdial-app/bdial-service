@@ -463,6 +463,14 @@ export class HomeService {
       ? `AND ${extraConditions.join(' AND ')}`
       : '';
 
+    // Performance notes:
+    //   • `expanded_cats`      is built once, then JOINed twice (direct + subcat).
+    //   • `matching_providers` aggregates provider→best-rank once via the
+    //     (category_id, provider_id) composite index, replacing a per-row EXISTS.
+    //   • All three signals are read from joined columns — no correlated subqueries
+    //     in the SELECT or WHERE list, so each candidate product is scored in one pass.
+    //   • Index usage: products(category_id, subcategory_id) covers ec_direct/ec_sub;
+    //     provider_categories(category_id, provider_id) covers matching_providers.
     const sql = `
       WITH user_cats AS (
         -- top N preferred category IDs, with ordinal rank (1 = strongest)
@@ -470,13 +478,25 @@ export class HomeService {
         FROM unnest($1::uuid[]) WITH ORDINALITY AS t(cat_id, ord)
       ),
       expanded_cats AS (
-        -- expand to include subcategories so a top-level pref matches children
-        SELECT cat_id, rank FROM user_cats
-        UNION
-        SELECT c.id AS cat_id, uc.rank
-        FROM categories c
-        JOIN user_cats uc ON c.parent_id = uc.cat_id
-        WHERE c.is_active = true
+        -- expand to include subcategories; dedup keeps the best rank if a child
+        -- inherits from one parent rank while also being explicitly listed
+        SELECT cat_id, MIN(rank) AS rank
+        FROM (
+          SELECT cat_id, rank FROM user_cats
+          UNION ALL
+          SELECT c.id AS cat_id, uc.rank
+          FROM categories c
+          JOIN user_cats uc ON c.parent_id = uc.cat_id
+          WHERE c.is_active = true
+        ) u
+        GROUP BY cat_id
+      ),
+      matching_providers AS (
+        -- one row per provider with their best (lowest) preference rank
+        SELECT pc.provider_id, MIN(ec.rank) AS rank
+        FROM provider_categories pc
+        JOIN expanded_cats ec ON ec.cat_id = pc.category_id
+        GROUP BY pc.provider_id
       )
       SELECT
         prod.id,
@@ -494,42 +514,29 @@ export class HomeService {
         p.city                   AS "providerCity",
         p.area                   AS "providerArea",
         p.status                 AS "providerStatus",
-        -- best signal across direct cat match, subcat match, or provider-cat match
         GREATEST(
-          CASE WHEN prod.category_id    IN (SELECT cat_id FROM expanded_cats) THEN 3 ELSE 0 END,
-          CASE WHEN prod.subcategory_id IN (SELECT cat_id FROM expanded_cats) THEN 2 ELSE 0 END,
-          CASE WHEN EXISTS (
-            SELECT 1 FROM provider_categories pc
-            WHERE pc.provider_id = p.id
-              AND pc.category_id IN (SELECT cat_id FROM expanded_cats)
-          ) THEN 1 ELSE 0 END
-        )                                                              AS signal_strength,
-        -- best (lowest) preference rank among matching categories
-        COALESCE(
-          LEAST(
-            (SELECT MIN(ec.rank) FROM expanded_cats ec WHERE ec.cat_id = prod.category_id),
-            (SELECT MIN(ec.rank) FROM expanded_cats ec WHERE ec.cat_id = prod.subcategory_id),
-            (SELECT MIN(ec.rank)
-               FROM expanded_cats ec
-               JOIN provider_categories pc ON pc.category_id = ec.cat_id
-              WHERE pc.provider_id = p.id)
-          ),
-          999
-        )                                                              AS preference_rank
+          CASE WHEN ec_direct.cat_id IS NOT NULL THEN 3 ELSE 0 END,
+          CASE WHEN ec_sub.cat_id    IS NOT NULL THEN 2 ELSE 0 END,
+          CASE WHEN mp.provider_id   IS NOT NULL THEN 1 ELSE 0 END
+        )                        AS signal_strength,
+        LEAST(
+          COALESCE(ec_direct.rank, 999),
+          COALESCE(ec_sub.rank,    999),
+          COALESCE(mp.rank,        999)
+        )                        AS preference_rank
       FROM products prod
-      JOIN providers p ON p.id = prod.provider_id
+      JOIN providers p                  ON p.id           = prod.provider_id
+      LEFT JOIN expanded_cats ec_direct ON ec_direct.cat_id = prod.category_id
+      LEFT JOIN expanded_cats ec_sub    ON ec_sub.cat_id    = prod.subcategory_id
+      LEFT JOIN matching_providers mp   ON mp.provider_id   = p.id
       WHERE prod.is_active = true
         AND prod.photo_url IS NOT NULL
         AND p.status IN ('active', 'unverified')
         AND p.is_available = true
         AND (
-          prod.category_id    IN (SELECT cat_id FROM expanded_cats)
-          OR prod.subcategory_id IN (SELECT cat_id FROM expanded_cats)
-          OR EXISTS (
-            SELECT 1 FROM provider_categories pc
-            WHERE pc.provider_id = p.id
-              AND pc.category_id IN (SELECT cat_id FROM expanded_cats)
-          )
+          ec_direct.cat_id IS NOT NULL
+          OR ec_sub.cat_id IS NOT NULL
+          OR mp.provider_id IS NOT NULL
         )
         ${extraWhere}
       ORDER BY
