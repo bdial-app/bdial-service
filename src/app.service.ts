@@ -24,6 +24,7 @@ export class AppService {
       'search_enabled',
       'offers_require_approval',
       'sponsorship_requires_approval',
+      'sponsorships_enabled',
       'leads_monetization_enabled',
       'deals_monetization_enabled',
       'subscriptions_visible',

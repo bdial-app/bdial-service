@@ -160,11 +160,17 @@ export class HomeService {
     // Phase 3: Personalization (if user is logged in)
     let personalizedCategories: any[] | null = null;
     let forYouProviders: any[] | null = null;
+    let forYouProducts: any[] | null = null;
 
     if (userId) {
-      const [catWeights, forYou] = await Promise.all([
+      // Exclude products already shown in vicinity-based "best products" section
+      const bestProductIds = new Set<string>(
+        (bestProducts || []).map((p: any) => p.id).filter(Boolean),
+      );
+      const [catWeights, forYou, forYouProds] = await Promise.all([
         this.categoryPersonalization.getPersonalizedCategories(userId, 10),
         this.getForYouProviders(userId, lat, lng, city, 6),
+        this.getForYouProducts(userId, lat, lng, city, 4, bestProductIds),
       ]);
       if (catWeights.length > 0) {
         personalizedCategories = catWeights.map((cw) => ({
@@ -178,6 +184,9 @@ export class HomeService {
       }
       if (forYou.length > 0) {
         forYouProviders = forYou;
+      }
+      if (forYouProds.length > 0) {
+        forYouProducts = forYouProds;
       }
     }
 
@@ -233,6 +242,7 @@ export class HomeService {
       sponsoredProviders,
       womenLedProviders: dedupedWomenLed,
       bestProducts,
+      forYouProducts,
       searchPrompts,
     };
   }
@@ -387,6 +397,170 @@ export class HomeService {
     const rows: any[] = await this.dataSource.query(sql, params);
 
     return this.mapProviders(rows);
+  }
+
+  /**
+   * "For You" products section — products from providers in the user's top
+   * categories, ranked by signal strength and category preference.
+   *
+   * Matching signals (strongest → weakest):
+   *   3. product.category_id    is in the user's top categories
+   *   2. product.subcategory_id is in the user's top categories
+   *   1. product's provider is registered under a top category
+   *
+   * The user's top categories are also expanded to include their subcategories
+   * so a top-level preference like "Beauty" matches products tagged under
+   * "Beauty Salon", "Mehndi", etc.
+   *
+   * Excludes products already shown in "Best Products This Week" (vicinity-based)
+   * so the user doesn't see the same product twice on the home page.
+   */
+  private async getForYouProducts(
+    userId: string,
+    lat?: number,
+    lng?: number,
+    city?: string,
+    limit = 4,
+    excludeProductIds?: Set<string>,
+  ) {
+    // Fetch up to 8 top categories — gives enough breadth for diverse picks
+    const topCategoryIds = await this.categoryPersonalization.getTopCategoryIds(userId, 8);
+    if (topCategoryIds.length === 0) return [];
+
+    const hasLocation = lat != null && lng != null;
+
+    // Build dynamic geo/city filters with positional params
+    const params: any[] = [topCategoryIds];
+    let pi = 2;
+    const extraConditions: string[] = [];
+
+    if (hasLocation) {
+      extraConditions.push(`p.latitude IS NOT NULL`, `p.longitude IS NOT NULL`);
+      // 50km bounding box — same convention as other personalized sections
+      const maxKm = 50;
+      const dLat = maxKm / 111.32;
+      const dLng = maxKm / (111.32 * Math.cos((lat! * Math.PI) / 180));
+      extraConditions.push(
+        `p.latitude  BETWEEN $${pi}     AND $${pi + 1}`,
+        `p.longitude BETWEEN $${pi + 2} AND $${pi + 3}`,
+      );
+      params.push(lat! - dLat, lat! + dLat, lng! - dLng, lng! + dLng);
+      pi += 4;
+    }
+
+    if (city) {
+      extraConditions.push(`p.city ILIKE $${pi}`);
+      params.push(`%${city}%`);
+      pi++;
+    }
+
+    // Over-fetch so we have a pool to dedup against bestProducts
+    const fetchLimit = limit * 3;
+    params.push(fetchLimit);
+    const limitParam = `$${pi}`;
+
+    const extraWhere = extraConditions.length
+      ? `AND ${extraConditions.join(' AND ')}`
+      : '';
+
+    // Performance notes:
+    //   • `expanded_cats`      is built once, then JOINed twice (direct + subcat).
+    //   • `matching_providers` aggregates provider→best-rank once via the
+    //     (category_id, provider_id) composite index, replacing a per-row EXISTS.
+    //   • All three signals are read from joined columns — no correlated subqueries
+    //     in the SELECT or WHERE list, so each candidate product is scored in one pass.
+    //   • Index usage: products(category_id, subcategory_id) covers ec_direct/ec_sub;
+    //     provider_categories(category_id, provider_id) covers matching_providers.
+    const sql = `
+      WITH user_cats AS (
+        -- top N preferred category IDs, with ordinal rank (1 = strongest)
+        SELECT cat_id::uuid AS cat_id, ord AS rank
+        FROM unnest($1::uuid[]) WITH ORDINALITY AS t(cat_id, ord)
+      ),
+      expanded_cats AS (
+        -- expand to include subcategories; dedup keeps the best rank if a child
+        -- inherits from one parent rank while also being explicitly listed
+        SELECT cat_id, MIN(rank) AS rank
+        FROM (
+          SELECT cat_id, rank FROM user_cats
+          UNION ALL
+          SELECT c.id AS cat_id, uc.rank
+          FROM categories c
+          JOIN user_cats uc ON c.parent_id = uc.cat_id
+          WHERE c.is_active = true
+        ) u
+        GROUP BY cat_id
+      ),
+      matching_providers AS (
+        -- one row per provider with their best (lowest) preference rank
+        SELECT pc.provider_id, MIN(ec.rank) AS rank
+        FROM provider_categories pc
+        JOIN expanded_cats ec ON ec.cat_id = pc.category_id
+        GROUP BY pc.provider_id
+      )
+      SELECT
+        prod.id,
+        prod.name,
+        prod.photo_url           AS "photoUrl",
+        prod.photo_urls          AS "photoUrls",
+        prod.price,
+        prod.currency,
+        prod.product_type        AS "productType",
+        prod.description,
+        prod.is_hero             AS "isHero",
+        p.id                     AS "providerId",
+        p.brand_name             AS "providerName",
+        p.profile_photo_url      AS "providerImage",
+        p.city                   AS "providerCity",
+        p.area                   AS "providerArea",
+        p.status                 AS "providerStatus",
+        GREATEST(
+          CASE WHEN ec_direct.cat_id IS NOT NULL THEN 3 ELSE 0 END,
+          CASE WHEN ec_sub.cat_id    IS NOT NULL THEN 2 ELSE 0 END,
+          CASE WHEN mp.provider_id   IS NOT NULL THEN 1 ELSE 0 END
+        )                        AS signal_strength,
+        LEAST(
+          COALESCE(ec_direct.rank, 999),
+          COALESCE(ec_sub.rank,    999),
+          COALESCE(mp.rank,        999)
+        )                        AS preference_rank
+      FROM products prod
+      JOIN providers p                  ON p.id           = prod.provider_id
+      LEFT JOIN expanded_cats ec_direct ON ec_direct.cat_id = prod.category_id
+      LEFT JOIN expanded_cats ec_sub    ON ec_sub.cat_id    = prod.subcategory_id
+      LEFT JOIN matching_providers mp   ON mp.provider_id   = p.id
+      WHERE prod.is_active = true
+        AND prod.photo_url IS NOT NULL
+        AND p.status IN ('active', 'unverified')
+        AND p.is_available = true
+        AND (
+          ec_direct.cat_id IS NOT NULL
+          OR ec_sub.cat_id IS NOT NULL
+          OR mp.provider_id IS NOT NULL
+        )
+        ${extraWhere}
+      ORDER BY
+        signal_strength DESC,
+        preference_rank ASC,
+        prod.is_hero    DESC,
+        prod.display_order ASC,
+        prod.created_at DESC
+      LIMIT ${limitParam}
+    `;
+
+    const rows: any[] = await this.dataSource.query(sql, params);
+
+    // Dedup against vicinity-based bestProducts (same product shouldn't appear twice)
+    // and against itself (just in case a product matches multiple signals).
+    const seen = new Set<string>(excludeProductIds ?? []);
+    const out: any[] = [];
+    for (const r of rows) {
+      if (seen.has(r.id)) continue;
+      seen.add(r.id);
+      out.push(r);
+      if (out.length >= limit) break;
+    }
+    return out;
   }
 
   /**
