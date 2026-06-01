@@ -1854,6 +1854,61 @@ export class HomeService {
       result = [...result, ...fallback];
     }
 
+    // Final fallback: if the city filter starved the section (e.g. a logged-in
+    // user whose profile city has no products), relax the city filter entirely.
+    // Mirrors getNearbyProviders' city-relaxation so logged-in users see the
+    // same products guests do instead of an empty (hidden) section. When lat/lng
+    // are present, order by proximity so the relaxed results stay nearby.
+    if (result.length < 3 && city) {
+      const relaxParams: any[] = [];
+      const existingIds = result.map((r: any) => r.id);
+      const excludeCondition = existingIds.length > 0
+        ? `AND prod.id NOT IN (${existingIds.map((_: any, i: number) => `$${i + 1}`).join(',')})`
+        : '';
+      relaxParams.push(...existingIds);
+
+      const hasLocation = lat != null && lng != null;
+      let distExpr = 'NULL::float';
+      let geoOrder = 'p.is_featured DESC, prod.name ASC';
+      if (hasLocation) {
+        const pi = relaxParams.length + 1;
+        distExpr = `1.4 * 6371 * acos(LEAST(1.0, cos(radians($${pi})) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians($${pi + 1})) + sin(radians($${pi})) * sin(radians(p.latitude))))`;
+        relaxParams.push(lat, lng);
+        geoOrder = 'distance ASC NULLS LAST, p.is_featured DESC';
+      }
+      const relaxLimit = limit - result.length;
+
+      const relaxed = await this.dataSource.query(`
+        SELECT
+          prod.id,
+          prod.name,
+          prod.photo_url AS "photoUrl",
+          prod.photo_urls AS "photoUrls",
+          prod.price,
+          prod.currency,
+          prod.product_type AS "productType",
+          prod.description,
+          prod.is_hero AS "isHero",
+          p.id AS "providerId",
+          p.brand_name AS "providerName",
+          p.profile_photo_url AS "providerImage",
+          p.city AS "providerCity",
+          p.area AS "providerArea",
+          p.status AS "providerStatus",
+          ${distExpr} AS distance
+        FROM products prod
+        JOIN providers p ON p.id = prod.provider_id
+        WHERE prod.is_active = true
+          AND prod.photo_url IS NOT NULL
+          AND p.status IN ('active', 'unverified')
+          ${excludeCondition}
+        ORDER BY prod.is_hero DESC, ${geoOrder}
+        LIMIT ${relaxLimit}
+      `, relaxParams);
+
+      result = [...result, ...relaxed];
+    }
+
     await this.cacheManager.set(cacheKey, result, HomeService.TTL_2MIN);
     return result;
   }
