@@ -264,7 +264,15 @@ export class CategoryPersonalizationService {
     if (!query?.trim()) return [];
 
     const q = query.toLowerCase().trim();
-    const tsQuery = q.split(/\s+/).filter(Boolean).map(w => w + ':*').join(' & ');
+    // Strip non-alphanumeric tokens — bare punctuation like "&" otherwise becomes
+    // ":*" alone and breaks to_tsquery with "syntax error in tsquery".
+    const tsQuery = q
+      .split(/\s+/)
+      .map(w => w.replace(/[^a-z0-9]/g, ''))
+      .filter(Boolean)
+      .map(w => w + ':*')
+      .join(' & ');
+    if (!tsQuery) return [];
 
     const rows: any[] = await this.dataSource.query(
       `SELECT id FROM categories

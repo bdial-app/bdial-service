@@ -1,4 +1,4 @@
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable, Inject, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, IsNull, Not, MoreThan, LessThan, DataSource } from 'typeorm';
 import { CACHE_MANAGER, Cache } from '@nestjs/cache-manager';
@@ -19,6 +19,7 @@ import { HomeFeedDto } from './dto/home-feed.dto';
 
 @Injectable()
 export class HomeService {
+  private readonly logger = new Logger(HomeService.name);
   // Cache keys & TTLs
   private static readonly CACHE_PLATFORM_STATS = 'home:platform-stats';
   private static readonly CACHE_TRENDING_CATS = 'home:trending-categories';
@@ -167,11 +168,25 @@ export class HomeService {
       const bestProductIds = new Set<string>(
         (bestProducts || []).map((p: any) => p.id).filter(Boolean),
       );
-      const [catWeights, forYou, forYouProds] = await Promise.all([
+      // Use allSettled so a single failing personalization query doesn't
+      // cascade into a 500 that nukes the entire home feed for logged-in users.
+      const [catWeightsRes, forYouRes, forYouProdsRes] = await Promise.allSettled([
         this.categoryPersonalization.getPersonalizedCategories(userId, 10),
         this.getForYouProviders(userId, lat, lng, city, 6),
         this.getForYouProducts(userId, lat, lng, city, 4, bestProductIds),
       ]);
+      const catWeights = catWeightsRes.status === 'fulfilled' ? catWeightsRes.value : [];
+      const forYou = forYouRes.status === 'fulfilled' ? forYouRes.value : [];
+      const forYouProds = forYouProdsRes.status === 'fulfilled' ? forYouProdsRes.value : [];
+      if (catWeightsRes.status === 'rejected') {
+        this.logger.warn(`getPersonalizedCategories failed for ${userId}: ${catWeightsRes.reason?.message || catWeightsRes.reason}`);
+      }
+      if (forYouRes.status === 'rejected') {
+        this.logger.warn(`getForYouProviders failed for ${userId}: ${forYouRes.reason?.message || forYouRes.reason}`);
+      }
+      if (forYouProdsRes.status === 'rejected') {
+        this.logger.warn(`getForYouProducts failed for ${userId}: ${forYouProdsRes.reason?.message || forYouProdsRes.reason}`);
+      }
       if (catWeights.length > 0) {
         personalizedCategories = catWeights.map((cw) => ({
           id: cw.categoryId,
@@ -544,7 +559,7 @@ export class HomeService {
         preference_rank ASC,
         prod.is_hero    DESC,
         prod.display_order ASC,
-        prod.created_at DESC
+        prod.id DESC
       LIMIT ${limitParam}
     `;
 
