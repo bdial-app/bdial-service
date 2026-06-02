@@ -1902,6 +1902,10 @@ export class PaymentService {
     sponsorshipTypes?: string[];
     isActive?: boolean;
     sortOrder?: number;
+    razorpayPlanIdMonthly?: string | null;
+    razorpayPlanIdYearly?: string | null;
+    appleProductIdMonthly?: string | null;
+    appleProductIdYearly?: string | null;
   }) {
     const existing = await this.planRepo.findOneBy({ slug: dto.slug });
     if (existing) {
@@ -1920,6 +1924,11 @@ export class PaymentService {
       sponsorshipTypes: dto.sponsorshipTypes ?? null,
       isActive: dto.isActive ?? true,
       sortOrder: dto.sortOrder ?? 0,
+      // Payment gateway product ids (Razorpay for Android/Web, Apple for iOS IAP)
+      razorpayPlanIdMonthly: dto.razorpayPlanIdMonthly ?? null,
+      razorpayPlanIdYearly: dto.razorpayPlanIdYearly ?? null,
+      appleProductIdMonthly: dto.appleProductIdMonthly ?? null,
+      appleProductIdYearly: dto.appleProductIdYearly ?? null,
     });
 
     return this.planRepo.save(plan);
