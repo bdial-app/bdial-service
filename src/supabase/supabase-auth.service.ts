@@ -82,7 +82,9 @@ export class SupabaseAuthService {
         // Try to get existing user by email
         if (email) {
           const { data: existingData } = await this.supabaseAdmin.auth.admin.listUsers();
-          const existingUser = existingData?.users.find(u => u.email === email);
+          const existingUser = (existingData?.users as any[] | undefined)?.find(
+            (u: any) => u.email === email,
+          );
           if (existingUser) {
             this.logger.debug(`Found existing user: ${existingUser.id}`);
             return existingUser.id;
