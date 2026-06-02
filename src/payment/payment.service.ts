@@ -23,6 +23,7 @@ import { VoucherRedemption } from '../entities/voucher-redemption.entity';
 import { SystemSetting } from '../entities/system-setting.entity';
 import { ProviderOffer } from '../entities/provider-offer.entity';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { AppleVerifyService } from './apple-verify.service';
 import {
   CreateSponsorshipCheckoutDto,
   CreateLeadUnlockCheckoutDto,
@@ -48,6 +49,7 @@ export class PaymentService {
     @InjectRepository(ProviderOffer) private readonly offerRepo: Repository<ProviderOffer>,
     private readonly config: ConfigService,
     private readonly notificationDispatch: NotificationDispatchService,
+    private readonly appleVerify: AppleVerifyService,
   ) {}
 
   // ──────────────────────────────────────────
@@ -166,6 +168,24 @@ export class PaymentService {
 
     // Link payment to listing
     await this.sponsoredListingRepo.update(listing.id, { paymentId: payment.id });
+
+    // iOS → Apple IAP: return the boost plan's Apple product id for StoreKit
+    // instead of a Razorpay order. Fulfilment happens in verifyAppleConsumable.
+    if (dto.gateway === 'apple') {
+      const appleProductId = await this.resolveAppleProductId('sponsorship', { sponsorshipType: dto.type });
+      if (!appleProductId) throw new BadRequestException('Apple product not configured for this boost plan');
+      await this.paymentRepo.update(payment.id, {
+        metadata: { ...payment.metadata, appleProductId } as any,
+        status: 'processing',
+      });
+      return {
+        gateway: 'apple',
+        appleProductId,
+        paymentId: payment.id,
+        price: amount,
+        description: `Sponsored Listing — ${dto.type}`,
+      } as any;
+    }
 
     // Create Razorpay Order
     const amountInPaise = Math.round(amount * 100);
@@ -311,8 +331,30 @@ export class PaymentService {
     });
     await this.paymentRepo.save(payment);
 
-    const amountInPaise = Math.round(amount * 100);
     const tierLabel = tier.charAt(0).toUpperCase() + tier.slice(1);
+
+    // iOS → Apple IAP: stamp the expected product id and return it for StoreKit
+    // instead of creating a Razorpay order. Fulfilment happens in verifyAppleConsumable.
+    if (dto.gateway === 'apple') {
+      const appleProductId = await this.resolveAppleProductId('lead_unlock', { tier });
+      if (!appleProductId) throw new BadRequestException('Apple product not configured for this lead tier');
+      await this.paymentRepo.update(payment.id, {
+        metadata: { ...payment.metadata, appleProductId } as any,
+        status: 'processing',
+      });
+      return {
+        unlocked: false,
+        method: 'payment_required',
+        gateway: 'apple',
+        appleProductId,
+        paymentId: payment.id,
+        price: amount,
+        tier,
+        description: `${tierLabel} Lead Unlock`,
+      };
+    }
+
+    const amountInPaise = Math.round(amount * 100);
 
     const order = await this.razorpay.orders.create({
       amount: amountInPaise,
@@ -621,9 +663,19 @@ export class PaymentService {
     const provider = await this.providerRepo.findOneBy({ userId });
     if (!provider) throw new NotFoundException('Provider not found');
 
-    const { transactionId, originalTransactionId, productId } = body;
+    // ── Cryptographically verify the transaction with Apple ──
+    // Never trust the client-supplied productId/originalTransactionId. We fetch
+    // the transaction from the App Store Server API by its id and use Apple's
+    // verified values as the source of truth.
+    const verified = await this.appleVerify.verifyTransaction(body.transactionId);
+    const productId = verified.productId;
+    const transactionId = verified.transactionId ?? body.transactionId;
+    const originalTransactionId = verified.originalTransactionId;
+    if (!productId || !originalTransactionId) {
+      throw new BadRequestException('Apple transaction missing required fields');
+    }
 
-    // Find the subscription plan matching this Apple product ID
+    // Find the subscription plan matching the VERIFIED Apple product ID
     const plan = await this.planRepo
       .createQueryBuilder('p')
       .where('p.apple_product_id_monthly = :pid OR p.apple_product_id_yearly = :pid', { pid: productId })
@@ -681,6 +733,98 @@ export class PaymentService {
     }).catch(() => {});
 
     return { status: 'active', subscriptionId: subscription.id };
+  }
+
+  /**
+   * Resolve the Apple consumable product id that the iOS client must purchase for
+   * a one-time item. Product ids are admin-configured system settings (so they
+   * can change without a redeploy and must match App Store Connect):
+   *   • lead unlock  → `lead_apple_product_<tier>`  (hot/warm/soft/cold)
+   *   • deal create  → `deal_apple_product`
+   *   • sponsorship  → `appleProductId` on the matching plan in `sponsorship_plans`
+   */
+  private async resolveAppleProductId(
+    type: 'sponsorship' | 'lead_unlock' | 'deal_creation',
+    ctx: { tier?: string; sponsorshipType?: string } = {},
+  ): Promise<string | null> {
+    if (type === 'lead_unlock') {
+      const tier = ctx.tier || 'cold';
+      return (await this.getSetting(`lead_apple_product_${tier}`, '')) || null;
+    }
+    if (type === 'deal_creation') {
+      return (await this.getSetting('deal_apple_product', '')) || null;
+    }
+    // sponsorship — match the plan by type in the sponsorship_plans JSON setting
+    const plansSetting = await this.settingsRepo.findOneBy({ key: 'sponsorship_plans' });
+    if (plansSetting) {
+      try {
+        const plans = JSON.parse(plansSetting.value);
+        const match = plans.find((p: any) => p.type === ctx.sponsorshipType);
+        if (match?.appleProductId) return match.appleProductId as string;
+      } catch {
+        /* fall through to null */
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Verify an Apple consumable purchase (boost / lead unlock / deal creation) and
+   * fulfil the pending payment created by the checkout call. The checkout step
+   * stamped the expected `appleProductId` into the payment metadata; here we
+   * confirm the Apple-verified product id matches it before fulfilling, so a
+   * cheap product can't unlock an expensive action.
+   */
+  async verifyAppleConsumable(userId: string, body: { paymentId: string; transactionId: string }) {
+    const provider = await this.providerRepo.findOneBy({ userId });
+    if (!provider) throw new NotFoundException('Provider not found');
+
+    const payment = await this.paymentRepo.findOneBy({ id: body.paymentId, providerId: provider.id });
+    if (!payment) throw new NotFoundException('Payment not found');
+    if (payment.status === 'succeeded') {
+      return { status: 'succeeded', paymentId: payment.id };
+    }
+
+    const expectedProductId = payment.metadata?.appleProductId;
+    if (!expectedProductId) {
+      throw new BadRequestException('This payment is not an Apple IAP purchase');
+    }
+
+    // Cryptographically verify the transaction with Apple (source of truth).
+    const verified = await this.appleVerify.verifyTransaction(body.transactionId);
+    if (verified.productId !== expectedProductId) {
+      throw new BadRequestException('Purchased product does not match the requested item');
+    }
+
+    // Prevent replaying one Apple transaction across multiple payments.
+    const verifiedTxnId = verified.transactionId ?? body.transactionId;
+    const dup = await this.paymentRepo.findOneBy({ gatewayPaymentId: verifiedTxnId });
+    if (dup && dup.id !== payment.id) {
+      throw new BadRequestException('This Apple transaction has already been used');
+    }
+
+    // Atomic mark-succeeded to avoid double fulfilment.
+    const result = await this.paymentRepo
+      .createQueryBuilder()
+      .update()
+      .set({
+        status: 'succeeded' as PaymentStatus,
+        paymentGateway: 'apple',
+        gatewayPaymentId: verifiedTxnId,
+        gatewayOrderId: verified.originalTransactionId ?? verifiedTxnId,
+      })
+      .where('id = :id', { id: payment.id })
+      .andWhere('status != :s', { s: 'succeeded' })
+      .execute();
+    if (result.affected === 0) {
+      return { status: 'succeeded', paymentId: payment.id };
+    }
+
+    payment.status = 'succeeded';
+    await this.fulfillPayment(payment);
+
+    this.logger.log(`Apple consumable fulfilled: ${payment.id} (${payment.type})`);
+    return { status: 'succeeded', paymentId: payment.id };
   }
 
   // ──────────────────────────────────────────
@@ -1240,6 +1384,26 @@ export class PaymentService {
       discountAmount,
     });
     await this.paymentRepo.save(payment);
+
+    // iOS → Apple IAP: return the deal-creation Apple product id for StoreKit
+    // instead of a Razorpay order. Fulfilment happens in verifyAppleConsumable.
+    if (dto.gateway === 'apple') {
+      const appleProductId = await this.resolveAppleProductId('deal_creation');
+      if (!appleProductId) throw new BadRequestException('Apple product not configured for deal creation');
+      await this.paymentRepo.update(payment.id, {
+        metadata: { ...payment.metadata, appleProductId } as any,
+        status: 'processing',
+      });
+      return {
+        requiresPayment: true,
+        method: 'payment_required',
+        gateway: 'apple',
+        appleProductId,
+        paymentId: payment.id,
+        price: amount,
+        description: 'Deal Creation',
+      } as any;
+    }
 
     const amountInPaise = Math.round(amount * 100);
     const order = await this.razorpay.orders.create({

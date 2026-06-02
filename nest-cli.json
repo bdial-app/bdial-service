@@ -3,6 +3,11 @@
   "collection": "@nestjs/schematics",
   "sourceRoot": "src",
   "compilerOptions": {
-    "deleteOutDir": true
+    "deleteOutDir": true,
+    "assets": [
+      { "include": "payment/apple-certs/*.cer", "outDir": "dist", "watchAssets": false },
+      { "include": "payment/apple-certs/*.der", "outDir": "dist", "watchAssets": false },
+      { "include": "payment/apple-certs/*.crt", "outDir": "dist", "watchAssets": false }
+    ]
   }
 }
