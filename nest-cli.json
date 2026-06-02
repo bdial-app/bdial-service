@@ -5,9 +5,9 @@
   "compilerOptions": {
     "deleteOutDir": true,
     "assets": [
-      { "include": "payment/apple-certs/*.cer", "outDir": "dist", "watchAssets": false },
-      { "include": "payment/apple-certs/*.der", "outDir": "dist", "watchAssets": false },
-      { "include": "payment/apple-certs/*.crt", "outDir": "dist", "watchAssets": false }
+      { "include": "payment/apple-certs/*.cer", "outDir": "dist/src", "watchAssets": false },
+      { "include": "payment/apple-certs/*.der", "outDir": "dist/src", "watchAssets": false },
+      { "include": "payment/apple-certs/*.crt", "outDir": "dist/src", "watchAssets": false }
     ]
   }
 }

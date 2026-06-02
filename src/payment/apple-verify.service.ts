@@ -55,19 +55,26 @@ export class AppleVerifyService {
 
   private loadRootCerts(): Buffer[] {
     if (this.rootCerts) return this.rootCerts;
-    // __dirname resolves to dist/payment at runtime; certs are copied alongside.
-    const dir = join(__dirname, 'apple-certs');
-    if (!existsSync(dir)) {
+    // Resolve the certs dir across build layouts (compiled __dirname is
+    // dist/src/payment; assets may land in dist/src/payment or dist/payment;
+    // ts-node/dev uses src/payment). Try each and use the first that has certs.
+    const candidates = [
+      join(__dirname, 'apple-certs'),
+      join(process.cwd(), 'dist', 'src', 'payment', 'apple-certs'),
+      join(process.cwd(), 'dist', 'payment', 'apple-certs'),
+      join(process.cwd(), 'src', 'payment', 'apple-certs'),
+    ];
+    const dir = candidates.find(
+      (d) =>
+        existsSync(d) &&
+        readdirSync(d).some((f) => /\.(cer|der|crt)$/i.test(f)),
+    );
+    if (!dir) {
       throw new BadRequestException(
-        'Apple root certificates directory missing (src/payment/apple-certs)',
+        `Apple root certificates not found. Looked in: ${candidates.join(', ')}`,
       );
     }
-    const files = readdirSync(dir).filter(
-      (f) => f.endsWith('.cer') || f.endsWith('.der') || f.endsWith('.crt'),
-    );
-    if (files.length === 0) {
-      throw new BadRequestException('No Apple root certificates found in apple-certs');
-    }
+    const files = readdirSync(dir).filter((f) => /\.(cer|der|crt)$/i.test(f));
     this.rootCerts = files.map((f) => readFileSync(join(dir, f)));
     return this.rootCerts;
   }
