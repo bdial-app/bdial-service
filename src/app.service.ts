@@ -58,6 +58,7 @@ export class AppService {
       'leads_monetization_enabled',
       'deals_monetization_enabled',
       'subscriptions_visible',
+      'vouchers_enabled',
     ];
     const settings = await this.settingRepo.find({ where: { key: In(monetizationKeys) } });
     const config: Record<string, any> = {};
@@ -93,6 +94,8 @@ export class AppService {
         leadsMonetizationEnabled: config['leads_monetization_enabled'] ?? false,
         dealsMonetizationEnabled: config['deals_monetization_enabled'] ?? false,
         subscriptionsVisible: config['subscriptions_visible'] ?? false,
+        // Vouchers default ON to preserve existing behavior; admin can disable.
+        vouchersEnabled: config['vouchers_enabled'] ?? true,
       },
     };
   }
