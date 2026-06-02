@@ -59,6 +59,13 @@ export class AppService {
       'deals_monetization_enabled',
       'subscriptions_visible',
       'vouchers_enabled',
+      // Apple consumable product ids — needed so the iOS app can register them
+      // with StoreKit at startup (before initialize, or they won't load).
+      'lead_apple_product_hot',
+      'lead_apple_product_warm',
+      'lead_apple_product_soft',
+      'lead_apple_product_cold',
+      'deal_apple_product',
     ];
     const settings = await this.settingRepo.find({ where: { key: In(monetizationKeys) } });
     const config: Record<string, any> = {};
@@ -71,6 +78,30 @@ export class AppService {
         config[s.key] = s.value;
       }
     }
+
+    // Collect all Apple consumable product ids (lead tiers + deal + boost plans)
+    // so the iOS client can pre-register them with StoreKit.
+    const appleProductIds: string[] = [
+      config['lead_apple_product_hot'],
+      config['lead_apple_product_warm'],
+      config['lead_apple_product_soft'],
+      config['lead_apple_product_cold'],
+      config['deal_apple_product'],
+    ].filter((v): v is string => typeof v === 'string' && v.trim().length > 0);
+
+    try {
+      const plansSetting = await this.settingRepo.findOneBy({ key: 'sponsorship_plans' });
+      if (plansSetting) {
+        const plans = JSON.parse(plansSetting.value);
+        if (Array.isArray(plans)) {
+          for (const p of plans) {
+            if (p?.appleProductId && typeof p.appleProductId === 'string') {
+              appleProductIds.push(p.appleProductId);
+            }
+          }
+        }
+      }
+    } catch { /* ignore malformed sponsorship_plans */ }
     return {
       leadPricing: {
         hot: config['lead_price_hot'] ?? 99,
@@ -97,6 +128,8 @@ export class AppService {
         // Vouchers default ON to preserve existing behavior; admin can disable.
         vouchersEnabled: config['vouchers_enabled'] ?? true,
       },
+      // Deduped list of Apple consumable product ids for iOS StoreKit pre-registration.
+      appleProductIds: Array.from(new Set(appleProductIds)),
     };
   }
 }
