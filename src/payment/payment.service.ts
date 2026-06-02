@@ -1197,6 +1197,11 @@ export class PaymentService {
   // ──────────────────────────────────────────
 
   async validateVoucher(code: string, purchaseType: string, amount: number, providerId?: string) {
+    // Admin kill-switch — when vouchers are disabled, reject all codes (defense
+    // in depth; the UI also hides the voucher inputs).
+    const vouchersEnabled = (await this.getSetting('vouchers_enabled', 'true')) === 'true';
+    if (!vouchersEnabled) return { valid: false, message: 'Vouchers are currently unavailable' };
+
     const voucher = await this.voucherRepo.findOneBy({ code: code.toUpperCase(), isActive: true });
     if (!voucher) return { valid: false, message: 'Invalid voucher code' };
 
