@@ -88,6 +88,22 @@ export class PaymentService {
     const provider = await this.providerRepo.findOneBy({ userId });
     if (!provider) throw new NotFoundException('Provider not found');
 
+    // ── Prevent duplicate/overlapping boosts (anti double-charge) ──
+    // A provider can't start a new boost of a placement type they already have
+    // running. Enforced server-side so the API can't be used to bypass the UI.
+    const now = new Date();
+    const existing = await this.sponsoredListingRepo.find({
+      where: { providerId: provider.id, type: dto.type, isActive: true },
+    });
+    const stillRunning = existing.find(
+      (l) => new Date(l.endsAt) > now && Number(l.spentAmount) < Number(l.budgetAmount),
+    );
+    if (stillRunning) {
+      throw new BadRequestException(
+        `You already have an active ${dto.type.replace('_', ' ')} boost running until ${new Date(stillRunning.endsAt).toISOString().slice(0, 10)}. Wait for it to finish before starting a new one.`,
+      );
+    }
+
     // ── Date validation ──
     const startsAt = new Date(dto.startsAt);
     const endsAt = new Date(dto.endsAt);
