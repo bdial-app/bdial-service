@@ -35,6 +35,11 @@ export class CreateSponsorshipCheckoutDto {
   @IsOptional()
   @IsString()
   voucherCode?: string;
+
+  @ApiPropertyOptional({ enum: ['razorpay', 'apple'], description: 'Defaults to razorpay; "apple" returns an appleProductId to purchase via IAP instead of a Razorpay order.' })
+  @IsOptional()
+  @IsEnum(['razorpay', 'apple'])
+  gateway?: 'razorpay' | 'apple';
 }
 
 export class CreateLeadUnlockCheckoutDto {
@@ -46,6 +51,11 @@ export class CreateLeadUnlockCheckoutDto {
   @IsOptional()
   @IsString()
   voucherCode?: string;
+
+  @ApiPropertyOptional({ enum: ['razorpay', 'apple'] })
+  @IsOptional()
+  @IsEnum(['razorpay', 'apple'])
+  gateway?: 'razorpay' | 'apple';
 }
 
 export class CreateSubscriptionCheckoutDto {
@@ -88,4 +98,24 @@ export class CreateDealCreationCheckoutDto {
   @ApiPropertyOptional({ description: 'Deal data to create after payment succeeds' })
   @IsOptional()
   dealData?: Record<string, any>;
+
+  @ApiPropertyOptional({ enum: ['razorpay', 'apple'] })
+  @IsOptional()
+  @IsEnum(['razorpay', 'apple'])
+  gateway?: 'razorpay' | 'apple';
+}
+
+/**
+ * Sent by iOS after a StoreKit consumable purchase completes. The backend
+ * re-verifies the transaction with Apple and fulfils the pending payment.
+ */
+export class VerifyAppleConsumableDto {
+  @ApiProperty({ description: 'The pending payment id returned by the checkout call' })
+  @IsUUID()
+  paymentId: string;
+
+  @ApiProperty({ description: 'The StoreKit transaction id from the completed purchase' })
+  @IsString()
+  @IsNotEmpty()
+  transactionId: string;
 }

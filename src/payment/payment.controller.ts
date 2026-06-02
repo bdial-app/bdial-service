@@ -16,6 +16,7 @@ import {
   CreateSubscriptionCheckoutDto,
   CreateDealCreationCheckoutDto,
   ValidateVoucherDto,
+  VerifyAppleConsumableDto,
 } from './dto/payment.dto';
 
 @ApiTags('Payments')
@@ -128,6 +129,12 @@ export class PaymentController {
     productId: string;
   }) {
     return this.paymentService.verifyAppleReceipt(req.user.id, body);
+  }
+
+  @Post('verify/apple-consumable')
+  @ApiOperation({ summary: 'Verify an Apple IAP consumable (boost/lead/deal) and fulfil the pending payment' })
+  verifyAppleConsumable(@Request() req, @Body() dto: VerifyAppleConsumableDto) {
+    return this.paymentService.verifyAppleConsumable(req.user.id, dto);
   }
 
   // ─── Voucher Validation ─────────────────
