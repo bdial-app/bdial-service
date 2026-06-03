@@ -320,6 +320,12 @@ export class AdminController {
     return this.adminService.getProducts(req.user, page, limit, search, providerId, isActive);
   }
 
+  @Post('products')
+  @ApiOperation({ summary: 'Admin create a product for a provider' })
+  createProduct(@Request() req, @Body() body: any) {
+    return this.adminService.createProductAdmin(req.user, body);
+  }
+
   @Get('products/:id')
   @ApiOperation({ summary: 'Get product detail' })
   @ApiParam({ name: 'id', description: 'Product ID' })
