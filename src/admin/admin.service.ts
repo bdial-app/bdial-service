@@ -1203,6 +1203,53 @@ export class AdminService {
     return this.productRepo.findOne({ where: { id: productId }, relations: ['provider'] });
   }
 
+  async createProductAdmin(admin: any, body: any) {
+    this.assertAdmin(admin);
+
+    const providerId = body?.providerId;
+    if (!providerId) throw new BadRequestException('providerId is required');
+    const provider = await this.providerRepo.findOneBy({ id: providerId });
+    if (!provider) throw new NotFoundException('Provider not found');
+
+    const name = typeof body?.name === 'string' ? body.name.trim() : '';
+    if (!name) throw new BadRequestException('Product name is required');
+    if (name.length > 150) throw new BadRequestException('Product name must be 150 characters or fewer');
+
+    const productType = body?.productType === 'service' ? 'service' : 'product';
+    const price =
+      body?.price === undefined || body?.price === null || body?.price === ''
+        ? null
+        : Number(body.price);
+    if (price !== null && (Number.isNaN(price) || price < 0)) {
+      throw new BadRequestException('Price must be a non-negative number');
+    }
+
+    const product = this.productRepo.create({
+      providerId,
+      name,
+      description: body?.description ? String(body.description).trim() : null,
+      price,
+      currency: body?.currency || 'INR',
+      photoUrl: body?.photoUrl || null,
+      photoUrls: Array.isArray(body?.photoUrls) ? body.photoUrls : [],
+      productType,
+      categoryId: body?.categoryId || null,
+      subcategoryId: body?.subcategoryId || null,
+      isActive: body?.isActive === undefined ? true : !!body.isActive,
+      displayOrder: Number.isFinite(body?.displayOrder) ? Number(body.displayOrder) : 0,
+    });
+    const saved = await this.productRepo.save(product);
+
+    await this.createAuditLog(admin.id, 'create_product', 'product', saved.id, null, {
+      providerId,
+      name,
+      productType,
+      price,
+    });
+
+    return this.productRepo.findOne({ where: { id: saved.id }, relations: ['provider'] });
+  }
+
   async updateProductAdmin(admin: any, productId: string, body: Partial<Product>) {
     this.assertAdmin(admin);
     const allowed: string[] = ['isActive', 'displayOrder', 'name', 'description', 'price', 'productType', 'categoryId', 'subcategoryId'];
