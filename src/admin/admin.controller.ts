@@ -1,7 +1,7 @@
 import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards, Request, Query, UseInterceptors, UploadedFile, UploadedFiles, ParseFilePipe, MaxFileSizeValidator, FileTypeValidator } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiBody, ApiQuery, ApiParam, ApiConsumes } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
-import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor, FilesInterceptor, FileFieldsInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { AdminService } from './admin.service';
 import { AdminCreateUserDto, AdminCreateProviderWithUserDto, AdminSendOtpDto, AdminVerifyOtpDto } from './dto/admin-create-user.dto';
@@ -282,6 +282,36 @@ export class AdminController {
   @ApiParam({ name: 'id', description: 'Provider ID' })
   updateProvider(@Param('id') id: string, @Request() req, @Body() body: any) {
     return this.adminService.updateProviderAdmin(req.user, id, body);
+  }
+
+  @Patch('providers/:id/images')
+  @ApiOperation({ summary: 'Admin update provider logo and/or banner image' })
+  @ApiParam({ name: 'id', description: 'Provider ID' })
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(FileFieldsInterceptor([
+    { name: 'logo', maxCount: 1 },
+    { name: 'banner', maxCount: 1 },
+  ], { storage: memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }))
+  updateProviderImages(
+    @Param('id') id: string,
+    @Request() req,
+    @Body() body: { removeLogo?: string; removeBanner?: string },
+    @UploadedFiles() files?: { logo?: Express.Multer.File[]; banner?: Express.Multer.File[] },
+  ) {
+    return this.adminService.updateProviderImages(req.user, id, {
+      logo: files?.logo?.[0],
+      banner: files?.banner?.[0],
+      removeLogo: body?.removeLogo === 'true',
+      removeBanner: body?.removeBanner === 'true',
+    });
+  }
+
+  @Patch('providers/:id/categories')
+  @ApiOperation({ summary: 'Admin update provider categories (max 2)' })
+  @ApiParam({ name: 'id', description: 'Provider ID' })
+  @ApiBody({ schema: { properties: { categoryIds: { type: 'array', items: { type: 'string' } } } } })
+  updateProviderCategories(@Param('id') id: string, @Request() req, @Body() body: { categoryIds: string[] }) {
+    return this.adminService.updateProviderCategories(req.user, id, body?.categoryIds);
   }
 
   @Patch('providers/:id/contact-number')

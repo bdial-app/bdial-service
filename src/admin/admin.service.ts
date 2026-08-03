@@ -7,7 +7,7 @@ import { BugReport } from '../bug-reports/bug-report.entity';
 import { AdminCreateUserDto, AdminCreateProviderWithUserDto } from './dto/admin-create-user.dto';
 import { StorageService } from '../storage/storage.service';
 import { OtpService } from '../otp/otp.service';
-import { compressImage, compressImages } from '../common/image-processor';
+import { compressImage, compressImages, validateImageMime } from '../common/image-processor';
 import { ROLE_HIERARCHY } from '../common/enums/admin-role.enum';
 import { SupabaseAuthService } from '../supabase/supabase-auth.service';
 import { ServiceableCitiesService } from '../serviceable-cities/serviceable-cities.service';
@@ -1006,6 +1006,102 @@ export class AdminService {
       where: { id: providerId },
       relations: ['user', 'providerCategories', 'providerCategories.category'],
     });
+  }
+
+  /**
+   * Replace or remove a provider's logo (profile photo) and/or banner image.
+   * Old files are deleted from storage once the new one is uploaded.
+   */
+  async updateProviderImages(
+    admin: any,
+    providerId: string,
+    opts: {
+      logo?: Express.Multer.File;
+      banner?: Express.Multer.File;
+      removeLogo?: boolean;
+      removeBanner?: boolean;
+    },
+  ) {
+    this.assertAdmin(admin);
+    const { logo, banner, removeLogo, removeBanner } = opts;
+    if (!logo && !banner && !removeLogo && !removeBanner) {
+      throw new BadRequestException('Provide a logo or banner image, or a removal flag');
+    }
+
+    const provider = await this.providerRepo.findOneBy({ id: providerId });
+    if (!provider) throw new NotFoundException('Provider not found');
+
+    const update: Partial<Provider> = {};
+
+    if (logo) {
+      validateImageMime(logo);
+      const compressed = await compressImage(logo, 'avatar');
+      const { url } = await this.storageService.upload('providers', compressed);
+      update.profilePhotoUrl = url;
+      await this.deleteStoredFile(provider.profilePhotoUrl);
+    } else if (removeLogo) {
+      update.profilePhotoUrl = null;
+      await this.deleteStoredFile(provider.profilePhotoUrl);
+    }
+
+    if (banner) {
+      validateImageMime(banner);
+      const compressed = await compressImage(banner, 'banner');
+      const { url } = await this.storageService.upload('providers', compressed);
+      update.bannerImageUrl = url;
+      await this.deleteStoredFile(provider.bannerImageUrl);
+    } else if (removeBanner) {
+      update.bannerImageUrl = null;
+      await this.deleteStoredFile(provider.bannerImageUrl);
+    }
+
+    await this.providerRepo.update(providerId, update);
+    return this.providerRepo.findOne({
+      where: { id: providerId },
+      relations: ['user', 'providerCategories', 'providerCategories.category'],
+    });
+  }
+
+  /**
+   * Replace a provider's categories. Mirrors the provider-facing limit of 2.
+   */
+  async updateProviderCategories(admin: any, providerId: string, categoryIds: string[]) {
+    this.assertAdmin(admin);
+    if (!Array.isArray(categoryIds)) throw new BadRequestException('categoryIds must be an array');
+
+    const uniqueIds = [...new Set(categoryIds.filter(Boolean))];
+    if (uniqueIds.length > 2) throw new BadRequestException('You can select up to 2 categories');
+
+    const provider = await this.providerRepo.findOneBy({ id: providerId });
+    if (!provider) throw new NotFoundException('Provider not found');
+
+    if (uniqueIds.length > 0) {
+      const found = await this.categoryRepo.findBy({ id: In(uniqueIds) });
+      if (found.length !== uniqueIds.length) {
+        const foundIds = found.map((c) => c.id);
+        const missing = uniqueIds.filter((catId) => !foundIds.includes(catId));
+        throw new BadRequestException(`Category not found: ${missing.join(', ')}`);
+      }
+    }
+
+    await this.providerCatRepo.delete({ providerId });
+    if (uniqueIds.length > 0) {
+      await this.providerCatRepo.save(
+        uniqueIds.map((categoryId) => this.providerCatRepo.create({ providerId, categoryId })),
+      );
+    }
+
+    return this.providerRepo.findOne({
+      where: { id: providerId },
+      relations: ['user', 'providerCategories', 'providerCategories.category'],
+    });
+  }
+
+  /** Best-effort removal of a stored file given its public URL. */
+  private async deleteStoredFile(url?: string | null) {
+    if (!url) return;
+    const key = this.storageService.extractKeyFromUrl(url);
+    if (key) await this.storageService.delete(key).catch(() => {});
   }
 
   async updateProviderContactNumber(admin: any, providerId: string, contactNumber: string, otp: string) {
