@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsOptional, IsEnum, MaxLength, Matches, IsEmail } from 'class-validator';
+import { IsString, IsOptional, IsEnum, MaxLength, Matches, IsEmail, IsBoolean } from 'class-validator';
 
 export class AdminCreateUserDto {
   @ApiProperty({ example: '9876543210', description: '10-digit mobile number' })
@@ -136,6 +136,39 @@ export class AdminCreateProviderWithUserDto {
   @ApiPropertyOptional({ example: false })
   @IsOptional()
   isWomenLed?: boolean;
+
+  @ApiPropertyOptional({
+    example: false,
+    description: 'Mark the business community-verified (the verified badge shown to customers)',
+  })
+  @IsOptional()
+  @IsBoolean()
+  communityVerified?: boolean;
+
+  // ── Online presence (all optional) ──────────────────────
+  @ApiPropertyOptional({ example: 'pehnawaridas', description: 'Instagram handle without @' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  instagramHandle?: string;
+
+  @ApiPropertyOptional({ example: '+919876543210' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(15)
+  whatsappNumber?: string;
+
+  @ApiPropertyOptional({ example: 'https://example.com' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  websiteUrl?: string;
+
+  @ApiPropertyOptional({ example: 'pehnawaridas' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  facebookHandle?: string;
 
   @ApiPropertyOptional({ description: 'Category IDs to assign', type: [String] })
   @IsOptional()

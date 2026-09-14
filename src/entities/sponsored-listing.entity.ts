@@ -14,6 +14,7 @@ import { Payment } from './payment.entity';
 @Entity('sponsored_listings')
 @Index(['providerId', 'isActive'])
 @Index(['isActive', 'startsAt', 'endsAt'])
+@Index(['source', 'billingMode'])
 export class SponsoredListing {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -83,6 +84,51 @@ export class SponsoredListing {
 
   @Column({ name: 'payment_id', type: 'uuid', nullable: true })
   paymentId: string | null;
+
+  // ─── Admin-granted sponsorship controls ──────────────────────────
+  /**
+   * Who created this placement. `provider_paid` comes from the provider
+   * checkout flow; `admin_granted` is placed by an admin from the console.
+   */
+  @Column({
+    type: 'enum',
+    enum: ['provider_paid', 'admin_granted'],
+    default: 'provider_paid',
+  })
+  source: 'provider_paid' | 'admin_granted';
+
+  /**
+   * `paid` listings burn budget per impression/click and stop when the budget
+   * is exhausted. `free` listings are complimentary — they never accrue spend
+   * and are never budget-capped (admin gifts / barter / house ads).
+   */
+  @Column({
+    name: 'billing_mode',
+    type: 'enum',
+    enum: ['paid', 'free'],
+    default: 'paid',
+  })
+  billingMode: 'paid' | 'free';
+
+  @Column({ name: 'created_by_admin_id', type: 'uuid', nullable: true })
+  createdByAdminId: string | null;
+
+  /** Higher priority wins the slot ahead of higher bids. Admin-controlled. */
+  @Column({ type: 'int', default: 0 })
+  priority: number;
+
+  /** Admin-only label, never shown to the provider or to customers. */
+  @Column({ name: 'internal_note', type: 'text', nullable: true })
+  internalNote: string | null;
+
+  @Column({ name: 'stopped_at', type: 'timestamptz', nullable: true })
+  stoppedAt: Date | null;
+
+  @Column({ name: 'stopped_by', type: 'uuid', nullable: true })
+  stoppedBy: string | null;
+
+  @Column({ name: 'stopped_reason', type: 'text', nullable: true })
+  stoppedReason: string | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

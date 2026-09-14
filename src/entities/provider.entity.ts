@@ -14,6 +14,7 @@ import { ProviderCategory } from './provider-category.entity';
 import { Photo } from './photo.entity';
 import { Product } from './product.entity';
 import { Review } from './review.entity';
+import { DecimalTransformer } from '../common/decimal.transformer';
 
 @Entity('providers')
 @Index(['status', 'city'])
@@ -153,7 +154,7 @@ export class Provider {
   @Column({ name: 'google_place_id', type: 'varchar', length: 255, nullable: true })
   googlePlaceId: string | null;
 
-  @Column({ name: 'google_rating', type: 'decimal', precision: 2, scale: 1, nullable: true })
+  @Column({ name: 'google_rating', type: 'decimal', precision: 2, scale: 1, nullable: true, transformer: DecimalTransformer })
   googleRating: number | null;
 
   @Column({ name: 'google_review_count', type: 'int', nullable: true })
@@ -165,7 +166,7 @@ export class Provider {
   @Column({ name: 'google_last_fetched_at', type: 'timestamptz', nullable: true })
   googleLastFetchedAt: Date | null;
 
-  @Column({ name: 'combined_rating', type: 'decimal', precision: 2, scale: 1, nullable: true })
+  @Column({ name: 'combined_rating', type: 'decimal', precision: 2, scale: 1, nullable: true, transformer: DecimalTransformer })
   combinedRating: number | null;
 
   @Column({ name: 'combined_review_count', type: 'int', nullable: true })

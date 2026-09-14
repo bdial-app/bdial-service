@@ -13,6 +13,7 @@ import {
   ProviderBadge,
   ProviderOffer,
   AdEvent,
+  SystemSetting,
 } from '../entities';
 
 @Module({
@@ -28,6 +29,7 @@ import {
       ProviderBadge,
       ProviderOffer,
       AdEvent,
+      SystemSetting,
     ]),
   ],
   controllers: [ExploreController],
