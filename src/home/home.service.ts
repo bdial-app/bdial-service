@@ -1150,7 +1150,7 @@ export class HomeService {
       .where('s.is_active = :active', { active: true })
       .andWhere('s.starts_at <= :now', { now })
       .andWhere('s.ends_at >= :now', { now })
-      .andWhere('s.spent_amount < s.budget_amount')
+      .andWhere("(s.billing_mode = 'free' OR s.spent_amount < s.budget_amount)")
       .andWhere("s.approval_status = 'approved'")
       .andWhere("p.status IN ('active', 'unverified')");
 
@@ -1176,8 +1176,9 @@ export class HomeService {
       );
     }
 
-    // Prioritize by bid, then closest distance, then randomize for fairness among ties
-    qb.orderBy('s.cost_per_click', 'DESC');
+    // Admin-set priority wins first, then the bid, then closest distance,
+    // then randomize for fairness among ties
+    qb.orderBy('s.priority', 'DESC').addOrderBy('s.cost_per_click', 'DESC');
     if (hasLocation) {
       qb.addOrderBy(`${HomeService.HAVERSINE}`, 'ASC');
     }
@@ -1291,7 +1292,7 @@ export class HomeService {
             AND sl.is_active = true
             AND sl.starts_at <= NOW()
             AND sl.ends_at >= NOW()
-            AND sl.spent_amount < sl.budget_amount
+            AND (sl.billing_mode = 'free' OR sl.spent_amount < sl.budget_amount)
             AND sl.approval_status = 'approved'
             AND (sl.target_category_ids IS NULL OR sl.target_category_ids && ARRAY[${categoryIds.map((id) => `'${id}'`).join(',')}]::uuid[])
         )`,
@@ -1336,7 +1337,7 @@ export class HomeService {
         .createQueryBuilder('p')
         .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"', 'p.description AS description', 'p.city AS city', 'p.area AS area', 'p.status AS status', 'p.is_featured AS "isFeatured"', 'p.is_available AS "isAvailable"'])
         .addSelect(`(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`, 'listingPhoto')
-        .addSelect(`EXISTS (SELECT 1 FROM sponsored_listings sl WHERE sl.provider_id = p.id AND sl.is_active = true AND sl.starts_at <= NOW() AND sl.ends_at >= NOW() AND sl.spent_amount < sl.budget_amount AND sl.approval_status = 'approved' AND (sl.target_category_ids IS NULL OR sl.target_category_ids && ARRAY[${categoryIds.map((id) => `'${id}'`).join(',')}]::uuid[]))`, 'isSponsored')
+        .addSelect(`EXISTS (SELECT 1 FROM sponsored_listings sl WHERE sl.provider_id = p.id AND sl.is_active = true AND sl.starts_at <= NOW() AND sl.ends_at >= NOW() AND (sl.billing_mode = 'free' OR sl.spent_amount < sl.budget_amount) AND sl.approval_status = 'approved' AND (sl.target_category_ids IS NULL OR sl.target_category_ids && ARRAY[${categoryIds.map((id) => `'${id}'`).join(',')}]::uuid[]))`, 'isSponsored')
         .where('EXISTS (SELECT 1 FROM provider_categories pc_f WHERE pc_f.provider_id = p.id AND pc_f.category_id IN (:...categoryIds))', { categoryIds })
         .andWhere('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] });
       this.withReviewStats(fallbackQb);

@@ -295,7 +295,7 @@ export class GoogleReviewsService {
 
     // Weighted average formula
     const combinedRating = (googleRating * googleCount + appAvg * appCount) / totalCount;
-    provider.combinedRating = Math.round(combinedRating * 10) / 10 as any;
+    provider.combinedRating = Math.round(combinedRating * 10) / 10;
     provider.combinedReviewCount = totalCount;
 
     // Compute trust level

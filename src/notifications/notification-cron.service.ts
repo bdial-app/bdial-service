@@ -207,7 +207,8 @@ export class NotificationCronService {
       .update(SponsoredListing)
       .set({ isActive: false })
       .where('is_active = true')
-      .andWhere('(ends_at <= NOW() OR spent_amount >= budget_amount)')
+      // Complimentary placements have no budget to exhaust — only the end date stops them.
+      .andWhere("(ends_at <= NOW() OR (billing_mode = 'paid' AND spent_amount >= budget_amount))")
       .execute();
 
     if (result.affected && result.affected > 0) {

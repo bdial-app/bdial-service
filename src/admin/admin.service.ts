@@ -1,10 +1,11 @@
 import { Injectable, ForbiddenException, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, IsNull, Not, In, MoreThan, ILike, Between } from 'typeorm';
-import { Provider, User, Verification, Review, ReviewReport, Report, ProviderWarning, Product, Category, ProviderCategory, Conversation, ConversationParticipant, Message, PromoBanner, SponsoredListing, ProviderOffer, ProviderBadge, ProviderAnalyticsEvent, ProviderLead, SearchLog, AdEvent, AppInvite, AuditLog, SystemSetting, Photo, ReviewPhoto, ServiceableCity, UserArchive } from '../entities';
+import { Provider, User, Verification, Review, ReviewReport, Report, ProviderWarning, Product, Category, ProviderCategory, Conversation, ConversationParticipant, Message, PromoBanner, SponsoredListing, ProviderOffer, ProviderBadge, ProviderAnalyticsEvent, ProviderLead, SearchLog, AdEvent, AppInvite, AuditLog, SystemSetting, Photo, ReviewPhoto, ServiceableCity, UserArchive, Payment } from '../entities';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { BugReport } from '../bug-reports/bug-report.entity';
 import { AdminCreateUserDto, AdminCreateProviderWithUserDto } from './dto/admin-create-user.dto';
+import { BulkValidateProvidersDto, BulkImportProvidersDto } from './dto/bulk-provider-import.dto';
 import { StorageService } from '../storage/storage.service';
 import { OtpService } from '../otp/otp.service';
 import { compressImage, compressImages, validateImageMime } from '../common/image-processor';
@@ -13,6 +14,16 @@ import { SupabaseAuthService } from '../supabase/supabase-auth.service';
 import { ServiceableCitiesService } from '../serviceable-cities/serviceable-cities.service';
 import { ContentSanitizerService } from '../common/content-sanitizer';
 import { GoogleReviewsService } from '../google-reviews/google-reviews.service';
+import { fetchImageFromUrl } from '../common/safe-image-fetch';
+import { ImportProviderImageUrlsDto } from './dto/provider-images.dto';
+import {
+  AdminCreateSponsorshipDto,
+  AdminUpdateSponsorshipDto,
+  StopSponsorshipDto,
+  TopUpSponsorshipDto,
+  BulkSponsorshipDto,
+  StopAllSponsorshipsDto,
+} from './dto/sponsorship-admin.dto';
 
 @Injectable()
 export class AdminService {
@@ -30,6 +41,7 @@ export class AdminService {
     @InjectRepository(Message) private messageRepo: Repository<Message>,
     @InjectRepository(PromoBanner) private bannerRepo: Repository<PromoBanner>,
     @InjectRepository(SponsoredListing) private sponsoredRepo: Repository<SponsoredListing>,
+    @InjectRepository(Payment) private paymentRepo: Repository<Payment>,
     @InjectRepository(ProviderOffer) private offerRepo: Repository<ProviderOffer>,
     @InjectRepository(ProviderBadge) private badgeRepo: Repository<ProviderBadge>,
     @InjectRepository(ProviderAnalyticsEvent) private analyticsEventRepo: Repository<ProviderAnalyticsEvent>,
@@ -238,6 +250,22 @@ export class AdminService {
     return { ...provider, status: 'active' };
   }
 
+  /**
+   * Verification rows carry @Exclude() on the document URLs and the Ijamat
+   * number so they never leak from customer-facing endpoints. Admins reviewing
+   * a submission must actually see them, so return a plain object here — the
+   * global ClassSerializerInterceptor only strips decorated class instances.
+   */
+  private toAdminVerification(v: Verification) {
+    if (!v) return v;
+    return {
+      ...v,
+      aadhaarDocUrl: v.aadhaarDocUrl ?? null,
+      ijamatDocUrl: v.ijamatDocUrl ?? null,
+      ijamatNumber: v.ijamatNumber ?? null,
+    };
+  }
+
   async getVerifications(admin: any, page?: number, rows?: number, status?: string, search?: string) {
     this.assertAdmin(admin);
     const currentPage = Math.max(1, page || 1);
@@ -262,7 +290,7 @@ export class AdminService {
 
     const [items, total] = await qb.getManyAndCount();
     return {
-      items,
+      items: items.map((v) => this.toAdminVerification(v)),
       meta: {
         total,
         page: currentPage,
@@ -292,7 +320,7 @@ export class AdminService {
     if (!verification) {
       throw new NotFoundException(`Verification with ID ${verificationId} not found`);
     }
-    return verification;
+    return this.toAdminVerification(verification);
   }
 
   async reviewVerification(
@@ -1062,6 +1090,124 @@ export class AdminService {
     });
   }
 
+  /** Same ceiling providers get when uploading from the app (photos.service). */
+  private static readonly MAX_GALLERY_PHOTOS = 10;
+
+  /** Add gallery photos to any provider from the admin console. */
+  async adminUploadProviderPhotos(admin: any, providerId: string, files: Express.Multer.File[]) {
+    this.assertAdmin(admin);
+    if (!files?.length) throw new BadRequestException('No photos provided');
+
+    const provider = await this.providerRepo.findOneBy({ id: providerId });
+    if (!provider) throw new NotFoundException('Provider not found');
+
+    files.forEach((f) => validateImageMime(f, ['image/jpeg', 'image/jpg', 'image/png', 'image/webp']));
+
+    const existing = await this.photoRepo.count({ where: { providerId } });
+    const max = AdminService.MAX_GALLERY_PHOTOS;
+    if (existing + files.length > max) {
+      throw new BadRequestException(`A provider can have up to ${max} gallery photos. ${provider.brandName} has ${existing}; adding ${files.length} would exceed that.`);
+    }
+
+    const saved: Photo[] = [];
+    // One at a time: display order matches upload order, and only one image is
+    // decoded in memory at once even when several import requests overlap.
+    for (let i = 0; i < files.length; i++) {
+      const compressed = await compressImage(files[i], 'standard');
+      const { url, storageKey } = await this.storageService.upload('providers', compressed);
+      saved.push(await this.photoRepo.save(this.photoRepo.create({ providerId, imageUrl: url, storageKey, displayOrder: existing + i })));
+    }
+
+    await this.createAuditLog(admin.id, 'admin_upload_provider_photos', 'provider', providerId, { photoCount: existing }, { photoCount: existing + saved.length }, `Admin added ${saved.length} gallery photo(s)`);
+    return saved;
+  }
+
+  /**
+   * Download logo, banner and gallery images from links (e.g. Google Drive,
+   * as produced by Google Form file-upload questions) and attach them.
+   * Each image succeeds or fails on its own — one bad link never blocks the rest.
+   */
+  async importProviderImagesFromUrls(admin: any, providerId: string, dto: ImportProviderImageUrlsDto) {
+    this.assertAdmin(admin);
+    const provider = await this.providerRepo.findOneBy({ id: providerId });
+    if (!provider) throw new NotFoundException('Provider not found');
+
+    type Kind = 'logo' | 'banner' | 'gallery';
+    type Result = { kind: Kind; url: string; ok: boolean; imageUrl?: string; error?: string };
+    type Job = { index: number; kind: Kind; url: string; preset: 'avatar' | 'banner' | 'standard'; displayOrder?: number };
+    const errorOf = (err: any): string => err?.response?.message ?? err?.message ?? 'Failed';
+
+    const jobs: Job[] = [];
+    const logoUrl = dto.logoUrl?.trim();
+    const bannerUrl = dto.bannerUrl?.trim();
+    if (logoUrl) jobs.push({ index: jobs.length, kind: 'logo', url: logoUrl, preset: 'avatar' });
+    if (bannerUrl) jobs.push({ index: jobs.length, kind: 'banner', url: bannerUrl, preset: 'banner' });
+
+    const overflow: Result[] = [];
+    const galleryUrls = (dto.galleryUrls ?? []).map((u) => u.trim()).filter(Boolean);
+    if (galleryUrls.length) {
+      const existing = await this.photoRepo.count({ where: { providerId } });
+      const room = Math.max(0, AdminService.MAX_GALLERY_PHOTOS - existing);
+      galleryUrls.forEach((url, i) => {
+        if (i < room) jobs.push({ index: jobs.length, kind: 'gallery', url, preset: 'standard', displayOrder: existing + i });
+        else overflow.push({ kind: 'gallery', url, ok: false, error: `Gallery limit of ${AdminService.MAX_GALLERY_PHOTOS} photos reached` });
+      });
+    }
+
+    // Downloads wait on the network, so a few run at once — 12 slow links finish in
+    // about a third of the time and stay well inside request timeouts. Decoding and
+    // uploading are CPU- and memory-bound, so those are chained one at a time: peak
+    // memory is a few <=10MB buffers plus a single decode, however many links arrive.
+    const outcome: Result[] = new Array(jobs.length);
+    const update: Partial<Provider> = {};
+    let serial: Promise<void> = Promise.resolve();
+    let cursor = 0;
+
+    const worker = async () => {
+      while (cursor < jobs.length) {
+        const job = jobs[cursor++];
+        let file: Express.Multer.File;
+        try {
+          file = await fetchImageFromUrl(job.url);
+        } catch (err) {
+          outcome[job.index] = { kind: job.kind, url: job.url, ok: false, error: errorOf(err) };
+          continue;
+        }
+        const step = serial.then(async () => {
+          try {
+            const compressed = await compressImage(file, job.preset);
+            const stored = await this.storageService.upload('providers', compressed);
+            if (job.kind === 'logo') update.profilePhotoUrl = stored.url;
+            else if (job.kind === 'banner') update.bannerImageUrl = stored.url;
+            else {
+              await this.photoRepo.save(this.photoRepo.create({
+                providerId, imageUrl: stored.url, storageKey: stored.storageKey, displayOrder: job.displayOrder ?? 0,
+              }));
+            }
+            outcome[job.index] = { kind: job.kind, url: job.url, ok: true, imageUrl: stored.url };
+          } catch (err) {
+            outcome[job.index] = { kind: job.kind, url: job.url, ok: false, error: errorOf(err) };
+          }
+        });
+        serial = step;
+        await step;
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(3, jobs.length) }, () => worker()));
+
+    // Point the provider at the new logo/banner first; only then remove the old files.
+    if (Object.keys(update).length) {
+      await this.providerRepo.update(providerId, update);
+      if (update.profilePhotoUrl) await this.deleteStoredFile(provider.profilePhotoUrl);
+      if (update.bannerImageUrl) await this.deleteStoredFile(provider.bannerImageUrl);
+    }
+
+    const results: Result[] = [...outcome, ...overflow];
+    const uploaded = results.filter((r) => r.ok).length;
+    await this.createAuditLog(admin.id, 'admin_import_provider_images', 'provider', providerId, null, { uploaded, failed: results.length - uploaded }, `Imported ${uploaded}/${results.length} image(s) from links`);
+    return { uploaded, failed: results.length - uploaded, results };
+  }
+
   /**
    * Replace a provider's categories. Mirrors the provider-facing limit of 2.
    */
@@ -1225,24 +1371,27 @@ export class AdminService {
 
   async getProductStats(admin: any) {
     this.assertAdmin(admin);
-    const [total, active, withImages, withPrice, products, services] = await Promise.all([
+    const [total, active, withImages, withPrice, products, services, avgPriceRow] = await Promise.all([
       this.productRepo.count(),
       this.productRepo.count({ where: { isActive: true } }),
-      this.productRepo.createQueryBuilder('p').where('p."photoUrls"::text != \'[]\'').andWhere('p."photoUrls" IS NOT NULL').getCount(),
+      // photo_urls is a text[]; an empty one casts to '{}', never '[]', so the
+      // old `::text != '[]'` test counted every product as having images.
+      this.productRepo.createQueryBuilder('p').where('cardinality(p.photo_urls) > 0').getCount(),
       this.productRepo.count({ where: { price: Not(IsNull()) } }),
       this.productRepo.count({ where: { productType: 'product' as any } }),
       this.productRepo.count({ where: { productType: 'service' as any } }),
+      this.productRepo.createQueryBuilder('p').select('COALESCE(AVG(p.price), 0)', 'val').getRawOne(),
     ]);
 
     const topProviders = await this.productRepo
       .createQueryBuilder('p')
-      .select('p."providerId"', 'providerId')
+      .select('p.provider_id', 'providerId')
       .addSelect('COUNT(*)::int', 'count')
-      .addSelect('pr."brandName"', 'brandName')
-      .innerJoin('providers', 'pr', 'pr.id = p."providerId"')
-      .where('p."isActive" = true')
-      .groupBy('p."providerId"')
-      .addGroupBy('pr."brandName"')
+      .addSelect('pr.brand_name', 'brandName')
+      .innerJoin('providers', 'pr', 'pr.id = p.provider_id')
+      .where('p.is_active = true')
+      .groupBy('p.provider_id')
+      .addGroupBy('pr.brand_name')
       .orderBy('"count"', 'DESC')
       .limit(5)
       .getRawMany();
@@ -1255,7 +1404,7 @@ export class AdminService {
       withoutImages: total - withImages,
       withPrice,
       withoutPrice: total - withPrice,
-      avgPrice: 0,
+      avgPrice: Math.round((Number(avgPriceRow?.val) || 0) * 100) / 100,
       typeBreakdown: [
         { type: 'product', count: products },
         { type: 'service', count: services },
@@ -1346,14 +1495,48 @@ export class AdminService {
     return this.productRepo.findOne({ where: { id: saved.id }, relations: ['provider'] });
   }
 
+  /**
+   * Remove one image from a product. `photoUrl` is the cover, derived from the
+   * first entry of `photoUrls`, so it is recomputed after the removal.
+   */
+  async deleteProductImage(admin: any, productId: string, url: string) {
+    this.assertAdmin(admin);
+    if (!url) throw new BadRequestException('Image url is required');
+
+    const product = await this.productRepo.findOneBy({ id: productId });
+    if (!product) throw new NotFoundException('Product not found');
+
+    const current = product.photoUrls ?? [];
+    if (!current.includes(url)) throw new NotFoundException('That image is not on this product');
+
+    const remaining = current.filter((u) => u !== url);
+    await this.productRepo.update(productId, {
+      photoUrls: remaining,
+      photoUrl: remaining[0] ?? null,
+    });
+
+    // Best-effort object cleanup — the row is already correct either way.
+    const key = this.storageService.extractKeyFromUrl(url);
+    if (key) await this.storageService.delete(key).catch(() => {});
+
+    await this.createAuditLog(
+      admin.id, 'delete_product_image', 'product', productId,
+      { photoUrls: current }, { photoUrls: remaining }, 'Product image removed by admin',
+    );
+
+    return this.productRepo.findOne({ where: { id: productId }, relations: ['provider'] });
+  }
+
   async updateProductAdmin(admin: any, productId: string, body: Partial<Product>) {
     this.assertAdmin(admin);
-    const allowed: string[] = ['isActive', 'displayOrder', 'name', 'description', 'price', 'productType', 'categoryId', 'subcategoryId'];
+    const allowed: string[] = ['isActive', 'displayOrder', 'name', 'description', 'price', 'productType', 'categoryId', 'subcategoryId', 'photoUrls'];
     const update: any = {};
     for (const key of allowed) {
       if ((body as any)[key] !== undefined) update[key] = (body as any)[key];
     }
     if (Object.keys(update).length === 0) throw new BadRequestException('No valid fields to update');
+    // Reordering the gallery moves the cover with it.
+    if (Array.isArray(update.photoUrls)) update.photoUrl = update.photoUrls[0] ?? null;
     await this.productRepo.update(productId, update);
     return this.productRepo.findOne({ where: { id: productId }, relations: ['provider'] });
   }
@@ -1812,7 +1995,34 @@ export class AdminService {
   // Sponsored Listings Management
   // ============================================
 
-  async getSponsoredListings(admin: any, page?: number, limit?: number, isActive?: string, type?: string) {
+  /** Platform-default CPC/CPI, used when the admin doesn't override them. */
+  private async getSponsorshipRateDefaults() {
+    const [cpc, cpi, priority] = await Promise.all([
+      this.settingRepo.findOneBy({ key: 'sponsorship_cost_per_click' }),
+      this.settingRepo.findOneBy({ key: 'sponsorship_cost_per_impression' }),
+      this.settingRepo.findOneBy({ key: 'sponsorship_default_priority' }),
+    ]);
+    return {
+      costPerClick: cpc ? parseFloat(cpc.value) : 5.0,
+      costPerImpression: cpi ? parseFloat(cpi.value) : 0.1,
+      priority: priority ? parseInt(priority.value, 10) || 0 : 0,
+    };
+  }
+
+  /** True when the platform-wide sponsorships kill switch is on. */
+  private async isSponsorshipsEnabled() {
+    const row = await this.settingRepo.findOneBy({ key: 'sponsorships_enabled' });
+    return row?.value === 'true';
+  }
+
+  async getSponsoredListings(
+    admin: any,
+    page?: number,
+    limit?: number,
+    isActive?: string,
+    type?: string,
+    filters?: { approvalStatus?: string; source?: string; billingMode?: string; providerId?: string; search?: string },
+  ) {
     this.assertAdmin(admin);
     const currentPage = Math.max(1, page || 1);
     const pageSize = Math.min(100, Math.max(1, limit || 10));
@@ -1825,6 +2035,13 @@ export class AdminService {
     if (isActive === 'true') qb.andWhere('s.is_active = true');
     if (isActive === 'false') qb.andWhere('s.is_active = false');
     if (type) qb.andWhere('s.type = :type', { type });
+    if (filters?.approvalStatus) qb.andWhere('s.approval_status = :approvalStatus', { approvalStatus: filters.approvalStatus });
+    if (filters?.source) qb.andWhere('s.source = :source', { source: filters.source });
+    if (filters?.billingMode) qb.andWhere('s.billing_mode = :billingMode', { billingMode: filters.billingMode });
+    if (filters?.providerId) qb.andWhere('s.provider_id = :providerId', { providerId: filters.providerId });
+    if (filters?.search?.trim()) {
+      qb.andWhere('(provider.brand_name ILIKE :q OR provider.city ILIKE :q)', { q: `%${filters.search.trim()}%` });
+    }
 
     qb.orderBy('s.createdAt', 'DESC').skip(skip).take(pageSize);
 
@@ -1835,75 +2052,620 @@ export class AdminService {
     };
   }
 
-  // Note: approvalStatus filter is available via getPendingSponsorships()
-
   async getSponsoredById(admin: any, id: string) {
     this.assertAdmin(admin);
     const listing = await this.sponsoredRepo.findOne({
       where: { id },
-      relations: ['provider', 'provider.user'],
+      relations: ['provider', 'provider.user', 'payment'],
     });
     if (!listing) throw new NotFoundException('Sponsored listing not found');
     return listing;
   }
 
-  async updateSponsored(admin: any, id: string, body: Partial<SponsoredListing>) {
+  /**
+   * Providers an admin can place a sponsorship for — every listable business,
+   * annotated with whatever placement it already has running.
+   */
+  async getSponsorshipEligibleProviders(admin: any, search?: string, limit?: number) {
+    this.assertAdmin(admin);
+    const take = Math.min(50, Math.max(1, limit || 20));
+
+    const qb = this.providerRepo.createQueryBuilder('p')
+      .select(['p.id', 'p.brandName', 'p.city', 'p.area', 'p.status', 'p.profilePhotoUrl', 'p.isFeatured'])
+      .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
+      .orderBy('p.brandName', 'ASC')
+      .take(take);
+
+    if (search?.trim()) {
+      qb.andWhere('(p.brand_name ILIKE :q OR p.city ILIKE :q)', { q: `%${search.trim()}%` });
+    }
+
+    const providers = await qb.getMany();
+    if (providers.length === 0) return [];
+
+    const now = new Date();
+    const active = await this.sponsoredRepo
+      .createQueryBuilder('s')
+      .select(['s.id', 's.providerId', 's.type', 's.billingMode', 's.endsAt'])
+      .where('s.provider_id IN (:...ids)', { ids: providers.map((p) => p.id) })
+      .andWhere('s.is_active = true')
+      .andWhere('s.ends_at > :now', { now })
+      .getMany();
+
+    const byProvider = new Map<string, typeof active>();
+    for (const listing of active) {
+      const list = byProvider.get(listing.providerId) ?? [];
+      list.push(listing);
+      byProvider.set(listing.providerId, list);
+    }
+
+    return providers.map((p) => ({
+      id: p.id,
+      brandName: p.brandName,
+      city: p.city,
+      area: p.area,
+      status: p.status,
+      profilePhotoUrl: p.profilePhotoUrl,
+      isFeatured: p.isFeatured,
+      activeSponsorships: (byProvider.get(p.id) ?? []).map((l) => ({
+        id: l.id,
+        type: l.type,
+        billingMode: l.billingMode,
+        endsAt: l.endsAt,
+      })),
+    }));
+  }
+
+  /**
+   * Place a sponsorship on any provider, with or without money changing hands.
+   * `billingMode: 'free'` is complimentary — it never accrues spend and is
+   * never budget-capped. `billingMode: 'paid'` behaves like a purchased boost
+   * and can carry a manually recorded offline payment.
+   */
+  async createSponsorship(admin: any, dto: AdminCreateSponsorshipDto) {
+    this.assertAdmin(admin);
+
+    const provider = await this.providerRepo.findOne({
+      where: { id: dto.providerId },
+      relations: ['user'],
+    });
+    if (!provider) throw new NotFoundException('Provider not found');
+
+    const startsAt = new Date(dto.startsAt);
+    const endsAt = new Date(dto.endsAt);
+    if (isNaN(startsAt.getTime()) || isNaN(endsAt.getTime())) {
+      throw new BadRequestException('Invalid date format');
+    }
+    if (endsAt <= startsAt) {
+      throw new BadRequestException('End date must be after start date');
+    }
+
+    const billingMode = dto.billingMode ?? 'free';
+    if (billingMode === 'paid' && !(dto.budgetAmount && dto.budgetAmount > 0)) {
+      throw new BadRequestException('A paid placement needs a budget amount above 0');
+    }
+
+    const defaults = await this.getSponsorshipRateDefaults();
+    // Complimentary placements never burn budget, so their rates are zeroed —
+    // the serving queries skip the budget guard for them either way.
+    const costPerClick = billingMode === 'free' ? 0 : (dto.costPerClick ?? defaults.costPerClick);
+    const costPerImpression = billingMode === 'free' ? 0 : (dto.costPerImpression ?? defaults.costPerImpression);
+
+    const listing = this.sponsoredRepo.create({
+      providerId: provider.id,
+      type: dto.type,
+      billingMode,
+      source: 'admin_granted',
+      createdByAdminId: admin.id,
+      budgetAmount: billingMode === 'free' ? 0 : dto.budgetAmount!,
+      costPerClick,
+      costPerImpression,
+      targetCategoryIds: dto.targetCategoryIds?.length ? dto.targetCategoryIds : null,
+      targetCities: dto.targetCities?.length ? dto.targetCities : null,
+      targetRadius: dto.targetRadius ?? null,
+      startsAt,
+      endsAt,
+      priority: dto.priority ?? defaults.priority,
+      isActive: dto.isActive ?? true,
+      approvalStatus: dto.approvalStatus ?? 'approved',
+      internalNote: dto.internalNote ?? null,
+      reviewedBy: admin.id,
+      reviewedAt: new Date(),
+    });
+
+    const saved = await this.sponsoredRepo.save(listing);
+
+    // Offline payment record — a sponsorship sold outside the app still shows
+    // up in revenue reporting.
+    if (dto.recordPayment && billingMode === 'paid') {
+      const payment = this.paymentRepo.create({
+        providerId: provider.id,
+        amount: dto.paymentAmount ?? dto.budgetAmount!,
+        currency: 'INR',
+        status: 'succeeded',
+        type: 'sponsorship',
+        paymentGateway: 'manual',
+        metadata: {
+          sponsoredListingId: saved.id,
+          recordedByAdminId: admin.id,
+          reference: dto.paymentReference ?? null,
+          note: 'Recorded manually by admin',
+        },
+      });
+      const savedPayment = await this.paymentRepo.save(payment);
+      await this.sponsoredRepo.update(saved.id, { paymentId: savedPayment.id });
+      saved.paymentId = savedPayment.id;
+    }
+
+    await this.createAuditLog(
+      admin.id,
+      'create_sponsorship',
+      'sponsored_listing',
+      saved.id,
+      null,
+      {
+        providerId: provider.id,
+        brandName: provider.brandName,
+        type: saved.type,
+        billingMode,
+        budgetAmount: saved.budgetAmount,
+        priority: saved.priority,
+        startsAt: saved.startsAt,
+        endsAt: saved.endsAt,
+        isActive: saved.isActive,
+      },
+      `Admin placed a ${billingMode === 'free' ? 'complimentary' : 'paid'} ${dto.type.replace('_', ' ')} sponsorship for ${provider.brandName}`,
+    );
+
+    if ((dto.notifyProvider ?? true) && provider.userId && saved.isActive && saved.approvalStatus === 'approved') {
+      this.notificationDispatch.sendToUser(
+        provider.userId,
+        'provider_status',
+        billingMode === 'free' ? 'You got a free boost 🎉' : 'Your boost is live',
+        billingMode === 'free'
+          ? `Tijarah has placed a complimentary ${dto.type.replace('_', ' ')} boost on your business until ${endsAt.toISOString().slice(0, 10)}.`
+          : `Your ${dto.type.replace('_', ' ')} boost is live until ${endsAt.toISOString().slice(0, 10)}.`,
+        { route: '/' },
+        undefined,
+        undefined,
+        'provider',
+      ).catch(() => {});
+    }
+
+    if (!(await this.isSponsorshipsEnabled())) {
+      return {
+        ...saved,
+        provider,
+        warning: 'Sponsorships are currently switched off platform-wide. This placement will not serve until the "Sponsorships / Boost" feature flag is turned on.',
+      };
+    }
+
+    return { ...saved, provider };
+  }
+
+  async updateSponsored(admin: any, id: string, dto: AdminUpdateSponsorshipDto) {
     this.assertAdmin(admin);
     const listing = await this.sponsoredRepo.findOneBy({ id });
     if (!listing) throw new NotFoundException('Sponsored listing not found');
 
-    const allowed = ['isActive', 'budgetAmount', 'costPerClick', 'startsAt', 'endsAt', 'targetCategoryIds', 'targetCities'];
-    const update: any = {};
-    for (const key of allowed) {
-      if ((body as any)[key] !== undefined) update[key] = (body as any)[key];
+    const update: Partial<SponsoredListing> = {};
+    const simpleFields = [
+      'type', 'billingMode', 'budgetAmount', 'costPerClick', 'costPerImpression',
+      'targetCategoryIds', 'targetCities', 'targetRadius', 'priority',
+      'approvalStatus', 'internalNote', 'isActive',
+    ] as const;
+
+    for (const key of simpleFields) {
+      if (dto[key] !== undefined) (update as any)[key] = dto[key];
     }
+
+    if (dto.startsAt !== undefined) update.startsAt = new Date(dto.startsAt);
+    if (dto.endsAt !== undefined) update.endsAt = new Date(dto.endsAt);
+
+    const startsAt = update.startsAt ?? listing.startsAt;
+    const endsAt = update.endsAt ?? listing.endsAt;
+    if (new Date(endsAt) <= new Date(startsAt)) {
+      throw new BadRequestException('End date must be after start date');
+    }
+
+    if (dto.resetSpend) update.spentAmount = 0;
+
+    // Switching to complimentary clears the budget guard entirely.
+    if (dto.billingMode === 'free') {
+      update.budgetAmount = 0;
+      update.costPerClick = 0;
+      update.costPerImpression = 0;
+      update.spentAmount = 0;
+    }
+
+    const targetBillingMode = dto.billingMode ?? listing.billingMode;
+    if (targetBillingMode === 'paid' && dto.budgetAmount !== undefined && dto.budgetAmount <= 0) {
+      throw new BadRequestException('A paid placement needs a budget amount above 0');
+    }
+
+    // isActive doubles as the stop/resume switch, so keep the stop trail honest.
+    if (dto.isActive === true) {
+      update.stoppedAt = null;
+      update.stoppedBy = null;
+      update.stoppedReason = null;
+    } else if (dto.isActive === false && listing.isActive) {
+      update.stoppedAt = new Date();
+      update.stoppedBy = admin.id;
+    }
+
     if (Object.keys(update).length === 0) throw new BadRequestException('No valid fields to update');
+
     await this.sponsoredRepo.update(id, update);
+
+    await this.createAuditLog(
+      admin.id,
+      'update_sponsorship',
+      'sponsored_listing',
+      id,
+      {
+        type: listing.type,
+        billingMode: listing.billingMode,
+        budgetAmount: listing.budgetAmount,
+        priority: listing.priority,
+        isActive: listing.isActive,
+        approvalStatus: listing.approvalStatus,
+        startsAt: listing.startsAt,
+        endsAt: listing.endsAt,
+      },
+      update as Record<string, any>,
+    );
+
     return this.sponsoredRepo.findOne({ where: { id }, relations: ['provider'] });
+  }
+
+  /** Pause a running placement. Keeps the row so it can be resumed or audited. */
+  async stopSponsorship(admin: any, id: string, dto: StopSponsorshipDto = {}) {
+    this.assertAdmin(admin);
+    const listing = await this.sponsoredRepo.findOne({ where: { id }, relations: ['provider'] });
+    if (!listing) throw new NotFoundException('Sponsored listing not found');
+    if (!listing.isActive) throw new BadRequestException('This sponsorship is already stopped');
+
+    await this.sponsoredRepo.update(id, {
+      isActive: false,
+      stoppedAt: new Date(),
+      stoppedBy: admin.id,
+      stoppedReason: dto.reason || null,
+    });
+
+    await this.createAuditLog(
+      admin.id,
+      'stop_sponsorship',
+      'sponsored_listing',
+      id,
+      { isActive: true },
+      { isActive: false, stoppedReason: dto.reason ?? null },
+      dto.reason ? `Stopped: ${dto.reason}` : 'Stopped by admin',
+    );
+
+    if ((dto.notifyProvider ?? true) && listing.provider?.userId) {
+      this.notificationDispatch.sendToUser(
+        listing.provider.userId,
+        'provider_status',
+        'Your boost was paused',
+        dto.reason || 'Your sponsored placement has been paused by the Tijarah team.',
+        { route: '/' },
+        undefined,
+        undefined,
+        'provider',
+      ).catch(() => {});
+    }
+
+    return this.sponsoredRepo.findOne({ where: { id }, relations: ['provider'] });
+  }
+
+  /** Put a stopped placement back in rotation. */
+  async resumeSponsorship(admin: any, id: string) {
+    this.assertAdmin(admin);
+    const listing = await this.sponsoredRepo.findOne({ where: { id }, relations: ['provider'] });
+    if (!listing) throw new NotFoundException('Sponsored listing not found');
+    if (listing.isActive) throw new BadRequestException('This sponsorship is already running');
+
+    if (new Date(listing.endsAt) <= new Date()) {
+      throw new BadRequestException('This sponsorship has expired — extend the end date before resuming');
+    }
+    if (listing.billingMode === 'paid' && Number(listing.spentAmount) >= Number(listing.budgetAmount)) {
+      throw new BadRequestException('Budget is exhausted — top up the budget before resuming');
+    }
+    if (listing.approvalStatus === 'rejected') {
+      throw new BadRequestException('This sponsorship was rejected — approve it before resuming');
+    }
+
+    await this.sponsoredRepo.update(id, {
+      isActive: true,
+      stoppedAt: null,
+      stoppedBy: null,
+      stoppedReason: null,
+    });
+
+    await this.createAuditLog(admin.id, 'resume_sponsorship', 'sponsored_listing', id, { isActive: false }, { isActive: true });
+
+    return this.sponsoredRepo.findOne({ where: { id }, relations: ['provider'] });
+  }
+
+  /** Add budget (and optionally days) to a running paid placement. */
+  async topUpSponsorship(admin: any, id: string, dto: TopUpSponsorshipDto) {
+    this.assertAdmin(admin);
+    const listing = await this.sponsoredRepo.findOne({ where: { id }, relations: ['provider'] });
+    if (!listing) throw new NotFoundException('Sponsored listing not found');
+    if (listing.billingMode === 'free') {
+      throw new BadRequestException('Complimentary placements have no budget to top up');
+    }
+
+    const newBudget = Number(listing.budgetAmount) + dto.amount;
+    const update: Partial<SponsoredListing> = { budgetAmount: newBudget };
+
+    if (dto.extendDays) {
+      const endsAt = new Date(listing.endsAt);
+      endsAt.setDate(endsAt.getDate() + dto.extendDays);
+      update.endsAt = endsAt;
+    }
+
+    await this.sponsoredRepo.update(id, update);
+
+    if (dto.recordPayment) {
+      const payment = this.paymentRepo.create({
+        providerId: listing.providerId,
+        amount: dto.amount,
+        currency: 'INR',
+        status: 'succeeded',
+        type: 'sponsorship',
+        paymentGateway: 'manual',
+        metadata: {
+          sponsoredListingId: listing.id,
+          recordedByAdminId: admin.id,
+          reference: dto.paymentReference ?? null,
+          note: 'Budget top-up recorded manually by admin',
+        },
+      });
+      await this.paymentRepo.save(payment);
+    }
+
+    await this.createAuditLog(
+      admin.id,
+      'topup_sponsorship',
+      'sponsored_listing',
+      id,
+      { budgetAmount: listing.budgetAmount, endsAt: listing.endsAt },
+      { budgetAmount: newBudget, endsAt: update.endsAt ?? listing.endsAt },
+      `Topped up by ₹${dto.amount}${dto.extendDays ? ` and extended by ${dto.extendDays} day(s)` : ''}`,
+    );
+
+    return this.sponsoredRepo.findOne({ where: { id }, relations: ['provider'] });
+  }
+
+  async deleteSponsorship(admin: any, id: string) {
+    this.assertAdmin(admin);
+    const listing = await this.sponsoredRepo.findOne({ where: { id }, relations: ['provider'] });
+    if (!listing) throw new NotFoundException('Sponsored listing not found');
+
+    await this.sponsoredRepo.delete(id);
+    await this.createAuditLog(
+      admin.id,
+      'delete_sponsorship',
+      'sponsored_listing',
+      id,
+      {
+        providerId: listing.providerId,
+        brandName: listing.provider?.brandName,
+        type: listing.type,
+        billingMode: listing.billingMode,
+        budgetAmount: listing.budgetAmount,
+        spentAmount: listing.spentAmount,
+      },
+      null,
+      'Sponsorship deleted by admin',
+    );
+
+    return { success: true, id };
+  }
+
+  async bulkSponsorshipAction(admin: any, dto: BulkSponsorshipDto) {
+    this.assertAdmin(admin);
+    const results: { id: string; ok: boolean; error?: string }[] = [];
+
+    for (const id of dto.ids) {
+      try {
+        switch (dto.action) {
+          case 'stop':
+            await this.stopSponsorship(admin, id, { reason: dto.reason, notifyProvider: false });
+            break;
+          case 'resume':
+            await this.resumeSponsorship(admin, id);
+            break;
+          case 'approve':
+            await this.approveSponsorship(admin, id);
+            break;
+          case 'reject':
+            await this.rejectSponsorship(admin, id, dto.reason);
+            break;
+          case 'delete':
+            await this.deleteSponsorship(admin, id);
+            break;
+        }
+        results.push({ id, ok: true });
+      } catch (err: any) {
+        results.push({ id, ok: false, error: err?.message || 'Failed' });
+      }
+    }
+
+    const succeeded = results.filter((r) => r.ok).length;
+    return { action: dto.action, total: dto.ids.length, succeeded, failed: dto.ids.length - succeeded, results };
+  }
+
+  /**
+   * Kill switch. Pauses every running placement in one shot and — when asked —
+   * flips the platform feature flag off so nothing sponsored is served at all.
+   */
+  async stopAllSponsorships(admin: any, dto: StopAllSponsorshipsDto = {}) {
+    this.assertAdmin(admin);
+
+    const qb = this.sponsoredRepo.createQueryBuilder('s')
+      .select(['s.id'])
+      .where('s.is_active = true');
+    if (dto.billingMode) qb.andWhere('s.billing_mode = :billingMode', { billingMode: dto.billingMode });
+    const targets = await qb.getMany();
+
+    let stopped = 0;
+    if (targets.length > 0) {
+      const result = await this.sponsoredRepo.update(
+        { id: In(targets.map((t) => t.id)) },
+        {
+          isActive: false,
+          stoppedAt: new Date(),
+          stoppedBy: admin.id,
+          stoppedReason: dto.reason || 'Stopped in bulk by admin',
+        },
+      );
+      stopped = result.affected ?? targets.length;
+    }
+
+    let featureFlagDisabled = false;
+    if (dto.disableFeatureFlag) {
+      await this.settingRepo.update({ key: 'sponsorships_enabled' }, { value: 'false' });
+      featureFlagDisabled = true;
+    }
+
+    await this.createAuditLog(
+      admin.id,
+      'stop_all_sponsorships',
+      'sponsored_listing',
+      null,
+      { activeCount: targets.length },
+      { stopped, featureFlagDisabled, billingMode: dto.billingMode ?? 'all' },
+      dto.reason || 'Bulk stop of all active sponsorships',
+    );
+
+    return { stopped, featureFlagDisabled, reason: dto.reason ?? null };
   }
 
   async getSponsoredStats(admin: any) {
     this.assertAdmin(admin);
-    const [total, active, totalSpent, totalBudget, totalImpressions, totalClicks] = await Promise.all([
+    const now = new Date();
+    const in7Days = new Date(now.getTime() + 7 * 86400000);
+
+    const [
+      total, active, activePaid, complimentary, adminGranted, pendingApproval, expiringSoon,
+      totalSpent, totalBudget, totalImpressions, totalClicks, sponsorshipsEnabled,
+    ] = await Promise.all([
       this.sponsoredRepo.count(),
       this.sponsoredRepo.count({ where: { isActive: true } }),
+      // Paying customers currently in their serving window — switching the
+      // master switch off goes dark on exactly these.
+      this.sponsoredRepo
+        .createQueryBuilder('s')
+        .where('s.is_active = true')
+        .andWhere("s.billing_mode = 'paid'")
+        .andWhere("s.approval_status = 'approved'")
+        .andWhere('s.starts_at <= :now', { now })
+        .andWhere('s.ends_at >= :now', { now })
+        .getCount(),
+      this.sponsoredRepo.count({ where: { billingMode: 'free' } }),
+      this.sponsoredRepo.count({ where: { source: 'admin_granted' } }),
+      this.sponsoredRepo.count({ where: { approvalStatus: 'pending_approval' } }),
+      this.sponsoredRepo.count({ where: { isActive: true, endsAt: Between(now, in7Days) } }),
       this.sponsoredRepo.createQueryBuilder('s').select('COALESCE(SUM(s.spent_amount), 0)', 'val').getRawOne(),
       this.sponsoredRepo.createQueryBuilder('s').select('COALESCE(SUM(s.budget_amount), 0)', 'val').getRawOne(),
       this.sponsoredRepo.createQueryBuilder('s').select('COALESCE(SUM(s.impressions), 0)', 'val').getRawOne(),
       this.sponsoredRepo.createQueryBuilder('s').select('COALESCE(SUM(s.clicks), 0)', 'val').getRawOne(),
+      this.isSponsorshipsEnabled(),
     ]);
+
     return {
       total,
       active,
+      activePaid,
+      complimentary,
+      adminGranted,
+      pendingApproval,
+      expiringSoon,
       totalSpent: Number(totalSpent?.val || 0),
       totalBudget: Number(totalBudget?.val || 0),
       totalImpressions: Number(totalImpressions?.val || 0),
       totalClicks: Number(totalClicks?.val || 0),
+      sponsorshipsEnabled,
     };
   }
 
-  async getSponsorshipAnalytics(admin: any, id: string, period: string) {
+  /**
+   * Per-day impressions, clicks and spend for one placement.
+   * Ad events are keyed by (entity_type, entity_id) — there is no
+   * sponsored_listing_id column on ad_events.
+   */
+  async getSponsorshipAnalytics(admin: any, id: string, period?: string) {
     this.assertAdmin(admin);
     const listing = await this.sponsoredRepo.findOne({ where: { id }, relations: ['provider'] });
     if (!listing) throw new NotFoundException('Sponsored listing not found');
 
     const days = period === '30d' ? 30 : period === '14d' ? 14 : 7;
     const since = new Date();
-    since.setDate(since.getDate() - days);
+    since.setHours(0, 0, 0, 0);
+    since.setDate(since.getDate() - (days - 1));
 
-    const events = await this.adEventRepo
+    const rows: { date: string; eventType: string; count: string }[] = await this.adEventRepo
       .createQueryBuilder('e')
-      .select("DATE(e.created_at)", 'date')
-      .addSelect("e.event_type", 'eventType')
-      .addSelect("COUNT(*)", 'count')
-      .where('e.sponsored_listing_id = :id', { id })
+      .select("TO_CHAR(DATE(e.created_at), 'YYYY-MM-DD')", 'date')
+      .addSelect('e.event_type', 'eventType')
+      .addSelect('COUNT(*)', 'count')
+      .where('e.entity_id = :id', { id })
+      .andWhere("e.entity_type = 'sponsored_listing'")
       .andWhere('e.created_at >= :since', { since })
-      .groupBy("DATE(e.created_at)")
-      .addGroupBy("e.event_type")
-      .orderBy("date", 'ASC')
+      .groupBy('DATE(e.created_at)')
+      .addGroupBy('e.event_type')
+      .orderBy('1', 'ASC')
       .getRawMany();
 
-    return { listing, period, events };
+    const byDate = new Map<string, { impressions: number; clicks: number }>();
+    for (const row of rows) {
+      const bucket = byDate.get(row.date) ?? { impressions: 0, clicks: 0 };
+      if (row.eventType === 'impression') bucket.impressions += Number(row.count);
+      if (row.eventType === 'click') bucket.clicks += Number(row.count);
+      byDate.set(row.date, bucket);
+    }
+
+    // Complimentary placements cost nothing, so their spend line stays flat at 0.
+    const cpc = listing.billingMode === 'free' ? 0 : Number(listing.costPerClick);
+    const cpi = listing.billingMode === 'free' ? 0 : Number(listing.costPerImpression);
+
+    const daily: { date: string; impressions: number; clicks: number; spend: number }[] = [];
+    for (let i = 0; i < days; i++) {
+      const d = new Date(since);
+      d.setDate(since.getDate() + i);
+      const key = d.toISOString().slice(0, 10);
+      const bucket = byDate.get(key) ?? { impressions: 0, clicks: 0 };
+      daily.push({
+        date: key,
+        impressions: bucket.impressions,
+        clicks: bucket.clicks,
+        spend: Number((bucket.impressions * cpi + bucket.clicks * cpc).toFixed(2)),
+      });
+    }
+
+    const impressions = daily.reduce((sum, d) => sum + d.impressions, 0);
+    const clicks = daily.reduce((sum, d) => sum + d.clicks, 0);
+    const spend = Number(daily.reduce((sum, d) => sum + d.spend, 0).toFixed(2));
+    const avgDailySpend = spend / days;
+    const remainingBudget = Number(listing.budgetAmount) - Number(listing.spentAmount);
+
+    return {
+      daily,
+      totals: {
+        impressions,
+        clicks,
+        spend,
+        avgDailyImpressions: Math.round(impressions / days),
+        avgDailyClicks: Math.round((clicks / days) * 10) / 10,
+      },
+      projectedDaysLeft:
+        listing.billingMode === 'free' || avgDailySpend <= 0 || remainingBudget <= 0
+          ? null
+          : Math.ceil(remainingBudget / avgDailySpend),
+      period: days,
+    };
   }
 
   // ============================================
@@ -2685,8 +3447,13 @@ export class AdminService {
         contactNumber: dto.contactNumber,
         openTime: dto.openTime || null,
         closeTime: dto.closeTime || null,
+        instagramHandle: dto.instagramHandle?.trim() || null,
+        whatsappNumber: dto.whatsappNumber?.trim() || null,
+        websiteUrl: dto.websiteUrl?.trim() || null,
+        facebookHandle: dto.facebookHandle?.trim() || null,
         isWomenLed: dto.isWomenLed ?? (dto.userGender === 'female'),
         womenLedStatus: (dto.isWomenLed ?? (dto.userGender === 'female')) ? 'approved' : 'none',
+        communityVerified: dto.communityVerified ?? false,
         status: (dto.providerStatus as any) || 'active',
       });
       const savedProvider = await manager.save(Provider, provider);
@@ -2729,6 +3496,7 @@ export class AdminService {
         city: savedProvider.city,
         contactNumber: savedProvider.contactNumber,
         providerStatus: savedProvider.status,
+        communityVerified: savedProvider.communityVerified,
         categoryCount: dto.categoryIds?.length || 0,
         productCount: savedProducts.length,
       });
@@ -2741,6 +3509,134 @@ export class AdminService {
         categories: dto.categoryIds || [],
       };
     });
+  }
+
+  // ============================================
+  // Bulk Provider Import (CSV / XLSX from the admin console)
+  // ============================================
+
+  /**
+   * Dry run for a batch: nothing is written. Tells the console which rows
+   * would reuse an existing user, which are blocked (user already owns a
+   * provider), and which contact numbers / brand names already exist so the
+   * data-entry operator can vet the sheet before committing.
+   */
+  async bulkValidateProviders(admin: any, dto: BulkValidateProvidersDto) {
+    this.assertAdmin(admin);
+    const rows = dto.rows;
+    if (rows.length === 0) return { results: [] };
+
+    const mobiles = Array.from(new Set(rows.map((r) => r.userMobileNumber)));
+    const contacts = Array.from(new Set(rows.map((r) => r.contactNumber).filter(Boolean)));
+    const emails = Array.from(new Set(rows.map((r) => r.userEmail).filter((e): e is string => !!e)));
+    const categoryIds = Array.from(new Set(rows.flatMap((r) => r.categoryIds ?? [])));
+
+    const [users, providersByContact, usersByEmail, categories] = await Promise.all([
+      this.userRepo.find({ where: { mobileNumber: In(mobiles) }, select: ['id', 'name', 'mobileNumber', 'email'] }),
+      contacts.length
+        ? this.providerRepo.find({ where: { contactNumber: In(contacts) }, select: ['id', 'brandName', 'city', 'contactNumber', 'status'] })
+        : Promise.resolve([] as Provider[]),
+      emails.length
+        ? this.userRepo.find({ where: { email: In(emails) }, select: ['id', 'mobileNumber', 'email'] })
+        : Promise.resolve([] as User[]),
+      categoryIds.length
+        ? this.categoryRepo.find({ where: { id: In(categoryIds) }, select: ['id', 'name'] })
+        : Promise.resolve([] as Category[]),
+    ]);
+
+    const userByMobile = new Map(users.map((u) => [u.mobileNumber, u]));
+    const providerOwners = users.length
+      ? await this.providerRepo.find({ where: { userId: In(users.map((u) => u.id)) }, select: ['id', 'userId', 'brandName', 'status'] })
+      : [];
+    const providerByUserId = new Map(providerOwners.map((p) => [p.userId, p]));
+    const providerByContact = new Map(providersByContact.map((p) => [p.contactNumber, p]));
+    const userByEmail = new Map(usersByEmail.map((u) => [u.email, u]));
+    const knownCategoryIds = new Set(categories.map((c) => c.id));
+
+    // Brand-name collisions in the same city (case-insensitive) — a soft warning.
+    const brandRows = rows.filter((r) => r.brandName && r.city);
+    const brandMatches = brandRows.length
+      ? await this.providerRepo
+          .createQueryBuilder('p')
+          .select(['p.id', 'p.brandName', 'p.city', 'p.status'])
+          .where(
+            brandRows.map((_, i) => `(LOWER(p.brand_name) = :b${i} AND LOWER(p.city) = :c${i})`).join(' OR '),
+            Object.fromEntries(brandRows.flatMap((r, i) => [[`b${i}`, r.brandName.trim().toLowerCase()], [`c${i}`, r.city.trim().toLowerCase()]])),
+          )
+          .getMany()
+      : [];
+    const brandKey = (name: string, city: string) => `${name.trim().toLowerCase()}|${city.trim().toLowerCase()}`;
+    const brandByKey = new Map(brandMatches.map((p) => [brandKey(p.brandName, p.city), p]));
+
+    const results = rows.map((row) => {
+      const user = userByMobile.get(row.userMobileNumber) ?? null;
+      const ownedProvider = user ? providerByUserId.get(user.id) ?? null : null;
+      const contactOwner = row.contactNumber ? providerByContact.get(row.contactNumber) ?? null : null;
+      const emailOwner = row.userEmail ? userByEmail.get(row.userEmail) ?? null : null;
+      const unknownCategoryIds = (row.categoryIds ?? []).filter((id) => !knownCategoryIds.has(id));
+      const brandClash = row.brandName && row.city ? brandByKey.get(brandKey(row.brandName, row.city)) ?? null : null;
+
+      const errors: string[] = [];
+      const warnings: string[] = [];
+      if (ownedProvider) errors.push(`Mobile ${row.userMobileNumber} already owns "${ownedProvider.brandName}" (${ownedProvider.status})`);
+      if (emailOwner && (!user || emailOwner.id !== user.id)) errors.push(`Email ${row.userEmail} belongs to another user`);
+      if (unknownCategoryIds.length) errors.push(`Unknown category id(s): ${unknownCategoryIds.join(', ')}`);
+      if (user && !ownedProvider) warnings.push(`Existing user "${user.name}" will be reused and switched to provider mode`);
+      if (contactOwner) warnings.push(`Contact number already listed on "${contactOwner.brandName}" (${contactOwner.city})`);
+      if (brandClash) warnings.push(`A provider named "${brandClash.brandName}" already exists in ${brandClash.city}`);
+
+      for (const [label, value] of [['user name', row.userName], ['brand name', row.brandName], ['description', row.description]] as const) {
+        if (value && this.contentSanitizer.check(value).flagged) errors.push(`The ${label} contains inappropriate language`);
+      }
+
+      return {
+        rowId: row.rowId,
+        ok: errors.length === 0,
+        errors,
+        warnings,
+        existingUser: user ? { id: user.id, name: user.name } : null,
+        existingProvider: ownedProvider ? { id: ownedProvider.id, brandName: ownedProvider.brandName, status: ownedProvider.status } : null,
+        contactNumberOwner: contactOwner ? { id: contactOwner.id, brandName: contactOwner.brandName, city: contactOwner.city } : null,
+        brandNameClash: brandClash ? { id: brandClash.id, brandName: brandClash.brandName, city: brandClash.city } : null,
+      };
+    });
+
+    return { results };
+  }
+
+  /**
+   * Commits a batch. Each row goes through the exact same path as the
+   * single-provider form (adminCreateProviderWithUser) in its own transaction,
+   * so one bad row never rolls back its neighbours. Returns a per-row report.
+   */
+  async bulkImportProviders(admin: any, dto: BulkImportProvidersDto) {
+    this.assertAdmin(admin);
+    const results: { rowId: string; ok: boolean; providerId?: string; userId?: string; brandName?: string; error?: string }[] = [];
+
+    for (const row of dto.rows) {
+      const { rowId, ...payload } = row;
+      try {
+        const created = await this.adminCreateProviderWithUser(admin, payload);
+        results.push({ rowId, ok: true, providerId: created.provider.id, userId: created.user.id, brandName: created.provider.brandName });
+      } catch (err: any) {
+        const message = err?.response?.message ?? err?.message ?? 'Failed';
+        results.push({ rowId, ok: false, brandName: row.brandName, error: Array.isArray(message) ? message.join('; ') : String(message) });
+        if (dto.continueOnError === false) break;
+      }
+    }
+
+    const created = results.filter((r) => r.ok).length;
+    await this.createAuditLog(
+      admin.id,
+      'bulk_import_providers',
+      'provider',
+      null,
+      null,
+      { total: dto.rows.length, created, failed: results.length - created, source: dto.sourceLabel ?? null },
+      `Bulk provider import: ${created}/${dto.rows.length} created${dto.sourceLabel ? ` from ${dto.sourceLabel}` : ''}`,
+    );
+
+    return { total: dto.rows.length, created, failed: results.length - created, skipped: dto.rows.length - results.length, results };
   }
 
   // ============================================

@@ -454,7 +454,7 @@ export class ProvidersService {
         .andWhere('s.is_active = true')
         .andWhere('s.starts_at <= NOW()')
         .andWhere('s.ends_at > NOW()')
-        .andWhere('s.spent_amount < s.budget_amount')
+        .andWhere("(s.billing_mode = 'free' OR s.spent_amount < s.budget_amount)")
         .andWhere("s.approval_status = 'approved'")
         .getOne(),
       this.reviewRepo
@@ -848,7 +848,7 @@ export class ProvidersService {
       // Sponsored flag: check if provider has an active sponsored listing right now
       .leftJoin(
         'sponsored_listings', 'sl',
-        `sl.provider_id = p.id AND sl.is_active = true AND sl.approval_status = 'approved' AND sl.starts_at <= :now AND sl.ends_at >= :now AND sl.spent_amount < sl.budget_amount`,
+        `sl.provider_id = p.id AND sl.is_active = true AND sl.approval_status = 'approved' AND sl.starts_at <= :now AND sl.ends_at >= :now AND (sl.billing_mode = 'free' OR sl.spent_amount < sl.budget_amount)`,
       )
       .addSelect('CASE WHEN sl.id IS NOT NULL THEN true ELSE false END', 'isSponsored')
       .setParameter('now', now)
@@ -1265,9 +1265,19 @@ export class ProvidersService {
     const provider = await this.providerRepo.findOneBy({ userId });
     if (!provider) throw new NotFoundException('Provider not found');
 
+    if (!(await this.areBoostsEnabled())) {
+      throw new BadRequestException('Boosts are currently unavailable. Please check back soon.');
+    }
+
     if (new Date(dto.endsAt) <= new Date(dto.startsAt)) {
       throw new BadRequestException('End date must be after start date');
     }
+
+    // This endpoint bypasses checkout entirely, so a provider must not be able
+    // to put themselves live for free. Honour the admin flag: when approval is
+    // required the listing waits in the admin queue, inactive, until approved.
+    const approvalSetting = await this.settingRepo.findOneBy({ key: 'sponsorship_requires_approval' });
+    const requiresApproval = (approvalSetting?.value ?? 'true') === 'true';
 
     const listing = this.sponsorRepo.create({
       providerId: provider.id,
@@ -1279,8 +1289,8 @@ export class ProvidersService {
       targetRadius: dto.targetRadius ?? null,
       startsAt: new Date(dto.startsAt),
       endsAt: new Date(dto.endsAt),
-      isActive: true,
-      approvalStatus: 'approved',
+      isActive: !requiresApproval,
+      approvalStatus: requiresApproval ? 'pending_approval' : 'approved',
     });
 
     return this.sponsorRepo.save(listing);
@@ -1290,10 +1300,16 @@ export class ProvidersService {
     const provider = await this.providerRepo.findOneBy({ userId });
     if (!provider) throw new NotFoundException('Provider not found');
 
-    return this.sponsorRepo.find({
+    const listings = await this.sponsorRepo.find({
       where: { providerId: provider.id },
       order: { createdAt: 'DESC' },
     });
+    // Admin bookkeeping (private notes, which admin placed or stopped it) is
+    // never shown to the provider.
+    const adminOnly = ['internalNote', 'createdByAdminId', 'stoppedBy', 'stoppedReason'];
+    return listings.map((listing) =>
+      Object.fromEntries(Object.entries(listing).filter(([key]) => !adminOnly.includes(key))),
+    );
   }
 
   async updateSponsorship(userId: string, id: string, dto: UpdateSponsorshipDto) {
@@ -1315,8 +1331,12 @@ export class ProvidersService {
       if (dto.isActive && new Date(listing.endsAt) <= new Date()) {
         throw new BadRequestException('Cannot resume an expired sponsorship');
       }
-      // Block resume if budget exhausted
-      if (dto.isActive && Number(listing.spentAmount) >= Number(listing.budgetAmount)) {
+      // A boost the admin stopped, or one still awaiting approval, is the admin's to turn back on.
+      if (dto.isActive && (listing.stoppedAt || listing.approvalStatus !== 'approved')) {
+        throw new BadRequestException('This boost was paused by Tijarah. Please contact support to resume it.');
+      }
+      // Block resume if budget exhausted (complimentary placements have no budget)
+      if (dto.isActive && listing.billingMode === 'paid' && Number(listing.spentAmount) >= Number(listing.budgetAmount)) {
         throw new BadRequestException('Cannot resume — budget is fully exhausted');
       }
       listing.isActive = dto.isActive;
@@ -1325,7 +1345,17 @@ export class ProvidersService {
     return this.sponsorRepo.save(listing);
   }
 
+  /** True when the platform-wide boost/sponsorship master switch is on. */
+  private async areBoostsEnabled() {
+    const row = await this.settingRepo.findOneBy({ key: 'sponsorships_enabled' });
+    return row?.value === 'true';
+  }
+
   async getSponsorshipPlans() {
+    // Nothing is purchasable while the master switch is off — an empty list
+    // keeps the response shape intact for older app builds.
+    if (!(await this.areBoostsEnabled())) return [];
+
     // Read plan configuration from system settings (JSON), fallback to defaults
     const plansSetting = await this.settingRepo.findOneBy({ key: 'sponsorship_plans' });
 

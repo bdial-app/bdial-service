@@ -88,6 +88,14 @@ export class PaymentService {
     const provider = await this.providerRepo.findOneBy({ userId });
     if (!provider) throw new NotFoundException('Provider not found');
 
+    // Boosts are one feature behind one master switch. While it is off nothing
+    // serves anywhere, so refuse the sale rather than take money for a window
+    // we already know will be dark.
+    const boostsEnabled = await this.settingsRepo.findOneBy({ key: 'sponsorships_enabled' });
+    if (boostsEnabled?.value !== 'true') {
+      throw new BadRequestException('Boosts are currently unavailable. Please check back soon.');
+    }
+
     // ── Prevent duplicate/overlapping boosts (anti double-charge) ──
     // A provider can't start a new boost of a placement type they already have
     // running. Enforced server-side so the API can't be used to bypass the UI.
@@ -96,7 +104,7 @@ export class PaymentService {
       where: { providerId: provider.id, type: dto.type, isActive: true },
     });
     const stillRunning = existing.find(
-      (l) => new Date(l.endsAt) > now && Number(l.spentAmount) < Number(l.budgetAmount),
+      (l) => new Date(l.endsAt) > now && (l.billingMode === 'free' || Number(l.spentAmount) < Number(l.budgetAmount)),
     );
     if (stillRunning) {
       throw new BadRequestException(
@@ -152,23 +160,10 @@ export class PaymentService {
     const costPerClick = cpcSetting ? parseFloat(cpcSetting.value) : 5.0;
     const costPerImpression = cpiSetting ? parseFloat(cpiSetting.value) : 0.10;
 
-    // Create sponsored listing (pending payment)
-    const listing = this.sponsoredListingRepo.create({
-      providerId: provider.id,
-      type: dto.type,
-      budgetAmount: dto.budgetAmount,
-      costPerClick,
-      costPerImpression,
-      targetCategoryIds: dto.targetCategoryIds ?? null,
-      targetCities: dto.targetCities ?? null,
-      startsAt,
-      endsAt,
-      isActive: false,
-      approvalStatus: 'approved',
-    });
-    await this.sponsoredListingRepo.save(listing);
-
-    // Create pending payment record
+    // The listing itself is NOT created yet. An abandoned checkout must leave
+    // nothing behind in sponsored_listings, so the full spec rides along in the
+    // payment's metadata and the row is created in fulfillSponsorshipPayment
+    // once the gateway confirms the money.
     const payment = this.paymentRepo.create({
       providerId: provider.id,
       amount,
@@ -176,14 +171,22 @@ export class PaymentService {
       status: 'pending',
       type: 'sponsorship',
       paymentGateway: 'razorpay',
-      metadata: { sponsoredListingId: listing.id },
+      metadata: {
+        sponsorship: {
+          type: dto.type,
+          budgetAmount: dto.budgetAmount,
+          costPerClick,
+          costPerImpression,
+          targetCategoryIds: dto.targetCategoryIds ?? null,
+          targetCities: dto.targetCities ?? null,
+          startsAt: startsAt.toISOString(),
+          endsAt: endsAt.toISOString(),
+        },
+      },
       voucherId,
       discountAmount,
     });
     await this.paymentRepo.save(payment);
-
-    // Link payment to listing
-    await this.sponsoredListingRepo.update(listing.id, { paymentId: payment.id });
 
     // iOS → Apple IAP: return the boost plan's Apple product id for StoreKit
     // instead of a Razorpay order. Fulfilment happens in verifyAppleConsumable.
@@ -212,7 +215,7 @@ export class PaymentService {
       notes: {
         paymentId: payment.id,
         type: 'sponsorship',
-        sponsoredListingId: listing.id,
+        sponsorshipType: dto.type,
       },
     });
 
@@ -1152,10 +1155,44 @@ export class PaymentService {
   }
 
   private async fulfillSponsorshipPayment(payment: Payment) {
-    const listingId = payment.metadata?.sponsoredListingId;
-    if (!listingId) return;
+    // Re-read metadata: verify and webhook can both land, and the first one to
+    // fulfil records the created listing id here.
+    const fresh = await this.paymentRepo.findOneBy({ id: payment.id });
+    const metadata = (fresh?.metadata ?? payment.metadata ?? {}) as Record<string, any>;
 
-    await this.sponsoredListingRepo.update(listingId, { isActive: true, approvalStatus: 'approved' });
+    let listingId: string | null = metadata.sponsoredListingId ?? null;
+
+    if (listingId) {
+      // Legacy in-flight checkout (listing pre-created) or a second fulfil call.
+      await this.sponsoredListingRepo.update(listingId, { isActive: true, approvalStatus: 'approved' });
+    } else {
+      const spec = metadata.sponsorship;
+      if (!spec) {
+        this.logger.error(`Sponsorship payment ${payment.id} has no listing spec — cannot fulfil`);
+        return;
+      }
+      const listing = this.sponsoredListingRepo.create({
+        providerId: payment.providerId,
+        type: spec.type,
+        budgetAmount: spec.budgetAmount,
+        costPerClick: spec.costPerClick,
+        costPerImpression: spec.costPerImpression,
+        targetCategoryIds: spec.targetCategoryIds ?? null,
+        targetCities: spec.targetCities ?? null,
+        startsAt: new Date(spec.startsAt),
+        endsAt: new Date(spec.endsAt),
+        isActive: true,
+        approvalStatus: 'approved',
+        source: 'provider_paid',
+        billingMode: 'paid',
+        paymentId: payment.id,
+      });
+      const saved = await this.sponsoredListingRepo.save(listing);
+      listingId = saved.id;
+      await this.paymentRepo.update(payment.id, {
+        metadata: { ...metadata, sponsoredListingId: listingId } as any,
+      });
+    }
 
     if (payment.voucherId) {
       await this.recordVoucherRedemption(payment);

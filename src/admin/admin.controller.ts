@@ -1,10 +1,29 @@
 import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards, Request, Query, UseInterceptors, UploadedFile, UploadedFiles, ParseFilePipe, MaxFileSizeValidator, FileTypeValidator } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiBody, ApiQuery, ApiParam, ApiConsumes } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
+import { Throttle } from '@nestjs/throttler';
 import { FileInterceptor, FilesInterceptor, FileFieldsInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { AdminService } from './admin.service';
 import { AdminCreateUserDto, AdminCreateProviderWithUserDto, AdminSendOtpDto, AdminVerifyOtpDto } from './dto/admin-create-user.dto';
+import { BulkValidateProvidersDto, BulkImportProvidersDto } from './dto/bulk-provider-import.dto';
+import { ImportProviderImageUrlsDto } from './dto/provider-images.dto';
+import {
+  AdminCreateSponsorshipDto,
+  AdminUpdateSponsorshipDto,
+  StopSponsorshipDto,
+  TopUpSponsorshipDto,
+  BulkSponsorshipDto,
+  StopAllSponsorshipsDto,
+} from './dto/sponsorship-admin.dto';
+
+/**
+ * Bulk provider import fires hundreds of requests from one admin session
+ * (row chunks plus up to three image requests per business). The global
+ * 300/min-per-IP limit would 429 a large import, so these admin-only,
+ * JWT-protected routes get a much higher ceiling rather than none at all.
+ */
+const BULK_IMPORT_THROTTLE = { default: { ttl: 60_000, limit: 3000 } };
 
 @ApiTags('Admin')
 @ApiBearerAuth()
@@ -284,7 +303,33 @@ export class AdminController {
     return this.adminService.updateProviderAdmin(req.user, id, body);
   }
 
+  @Post('providers/:id/photos')
+  @Throttle(BULK_IMPORT_THROTTLE)
+  @ApiOperation({ summary: 'Admin add gallery photos to a provider (10 per provider in total)' })
+  @ApiParam({ name: 'id', description: 'Provider ID' })
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(FilesInterceptor('photos', 10, { storage: memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }))
+  uploadProviderPhotos(
+    @Param('id') id: string,
+    @Request() req,
+    @UploadedFiles() files: Express.Multer.File[],
+  ) {
+    return this.adminService.adminUploadProviderPhotos(req.user, id, files ?? []);
+  }
+
+  @Post('providers/:id/images/from-urls')
+  @Throttle(BULK_IMPORT_THROTTLE)
+  @ApiOperation({
+    summary: 'Attach logo, banner and gallery images from links',
+    description: 'Downloads each link server-side (Google Drive and Dropbox share links supported) with SSRF protection. Returns a result per image.',
+  })
+  @ApiParam({ name: 'id', description: 'Provider ID' })
+  importProviderImageUrls(@Param('id') id: string, @Request() req, @Body() dto: ImportProviderImageUrlsDto) {
+    return this.adminService.importProviderImagesFromUrls(req.user, id, dto);
+  }
+
   @Patch('providers/:id/images')
+  @Throttle(BULK_IMPORT_THROTTLE)
   @ApiOperation({ summary: 'Admin update provider logo and/or banner image' })
   @ApiParam({ name: 'id', description: 'Provider ID' })
   @ApiConsumes('multipart/form-data')
@@ -375,6 +420,14 @@ export class AdminController {
   @ApiParam({ name: 'id', description: 'Product ID' })
   deleteProduct(@Param('id') id: string, @Request() req) {
     return this.adminService.deleteProductAdmin(req.user, id);
+  }
+
+  @Delete('products/:id/images')
+  @ApiOperation({ summary: 'Remove a single image from a product' })
+  @ApiParam({ name: 'id', description: 'Product ID' })
+  @ApiBody({ schema: { properties: { url: { type: 'string' } }, required: ['url'] } })
+  deleteProductImage(@Param('id') id: string, @Request() req, @Body('url') url: string) {
+    return this.adminService.deleteProductImage(req.user, id, url);
   }
 
   @Post('products/:id/images')
@@ -675,6 +728,9 @@ export class AdminController {
 
   // ============================================
   // Sponsored Listings Management
+  //
+  // Route order matters: every literal path must be declared before
+  // `sponsorships/:id`, or Nest matches the literal as an id.
   // ============================================
 
   @Get('sponsorships')
@@ -683,20 +739,80 @@ export class AdminController {
   @ApiQuery({ name: 'limit', required: false, type: Number })
   @ApiQuery({ name: 'isActive', required: false, type: String })
   @ApiQuery({ name: 'type', required: false, type: String })
+  @ApiQuery({ name: 'approvalStatus', required: false, type: String })
+  @ApiQuery({ name: 'source', required: false, type: String, description: 'provider_paid | admin_granted' })
+  @ApiQuery({ name: 'billingMode', required: false, type: String, description: 'paid | free' })
+  @ApiQuery({ name: 'providerId', required: false, type: String })
+  @ApiQuery({ name: 'search', required: false, type: String })
   getSponsoredListings(
     @Request() req,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
     @Query('isActive') isActive?: string,
     @Query('type') type?: string,
+    @Query('approvalStatus') approvalStatus?: string,
+    @Query('source') source?: string,
+    @Query('billingMode') billingMode?: string,
+    @Query('providerId') providerId?: string,
+    @Query('search') search?: string,
   ) {
-    return this.adminService.getSponsoredListings(req.user, page, limit, isActive, type);
+    return this.adminService.getSponsoredListings(req.user, page, limit, isActive, type, {
+      approvalStatus, source, billingMode, providerId, search,
+    });
+  }
+
+  @Post('sponsorships')
+  @ApiOperation({
+    summary: 'Place a sponsorship for any provider',
+    description: 'Complimentary (billingMode: free) or paid, with an optional manually recorded payment. No provider checkout required.',
+  })
+  createSponsorship(@Request() req, @Body() dto: AdminCreateSponsorshipDto) {
+    return this.adminService.createSponsorship(req.user, dto);
   }
 
   @Get('sponsorships/stats')
   @ApiOperation({ summary: 'Sponsored listings stats' })
   getSponsoredStats(@Request() req) {
     return this.adminService.getSponsoredStats(req.user);
+  }
+
+  @Get('sponsorships/pending')
+  @ApiOperation({ summary: 'List sponsorships pending approval' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  getPendingSponsorships(
+    @Request() req,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.adminService.getPendingSponsorships(req.user, page, limit);
+  }
+
+  @Get('sponsorships/eligible-providers')
+  @ApiOperation({ summary: 'Providers an admin can place a sponsorship for' })
+  @ApiQuery({ name: 'search', required: false, type: String })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  getSponsorshipEligibleProviders(
+    @Request() req,
+    @Query('search') search?: string,
+    @Query('limit') limit?: number,
+  ) {
+    return this.adminService.getSponsorshipEligibleProviders(req.user, search, limit);
+  }
+
+  @Post('sponsorships/bulk')
+  @ApiOperation({ summary: 'Stop, resume, approve, reject or delete many sponsorships at once' })
+  bulkSponsorshipAction(@Request() req, @Body() dto: BulkSponsorshipDto) {
+    return this.adminService.bulkSponsorshipAction(req.user, dto);
+  }
+
+  @Post('sponsorships/stop-all')
+  @ApiOperation({
+    summary: 'Kill switch — stop every running sponsorship',
+    description: 'Optionally also turns the sponsorships_enabled feature flag off so nothing sponsored is served platform-wide.',
+  })
+  stopAllSponsorships(@Request() req, @Body() dto: StopAllSponsorshipsDto) {
+    return this.adminService.stopAllSponsorships(req.user, dto);
   }
 
   @Get('sponsorships/:id')
@@ -706,11 +822,66 @@ export class AdminController {
     return this.adminService.getSponsoredById(req.user, id);
   }
 
+  @Get('sponsorships/:id/analytics')
+  @ApiOperation({ summary: 'Daily impressions, clicks and spend for one sponsorship' })
+  @ApiParam({ name: 'id', description: 'Sponsored listing ID' })
+  @ApiQuery({ name: 'period', required: false, type: String, description: '7d | 14d | 30d' })
+  getSponsorshipAnalytics(
+    @Param('id') id: string,
+    @Request() req,
+    @Query('period') period?: string,
+  ) {
+    return this.adminService.getSponsorshipAnalytics(req.user, id, period);
+  }
+
   @Patch('sponsorships/:id')
   @ApiOperation({ summary: 'Update a sponsored listing' })
   @ApiParam({ name: 'id', description: 'Sponsored listing ID' })
-  updateSponsored(@Param('id') id: string, @Request() req, @Body() body: any) {
-    return this.adminService.updateSponsored(req.user, id, body);
+  updateSponsored(@Param('id') id: string, @Request() req, @Body() dto: AdminUpdateSponsorshipDto) {
+    return this.adminService.updateSponsored(req.user, id, dto);
+  }
+
+  @Patch('sponsorships/:id/stop')
+  @ApiOperation({ summary: 'Stop (pause) a running sponsorship' })
+  @ApiParam({ name: 'id', description: 'Sponsored listing ID' })
+  stopSponsorship(@Param('id') id: string, @Request() req, @Body() dto: StopSponsorshipDto) {
+    return this.adminService.stopSponsorship(req.user, id, dto);
+  }
+
+  @Patch('sponsorships/:id/resume')
+  @ApiOperation({ summary: 'Resume a stopped sponsorship' })
+  @ApiParam({ name: 'id', description: 'Sponsored listing ID' })
+  resumeSponsorship(@Param('id') id: string, @Request() req) {
+    return this.adminService.resumeSponsorship(req.user, id);
+  }
+
+  @Patch('sponsorships/:id/top-up')
+  @ApiOperation({ summary: 'Add budget (and optionally days) to a paid sponsorship' })
+  @ApiParam({ name: 'id', description: 'Sponsored listing ID' })
+  topUpSponsorship(@Param('id') id: string, @Request() req, @Body() dto: TopUpSponsorshipDto) {
+    return this.adminService.topUpSponsorship(req.user, id, dto);
+  }
+
+  @Patch('sponsorships/:id/approve')
+  @ApiOperation({ summary: 'Approve a sponsorship' })
+  @ApiParam({ name: 'id', description: 'Sponsored listing ID' })
+  approveSponsorship(@Param('id') id: string, @Request() req) {
+    return this.adminService.approveSponsorship(req.user, id);
+  }
+
+  @Patch('sponsorships/:id/reject')
+  @ApiOperation({ summary: 'Reject a sponsorship' })
+  @ApiParam({ name: 'id', description: 'Sponsored listing ID' })
+  @ApiBody({ schema: { properties: { adminNotes: { type: 'string' } } } })
+  rejectSponsorship(@Param('id') id: string, @Request() req, @Body('adminNotes') adminNotes?: string) {
+    return this.adminService.rejectSponsorship(req.user, id, adminNotes);
+  }
+
+  @Delete('sponsorships/:id')
+  @ApiOperation({ summary: 'Permanently delete a sponsorship' })
+  @ApiParam({ name: 'id', description: 'Sponsored listing ID' })
+  deleteSponsorship(@Param('id') id: string, @Request() req) {
+    return this.adminService.deleteSponsorship(req.user, id);
   }
 
   // ============================================
@@ -1001,6 +1172,26 @@ export class AdminController {
     return this.adminService.adminCreateProviderWithUser(req.user, body);
   }
 
+  @Post('providers/bulk-validate')
+  @Throttle(BULK_IMPORT_THROTTLE)
+  @ApiOperation({
+    summary: 'Dry-run a CSV/XLSX provider batch',
+    description: 'Writes nothing. Reports per row which users/providers/contact numbers already exist so the sheet can be vetted before import.',
+  })
+  bulkValidateProviders(@Request() req, @Body() dto: BulkValidateProvidersDto) {
+    return this.adminService.bulkValidateProviders(req.user, dto);
+  }
+
+  @Post('providers/bulk-import')
+  @Throttle(BULK_IMPORT_THROTTLE)
+  @ApiOperation({
+    summary: 'Create many providers (with users) from a vetted sheet',
+    description: 'Each row runs through the same path as the single-provider form in its own transaction. Returns a per-row report.',
+  })
+  bulkImportProviders(@Request() req, @Body() dto: BulkImportProvidersDto) {
+    return this.adminService.bulkImportProviders(req.user, dto);
+  }
+
   @Get('check-user/:mobileNumber')
   @ApiOperation({ summary: 'Check if a user exists by mobile number (for pre-flight validation)' })
   @ApiParam({ name: 'mobileNumber', description: '10-digit mobile number' })
@@ -1192,37 +1383,6 @@ export class AdminController {
     @Body('action') action: 'activate' | 'deactivate' | 'delete',
   ) {
     return this.adminService.bulkProductAction(req.user, ids, action);
-  }
-
-  // ============================================
-  // Sponsorship Approval Workflow
-  // ============================================
-
-  @Get('sponsorships/pending')
-  @ApiOperation({ summary: 'List sponsorships pending approval' })
-  @ApiQuery({ name: 'page', required: false, type: Number })
-  @ApiQuery({ name: 'limit', required: false, type: Number })
-  getPendingSponsorships(
-    @Request() req,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
-  ) {
-    return this.adminService.getPendingSponsorships(req.user, page, limit);
-  }
-
-  @Patch('sponsorships/:id/approve')
-  @ApiOperation({ summary: 'Approve a sponsorship' })
-  @ApiParam({ name: 'id', description: 'Sponsored listing ID' })
-  approveSponsorship(@Param('id') id: string, @Request() req) {
-    return this.adminService.approveSponsorship(req.user, id);
-  }
-
-  @Patch('sponsorships/:id/reject')
-  @ApiOperation({ summary: 'Reject a sponsorship' })
-  @ApiParam({ name: 'id', description: 'Sponsored listing ID' })
-  @ApiBody({ schema: { properties: { adminNotes: { type: 'string' } } } })
-  rejectSponsorship(@Param('id') id: string, @Request() req, @Body('adminNotes') adminNotes?: string) {
-    return this.adminService.rejectSponsorship(req.user, id, adminNotes);
   }
 
   // ============================================

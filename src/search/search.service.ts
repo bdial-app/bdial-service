@@ -9,6 +9,7 @@ import { Category } from '../entities/category.entity';
 import { SearchLog } from '../entities/search-log.entity';
 import { ProviderAnalyticsEvent } from '../entities/provider-analytics-event.entity';
 import { SponsoredListing } from '../entities/sponsored-listing.entity';
+import { SystemSetting } from '../entities/system-setting.entity';
 import { SearchSynonym } from '../entities/search-synonym.entity';
 import { CategoryPersonalizationService } from '../users/category-personalization.service';
 import { SearchQueryDto } from './dto/search-query.dto';
@@ -114,6 +115,7 @@ export class SearchService implements OnModuleInit {
     @InjectRepository(ProviderAnalyticsEvent) private analyticsEventRepo: Repository<ProviderAnalyticsEvent>,
     @InjectRepository(SponsoredListing) private sponsoredRepo: Repository<SponsoredListing>,
     @InjectRepository(SearchSynonym) private synonymRepo: Repository<SearchSynonym>,
+    @InjectRepository(SystemSetting) private settingRepo: Repository<SystemSetting>,
     private dataSource: DataSource,
     @Inject(CACHE_MANAGER) private cacheManager: Cache,
     private readonly categoryPersonalization: CategoryPersonalizationService,
@@ -591,7 +593,7 @@ export class SearchService implements OnModuleInit {
         WHERE sl.is_active = true
           AND sl.starts_at <= NOW()
           AND sl.ends_at >= NOW()
-          AND sl.spent_amount < sl.budget_amount
+          AND (sl.billing_mode = 'free' OR sl.spent_amount < sl.budget_amount)
           AND sl.approval_status = 'approved'
       ),
       search_results AS (
@@ -945,6 +947,21 @@ export class SearchService implements OnModuleInit {
   // SPONSORED PROVIDERS IN SEARCH RESULTS
   // ────────────────────────────────────────────────────────────
 
+  /**
+   * Platform-wide sponsorships kill switch, cached for 5 min so the flag check
+   * doesn't cost a DB round trip per search.
+   */
+  private async isSponsorshipsEnabled(): Promise<boolean> {
+    const cacheKey = 'setting:sponsorships_enabled';
+    let flagValue = await this.cacheManager.get<string>(cacheKey);
+    if (flagValue == null) {
+      const row = await this.settingRepo.findOneBy({ key: 'sponsorships_enabled' });
+      flagValue = row?.value ?? 'false';
+      await this.cacheManager.set(cacheKey, flagValue, 5 * 60_000);
+    }
+    return flagValue === 'true';
+  }
+
   private async getMatchingSponsoredProviders(
     q: string,
     prefixTsQuery: string,
@@ -954,6 +971,8 @@ export class SearchService implements OnModuleInit {
     categoryIds?: string[],
   ): Promise<ProviderSearchResult[]> {
     try {
+      if (!(await this.isSponsorshipsEnabled())) return [];
+
       // 1. Resolve which categories match the query
       let matchedCatIds: string[];
 
@@ -1022,21 +1041,42 @@ export class SearchService implements OnModuleInit {
         WHERE sl.is_active = true
           AND sl.starts_at <= NOW()
           AND sl.ends_at >= NOW()
-          AND sl.spent_amount < sl.budget_amount
+          AND (sl.billing_mode = 'free' OR sl.spent_amount < sl.budget_amount)
+          AND sl.approval_status = 'approved'
           AND p.status IN ('active', 'unverified')
-          AND sl.target_category_ids && $1::uuid[]
+          -- A listing with explicit category targeting matches on that; an
+          -- untargeted one (the default for admin-granted placements) matches on
+          -- the provider's own categories. Without the second branch,
+          -- NULL && array is NULL and untargeted boosts never appear in search.
+          AND (
+            sl.target_category_ids && $1::uuid[]
+            OR (
+              sl.target_category_ids IS NULL
+              AND EXISTS (
+                SELECT 1 FROM provider_categories pc
+                WHERE pc.provider_id = p.id AND pc.category_id = ANY($1::uuid[])
+              )
+            )
+          )
           ${cityCondition}
           ${radiusCondition}
-        ORDER BY sl.cost_per_click DESC, RANDOM()
+        ORDER BY sl.priority DESC, sl.cost_per_click DESC, RANDOM()
         LIMIT 3
       `;
 
       const rows = await this.dataSource.query(sql, params);
 
-      // 3. Track impressions + deduct cost_per_impression (budget-guarded, fire and forget)
+      // 3. Track impressions; charge cost_per_impression on paid placements only
+      // (budget-guarded, fire and forget). Complimentary ones never accrue spend.
       for (const r of rows) {
         this.dataSource.query(
-          `UPDATE sponsored_listings SET impressions = impressions + 1, spent_amount = spent_amount + cost_per_impression WHERE id = $1 AND is_active = true AND spent_amount + cost_per_impression <= budget_amount AND ends_at > NOW()`,
+          `UPDATE sponsored_listings
+             SET impressions = impressions + 1,
+                 spent_amount = CASE WHEN billing_mode = 'free' THEN spent_amount ELSE spent_amount + cost_per_impression END
+           WHERE id = $1
+             AND is_active = true
+             AND (billing_mode = 'free' OR spent_amount + cost_per_impression <= budget_amount)
+             AND ends_at > NOW()`,
           [r.sponsored_listing_id],
         ).catch(() => {});
       }
@@ -1315,7 +1355,7 @@ export class SearchService implements OnModuleInit {
             AND sl.is_active = true
             AND sl.starts_at <= NOW()
             AND sl.ends_at >= NOW()
-            AND sl.spent_amount < sl.budget_amount
+            AND (sl.billing_mode = 'free' OR sl.spent_amount < sl.budget_amount)
             AND sl.approval_status = 'approved'
         ) THEN true ELSE false END AS is_sponsored,
         CASE WHEN EXISTS (

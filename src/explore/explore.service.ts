@@ -10,6 +10,7 @@ import {
   Booking,
   Photo,
   SponsoredListing,
+  SystemSetting,
   ProviderBadge,
   ProviderOffer,
   AdEvent,
@@ -40,6 +41,7 @@ export class ExploreService {
     @InjectRepository(ProviderBadge) private badgeRepo: Repository<ProviderBadge>,
     @InjectRepository(ProviderOffer) private offerRepo: Repository<ProviderOffer>,
     @InjectRepository(AdEvent) private adEventRepo: Repository<AdEvent>,
+    @InjectRepository(SystemSetting) private settingRepo: Repository<SystemSetting>,
     @Inject(CACHE_MANAGER) private cacheManager: Cache,
     private readonly dataSource: DataSource,
   ) {}
@@ -188,7 +190,24 @@ export class ExploreService {
 
   // ─── Sponsored Carousel ──────────────────────────────────────
 
+  /**
+   * Platform-wide sponsorships kill switch, cached for 5 min so the flag check
+   * doesn't cost a DB round trip per request.
+   */
+  private async isSponsorshipsEnabled(): Promise<boolean> {
+    const cacheKey = 'setting:sponsorships_enabled';
+    let flagValue = await this.cacheManager.get<string>(cacheKey);
+    if (flagValue == null) {
+      const row = await this.settingRepo.findOneBy({ key: 'sponsorships_enabled' });
+      flagValue = row?.value ?? 'false';
+      await this.cacheManager.set(cacheKey, flagValue, ExploreService.TTL_5MIN);
+    }
+    return flagValue === 'true';
+  }
+
   private async getSponsoredCarousel(lat?: number, lng?: number, city?: string) {
+    if (!(await this.isSponsorshipsEnabled())) return [];
+
     const now = new Date();
     const limit = 12;
 
@@ -211,7 +230,7 @@ export class ExploreService {
       .where('sl.is_active = :active', { active: true })
       .andWhere('sl.starts_at <= :now', { now })
       .andWhere('sl.ends_at >= :now', { now })
-      .andWhere('sl.spent_amount < sl.budget_amount')
+      .andWhere("(sl.billing_mode = 'free' OR sl.spent_amount < sl.budget_amount)")
       .andWhere("sl.approval_status = 'approved'")
       .andWhere("p.status IN ('active', 'unverified')");
 
@@ -233,11 +252,13 @@ export class ExploreService {
       qb.andWhere(
         `(sl.target_radius IS NULL OR ${haversine} <= sl.target_radius)`,
       );
-      qb.orderBy('sl.cost_per_click', 'DESC')
+      qb.orderBy('sl.priority', 'DESC')
+        .addOrderBy('sl.cost_per_click', 'DESC')
         .addOrderBy(haversine, 'ASC')
         .addOrderBy('RANDOM()');
     } else {
-      qb.orderBy('sl.cost_per_click', 'DESC')
+      qb.orderBy('sl.priority', 'DESC')
+        .addOrderBy('sl.cost_per_click', 'DESC')
         .addOrderBy('RANDOM()');
     }
 
@@ -256,7 +277,8 @@ export class ExploreService {
 
     const results = deduplicated.slice(0, limit);
 
-    // Fire-and-forget: increment impressions + deduct cost_per_impression (budget-guarded)
+    // Fire-and-forget: count the impression, and charge it only on paid
+    // placements (budget-guarded). Complimentary ones never accrue spend.
     if (results.length > 0) {
       const listingIds = results.map((r) => r.sponsoredListingId);
       this.sponsoredRepo
@@ -264,11 +286,11 @@ export class ExploreService {
         .update()
         .set({
           impressions: () => 'impressions + 1',
-          spentAmount: () => 'spent_amount + cost_per_impression',
+          spentAmount: () => "CASE WHEN billing_mode = 'free' THEN spent_amount ELSE spent_amount + cost_per_impression END",
         })
         .where('id IN (:...ids)', { ids: listingIds })
         .andWhere('is_active = true')
-        .andWhere('spent_amount + cost_per_impression <= budget_amount')
+        .andWhere("(billing_mode = 'free' OR spent_amount + cost_per_impression <= budget_amount)")
         .andWhere('ends_at > NOW()')
         .execute()
         .catch(() => {}); // non-blocking
@@ -990,21 +1012,21 @@ export class ExploreService {
         .update(SponsoredListing)
         .set({
           clicks: () => 'clicks + 1',
-          spentAmount: () => 'spent_amount + cost_per_click',
+          // Complimentary placements are counted but never charged.
+          spentAmount: () => "CASE WHEN billing_mode = 'free' THEN spent_amount ELSE spent_amount + cost_per_click END",
         })
         .where('id = :id', { id: dto.entityId })
         .execute();
     }
 
-    // If impression on sponsored listing, increment impressions
-    if (dto.eventType === 'impression' && dto.entityType === 'sponsored_listing') {
-      await this.sponsoredRepo
-        .createQueryBuilder()
-        .update(SponsoredListing)
-        .set({ impressions: () => 'impressions + 1' })
-        .where('id = :id', { id: dto.entityId })
-        .execute();
-    }
+    // NOTE: sponsored impressions are deliberately NOT counted here.
+    //
+    // The home and explore feed queries already increment `impressions` (and
+    // charge cost_per_impression) for every sponsored card they serve. Counting
+    // again on the client's viewport event would double the number on any
+    // surface that reports impressions. The ad_event row inserted above is
+    // still written, so the admin analytics chart has per-day view data —
+    // the counter tracks serves, the events track actual views.
   }
 
   // ─── Badge Auto-Award ────────────────────────────────────────

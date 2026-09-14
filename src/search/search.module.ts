@@ -9,13 +9,14 @@ import { SponsoredListing } from '../entities/sponsored-listing.entity';
 import { SearchSynonym } from '../entities/search-synonym.entity';
 import { UserCategoryInteraction } from '../entities/user-category-interaction.entity';
 import { User } from '../entities/user.entity';
+import { SystemSetting } from '../entities/system-setting.entity';
 import { SearchController } from './search.controller';
 import { SearchService } from './search.service';
 import { CategoryPersonalizationService } from '../users/category-personalization.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Provider, Product, Category, SearchLog, ProviderAnalyticsEvent, SponsoredListing, SearchSynonym, UserCategoryInteraction, User]),
+    TypeOrmModule.forFeature([Provider, Product, Category, SearchLog, ProviderAnalyticsEvent, SponsoredListing, SearchSynonym, UserCategoryInteraction, User, SystemSetting]),
   ],
   controllers: [SearchController],
   providers: [SearchService, CategoryPersonalizationService],
