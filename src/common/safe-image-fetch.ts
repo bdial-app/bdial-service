@@ -187,3 +187,77 @@ export async function fetchImageFromUrl(rawUrl: string): Promise<Express.Multer.
   }
   throw new BadRequestException('Link redirected too many times');
 }
+
+const MAX_PAGE_BYTES = 2 * 1024 * 1024;
+const PAGE_USER_AGENT = 'Mozilla/5.0 (compatible; TijarahBot/1.0; +https://tijarahapp.in)';
+
+/** Read at most `max` bytes and stop — a page's <head> is at the top, so the rest isn't needed. */
+async function readUpTo(res: Response, max: number): Promise<Buffer> {
+  if (!res.body) return Buffer.alloc(0);
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    total += value.byteLength;
+    if (total >= max) {
+      await reader.cancel().catch(() => {});
+      break;
+    }
+  }
+  return Buffer.concat(chunks).subarray(0, max);
+}
+
+/**
+ * Load a public web page's HTML with the same protections as image imports:
+ * public hosts only (re-checked on every redirect hop), a timeout and a size
+ * cap. Returns the final URL so relative links on the page resolve correctly.
+ */
+export async function fetchPublicPage(rawUrl: string): Promise<{ html: string; finalUrl: string }> {
+  let current: URL;
+  try {
+    current = new URL(rawUrl);
+  } catch {
+    throw new BadRequestException('Not a valid website link');
+  }
+
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    await assertPublicHost(current);
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    try {
+      let res: Response;
+      try {
+        res = await fetch(current, {
+          redirect: 'manual',
+          signal: controller.signal,
+          headers: { 'User-Agent': PAGE_USER_AGENT, Accept: 'text/html,application/xhtml+xml' },
+        });
+      } catch (err) {
+        throw new BadRequestException(
+          controller.signal.aborted ? 'Timed out loading the website' : `Website failed to load: ${(err as Error).message}`,
+        );
+      }
+
+      if (res.status >= 300 && res.status < 400) {
+        const location = res.headers.get('location');
+        if (!location) throw new BadRequestException('Website redirected without a destination');
+        current = new URL(location, current);
+        continue;
+      }
+      if (!res.ok) throw new BadRequestException(`Website returned HTTP ${res.status}`);
+
+      const type = (res.headers.get('content-type') ?? '').toLowerCase();
+      if (type && !type.includes('html')) throw new BadRequestException('Website did not return a web page');
+
+      const buffer = await readUpTo(res, MAX_PAGE_BYTES);
+      return { html: buffer.toString('utf8'), finalUrl: current.toString() };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw new BadRequestException('Website redirected too many times');
+}

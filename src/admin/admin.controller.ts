@@ -8,6 +8,8 @@ import { AdminService } from './admin.service';
 import { AdminCreateUserDto, AdminCreateProviderWithUserDto, AdminSendOtpDto, AdminVerifyOtpDto } from './dto/admin-create-user.dto';
 import { BulkValidateProvidersDto, BulkImportProvidersDto } from './dto/bulk-provider-import.dto';
 import { ImportProviderImageUrlsDto } from './dto/provider-images.dto';
+import { EnrichProvidersDto } from './dto/provider-enrichment.dto';
+import { ProviderEnrichmentService } from './provider-enrichment.service';
 import {
   AdminCreateSponsorshipDto,
   AdminUpdateSponsorshipDto,
@@ -30,7 +32,10 @@ const BULK_IMPORT_THROTTLE = { default: { ttl: 60_000, limit: 3000 } };
 @UseGuards(AuthGuard('jwt'))
 @Controller('admin')
 export class AdminController {
-  constructor(private readonly adminService: AdminService) {}
+  constructor(
+    private readonly adminService: AdminService,
+    private readonly providerEnrichment: ProviderEnrichmentService,
+  ) {}
 
   @Get('dashboard')
   @ApiOperation({ summary: 'Admin dashboard stats' })
@@ -1328,13 +1333,20 @@ export class AdminController {
   // Bulk Actions
   // ============================================
 
+  @Post('providers/enrich')
+  @Throttle(BULK_IMPORT_THROTTLE)
+  @ApiOperation({ summary: 'Suggest a website, logo and banner for providers (Google + their own website). Saves nothing.' })
+  enrichProviders(@Request() req, @Body() dto: EnrichProvidersDto) {
+    return this.providerEnrichment.enrich(req.user, dto.ids);
+  }
+
   @Post('providers/bulk-action')
-  @ApiOperation({ summary: 'Bulk action on providers (approve, suspend, unsuspend, disable)' })
+  @ApiOperation({ summary: 'Bulk action on providers (approve, suspend, unsuspend, disable, delete)' })
   @ApiBody({
     schema: {
       properties: {
         ids: { type: 'array', items: { type: 'string' } },
-        action: { type: 'string', enum: ['approve', 'suspend', 'unsuspend', 'disable'] },
+        action: { type: 'string', enum: ['approve', 'suspend', 'unsuspend', 'disable', 'delete'] },
       },
       required: ['ids', 'action'],
     },
@@ -1342,7 +1354,7 @@ export class AdminController {
   bulkProviderAction(
     @Request() req,
     @Body('ids') ids: string[],
-    @Body('action') action: 'approve' | 'suspend' | 'unsuspend' | 'disable',
+    @Body('action') action: 'approve' | 'suspend' | 'unsuspend' | 'disable' | 'delete',
   ) {
     return this.adminService.bulkProviderAction(req.user, ids, action);
   }

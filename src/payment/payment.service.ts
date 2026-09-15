@@ -188,6 +188,12 @@ export class PaymentService {
     });
     await this.paymentRepo.save(payment);
 
+    // Voucher covered the price — Razorpay can't take an order under ₹1, so fulfil now.
+    if (voucherId && amount < 1) {
+      await this.completeVoucherOnlyPayment(payment);
+      return { gateway: 'voucher', status: 'succeeded', paymentId: payment.id };
+    }
+
     // iOS → Apple IAP: return the boost plan's Apple product id for StoreKit
     // instead of a Razorpay order. Fulfilment happens in verifyAppleConsumable.
     if (dto.gateway === 'apple') {
@@ -349,6 +355,12 @@ export class PaymentService {
       discountAmount,
     });
     await this.paymentRepo.save(payment);
+
+    // Voucher covered the price — Razorpay can't take an order under ₹1, so fulfil now.
+    if (voucherId && amount < 1) {
+      await this.completeVoucherOnlyPayment(payment);
+      return { unlocked: true, method: 'voucher', paymentId: payment.id };
+    }
 
     const tierLabel = tier.charAt(0).toUpperCase() + tier.slice(1);
 
@@ -1255,6 +1267,12 @@ export class PaymentService {
     const vouchersEnabled = (await this.getSetting('vouchers_enabled', 'true')) === 'true';
     if (!vouchersEnabled) return { valid: false, message: 'Vouchers are currently unavailable' };
 
+    // Razorpay subscriptions always charge the plan price — a one-off discount
+    // can't be passed through, so accepting a code would promise a saving that never happens.
+    if (purchaseType === 'subscription') {
+      return { valid: false, message: "Vouchers can't be used on subscriptions yet" };
+    }
+
     const voucher = await this.voucherRepo.findOneBy({ code: code.toUpperCase(), isActive: true });
     if (!voucher) return { valid: false, message: 'Invalid voucher code' };
 
@@ -1304,19 +1322,8 @@ export class PaymentService {
       throw new BadRequestException(result.message);
     }
 
-    // Atomic reservation: increment usedCount only if still under maxUses (prevents TOCTOU race)
-    const atomicResult = await this.voucherRepo
-      .createQueryBuilder()
-      .update()
-      .set({ usedCount: () => 'used_count + 1' })
-      .where('id = :id', { id: result.voucherId })
-      .andWhere('(max_uses IS NULL OR used_count < max_uses)')
-      .execute();
-
-    if (atomicResult.affected === 0) {
-      throw new BadRequestException('Voucher has reached its usage limit');
-    }
-
+    // Usage is counted in recordVoucherRedemption once the payment succeeds —
+    // counting here burned a use on every abandoned or failed checkout.
     return {
       voucherId: result.voucherId!,
       discountAmount: result.discount!,
@@ -1339,6 +1346,14 @@ export class PaymentService {
     return Math.min(discount, amount);
   }
 
+  /** The voucher covered the whole price: mark paid without a gateway and fulfil. */
+  private async completeVoucherOnlyPayment(payment: Payment) {
+    await this.paymentRepo.update(payment.id, { status: 'succeeded', paymentGateway: 'voucher' });
+    payment.status = 'succeeded';
+    payment.paymentGateway = 'voucher';
+    await this.fulfillPayment(payment);
+  }
+
   private async recordVoucherRedemption(payment: Payment) {
     if (!payment.voucherId) return;
 
@@ -1350,8 +1365,9 @@ export class PaymentService {
     });
     await this.redemptionRepo.save(redemption);
 
-    // Note: usedCount was already atomically incremented in applyVoucher()
-    // No second increment needed here
+    // Fulfilment runs once per payment (guarded by the atomic status update),
+    // so this counts each paid use exactly once.
+    await this.voucherRepo.increment({ id: payment.voucherId }, 'usedCount', 1);
 
     const voucher = await this.voucherRepo.findOneBy({ id: payment.voucherId });
     const provider = await this.providerRepo.findOneBy({ id: payment.providerId });
@@ -1442,6 +1458,12 @@ export class PaymentService {
       discountAmount,
     });
     await this.paymentRepo.save(payment);
+
+    // Voucher covered the price — Razorpay can't take an order under ₹1, so fulfil now.
+    if (voucherId && amount < 1) {
+      await this.completeVoucherOnlyPayment(payment);
+      return { requiresPayment: false, method: 'voucher', paymentId: payment.id };
+    }
 
     // iOS → Apple IAP: return the deal-creation Apple product id for StoreKit
     // instead of a Razorpay order. Fulfilment happens in verifyAppleConsumable.
