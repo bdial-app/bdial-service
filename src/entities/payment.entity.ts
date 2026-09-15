@@ -12,7 +12,7 @@ import { Provider } from './provider.entity';
 
 export type PaymentStatus = 'pending' | 'processing' | 'succeeded' | 'failed' | 'refunded';
 export type PaymentType = 'sponsorship' | 'lead_unlock' | 'badge' | 'subscription' | 'deal_unlock' | 'deal_creation';
-export type PaymentGateway = 'razorpay' | 'apple' | 'manual';
+export type PaymentGateway = 'razorpay' | 'apple' | 'manual' | 'voucher';
 
 @Entity('payments')
 @Index(['providerId', 'status'])

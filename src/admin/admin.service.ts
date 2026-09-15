@@ -979,6 +979,8 @@ export class AdminService {
         { search: `%${search}%` },
       );
     }
+    // Soft-deleted providers are gone as far as the console is concerned.
+    qb.andWhere('p.deleted_at IS NULL');
     if (safeStatus) qb.andWhere('p.status = :status', { status: safeStatus });
     if (city) qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
     if (isFeatured === 'true') qb.andWhere('p.is_featured = true');
@@ -4085,10 +4087,12 @@ export class AdminService {
   // Bulk Actions
   // ============================================
 
-  async bulkProviderAction(admin: any, ids: string[], action: 'approve' | 'suspend' | 'unsuspend' | 'disable') {
+  async bulkProviderAction(admin: any, ids: string[], action: 'approve' | 'suspend' | 'unsuspend' | 'disable' | 'delete') {
     this.assertAdmin(admin);
     if (!ids?.length) throw new BadRequestException('No IDs provided');
     if (ids.length > 50) throw new BadRequestException('Maximum 50 items per bulk action');
+
+    if (action === 'delete') return this.bulkSoftDeleteProviders(admin, ids);
 
     const statusMap = { approve: 'active', suspend: 'suspended', unsuspend: 'active', disable: 'disabled' };
     const newStatus = statusMap[action] as any;
@@ -4109,6 +4113,52 @@ export class AdminService {
     }
 
     return { message: `Bulk ${action} completed`, affected: result.affected };
+  }
+
+  /** The same soft delete as softDeleteProvider, for many rows. Already-deleted rows are skipped. */
+  private async bulkSoftDeleteProviders(admin: any, ids: string[]) {
+    const providers = await this.providerRepo
+      .createQueryBuilder('p')
+      .select(['p.id', 'p.userId', 'p.status'])
+      .where('p.id IN (:...ids)', { ids })
+      .andWhere('p.deleted_at IS NULL')
+      .getMany();
+    if (providers.length === 0) {
+      return { message: 'Nothing to delete', affected: 0 };
+    }
+
+    const targetIds = providers.map((p) => p.id);
+    const deletedAt = new Date();
+    const result = await this.providerRepo
+      .createQueryBuilder()
+      .update()
+      .set({ deletedAt, status: 'disabled' })
+      .where('id IN (:...ids)', { ids: targetIds })
+      .andWhere('deleted_at IS NULL')
+      .execute();
+
+    await this.createAuditLog(
+      admin.id,
+      'bulk_delete_providers',
+      'provider',
+      null,
+      { providers: providers.map((p) => ({ id: p.id, status: p.status })) },
+      { status: 'disabled', deletedAt: deletedAt.toISOString(), count: result.affected },
+      `Bulk delete ${targetIds.length} providers`,
+    );
+
+    for (const provider of providers) {
+      this.notificationDispatch.sendToUser(
+        provider.userId, 'provider_status', 'Provider Profile Removed',
+        'Your provider profile has been removed. Contact support if you believe this is an error.',
+        { route: '/' },
+        undefined,
+        undefined,
+        'provider',
+      ).catch(() => {});
+    }
+
+    return { message: 'Bulk delete completed', affected: result.affected ?? targetIds.length };
   }
 
   async bulkUserAction(admin: any, ids: string[], action: 'suspend' | 'unsuspend') {

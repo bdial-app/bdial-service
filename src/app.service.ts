@@ -69,6 +69,10 @@ export class AppService {
     ];
     const settings = await this.settingRepo.find({ where: { key: In(monetizationKeys) } });
     const config: Record<string, any> = {};
+    // Flags are saved as 'true'/'false' text; a row not typed 'boolean' would
+    // otherwise pass the string through and 'false' reads as on in the app.
+    const flag = (key: string, fallback: boolean) =>
+      config[key] === undefined ? fallback : String(config[key]) === 'true';
     for (const s of settings) {
       if (s.type === 'boolean') {
         config[s.key] = s.value === 'true';
@@ -122,11 +126,11 @@ export class AppService {
         dealsLifetime: config['free_deal_quota_lifetime'] ?? 3,
       },
       flags: {
-        leadsMonetizationEnabled: config['leads_monetization_enabled'] ?? false,
-        dealsMonetizationEnabled: config['deals_monetization_enabled'] ?? false,
-        subscriptionsVisible: config['subscriptions_visible'] ?? false,
+        leadsMonetizationEnabled: flag('leads_monetization_enabled', false),
+        dealsMonetizationEnabled: flag('deals_monetization_enabled', false),
+        subscriptionsVisible: flag('subscriptions_visible', false),
         // Vouchers default ON to preserve existing behavior; admin can disable.
-        vouchersEnabled: config['vouchers_enabled'] ?? true,
+        vouchersEnabled: flag('vouchers_enabled', true),
       },
       // Deduped list of Apple consumable product ids for iOS StoreKit pre-registration.
       appleProductIds: Array.from(new Set(appleProductIds)),
