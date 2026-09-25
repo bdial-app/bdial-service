@@ -959,6 +959,7 @@ export class AdminService {
     city?: string,
     isFeatured?: string,
     isWomenLed?: string,
+    categoryId?: string,
   ) {
     this.assertAdmin(admin);
     const currentPage = Math.max(1, page || 1);
@@ -987,6 +988,14 @@ export class AdminService {
     if (isWomenLed === 'true') qb.andWhere('p.is_women_led = true');
     if (isWomenLed === 'pending') qb.andWhere("p.women_led_status = 'pending'");
     if (isWomenLed === 'approved') qb.andWhere("p.women_led_status = 'approved'");
+    // EXISTS, not a join condition — the joined categories are also selected for
+    // display, and filtering there would hide a provider's other categories.
+    if (categoryId) {
+      qb.andWhere(
+        'EXISTS (SELECT 1 FROM provider_categories pc_f WHERE pc_f.provider_id = p.id AND pc_f.category_id = :categoryId)',
+        { categoryId },
+      );
+    }
 
     qb.orderBy('p.createdAt', 'DESC').skip(skip).take(pageSize);
 

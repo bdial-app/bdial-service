@@ -8,7 +8,7 @@ import { AdminService } from './admin.service';
 import { AdminCreateUserDto, AdminCreateProviderWithUserDto, AdminSendOtpDto, AdminVerifyOtpDto } from './dto/admin-create-user.dto';
 import { BulkValidateProvidersDto, BulkImportProvidersDto } from './dto/bulk-provider-import.dto';
 import { ImportProviderImageUrlsDto } from './dto/provider-images.dto';
-import { EnrichProvidersDto } from './dto/provider-enrichment.dto';
+import { EnrichProvidersDto, ImageCandidatesDto } from './dto/provider-enrichment.dto';
 import { ProviderEnrichmentService } from './provider-enrichment.service';
 import {
   AdminCreateSponsorshipDto,
@@ -281,6 +281,7 @@ export class AdminController {
   @ApiQuery({ name: 'city', required: false, type: String })
   @ApiQuery({ name: 'isFeatured', required: false, type: String })
   @ApiQuery({ name: 'isWomenLed', required: false, type: String })
+  @ApiQuery({ name: 'categoryId', required: false, type: String, description: 'Only providers listed in this category' })
   getProvidersList(
     @Request() req,
     @Query('page') page?: number,
@@ -290,6 +291,7 @@ export class AdminController {
     @Query('city') city?: string,
     @Query('isFeatured') isFeatured?: string,
     @Query('isWomenLed') isWomenLed?: string,
+    @Query('categoryId') categoryId?: string,
   ) {
     return this.adminService.getProvidersList(req.user, page, limit, search, status, city, isFeatured, isWomenLed);
   }
@@ -1338,6 +1340,24 @@ export class AdminController {
   @ApiOperation({ summary: 'Suggest a website, logo and banner for providers (Google + their own website). Saves nothing.' })
   enrichProviders(@Request() req, @Body() dto: EnrichProvidersDto) {
     return this.providerEnrichment.enrich(req.user, dto.ids);
+  }
+
+  @Post('providers/image-candidates')
+  @Throttle(BULK_IMPORT_THROTTLE)
+  @ApiOperation({
+    summary: 'Find logo/banner candidates for sheet rows being vetted (Instagram handle, then website). Saves nothing.',
+  })
+  providerImageCandidates(@Request() req, @Body() dto: ImageCandidatesDto) {
+    return this.providerEnrichment.imageCandidates(req.user, dto.rows);
+  }
+
+  @Post('providers/auto-images')
+  @Throttle(BULK_IMPORT_THROTTLE)
+  @ApiOperation({
+    summary: 'Fill missing provider images: Instagram profile picture, then website logo/banner, then a generated branded banner. Existing images are kept.',
+  })
+  autoFillProviderImages(@Request() req, @Body() dto: EnrichProvidersDto) {
+    return this.providerEnrichment.autoFillImages(req.user, dto.ids);
   }
 
   @Post('providers/bulk-action')
