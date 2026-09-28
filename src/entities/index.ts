@@ -36,4 +36,5 @@ export { Voucher } from './voucher.entity';
 export { VoucherRedemption } from './voucher-redemption.entity';
 export { UserCategoryInteraction } from './user-category-interaction.entity';
 export { ServiceableCity } from './serviceable-city.entity';
+export { GeocodeCache, type GeocodePrecision } from './geocode-cache.entity';
 export { CityRequest } from './city-request.entity';

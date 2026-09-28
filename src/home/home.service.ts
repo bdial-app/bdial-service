@@ -111,7 +111,9 @@ export class HomeService {
       verified: r.status === 'active',
       isFeatured: r.isFeatured,
       isAvailable: r.isAvailable,
-      distance: r.distance ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
+      // A city-centre pin is not a real location — show the town, not a bogus distance.
+      distance: r.distance && r.geocodePrecision !== 'city' ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
+      approximateLocation: r.geocodePrecision === 'city',
     }));
   }
 
@@ -281,6 +283,7 @@ export class HomeService {
         'p.brand_name AS name',
         'p.profile_photo_url AS image',
         'p.banner_image_url AS "bannerImage"',
+        'p.geocode_precision AS "geocodePrecision"',
         'p.description AS description',
         'p.city AS city',
         'p.area AS area',
@@ -306,7 +309,11 @@ export class HomeService {
         qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
       }
       qb.addSelect("CASE WHEN p.status = 'active' THEN 0 ELSE 1 END", 'status_rank');
+      // A city-centre pin is a guess, so those businesses sit below everyone
+      // whose location is real, however close the guess happens to look.
+      qb.addSelect("CASE WHEN p.geocode_precision = 'city' THEN 1 ELSE 0 END", 'approx_rank');
       qb.orderBy('status_rank', 'ASC')
+        .addOrderBy('approx_rank', 'ASC')
         .addOrderBy('distance', 'ASC');
     } else if (city) {
       qb.andWhere('p.city ILIKE :city', { city: `%${city}%` })
@@ -327,7 +334,8 @@ export class HomeService {
     if (raw.length === 0 && city && hasLocation) {
       const fallbackQb = this.providerRepo
         .createQueryBuilder('p')
-        .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"', 'p.description AS description', 'p.city AS city', 'p.area AS area', 'p.status AS status', 'p.is_featured AS "isFeatured"', 'p.is_available AS "isAvailable"', 'p.latitude AS latitude', 'p.longitude AS longitude'])
+        .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"',
+        'p.geocode_precision AS "geocodePrecision"', 'p.description AS description', 'p.city AS city', 'p.area AS area', 'p.status AS status', 'p.is_featured AS "isFeatured"', 'p.is_available AS "isAvailable"', 'p.latitude AS latitude', 'p.longitude AS longitude'])
         .addSelect(`(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`, 'listingPhoto')
         .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
         .andWhere('p.is_available = true');
@@ -634,6 +642,7 @@ export class HomeService {
         'p.brand_name AS name',
         'p.profile_photo_url AS image',
         'p.banner_image_url AS "bannerImage"',
+        'p.geocode_precision AS "geocodePrecision"',
         'p.description AS description',
         'p.city AS city',
         'p.area AS area',
@@ -673,7 +682,8 @@ export class HomeService {
     if (raw.length === 0 && city && hasLocation) {
       const fallbackQb = this.providerRepo
         .createQueryBuilder('p')
-        .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"', 'p.description AS description', 'p.city AS city', 'p.area AS area', 'p.status AS status', 'p.is_featured AS "isFeatured"', 'p.is_available AS "isAvailable"'])
+        .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"',
+        'p.geocode_precision AS "geocodePrecision"', 'p.description AS description', 'p.city AS city', 'p.area AS area', 'p.status AS status', 'p.is_featured AS "isFeatured"', 'p.is_available AS "isAvailable"'])
         .addSelect(`(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`, 'listingPhoto')
         .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
         .andWhere('p.is_available = true');
@@ -692,7 +702,8 @@ export class HomeService {
     if (raw.length === 0) {
       const globalQb = this.providerRepo
         .createQueryBuilder('p')
-        .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"', 'p.description AS description', 'p.city AS city', 'p.area AS area', 'p.status AS status', 'p.is_featured AS "isFeatured"', 'p.is_available AS "isAvailable"'])
+        .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"',
+        'p.geocode_precision AS "geocodePrecision"', 'p.description AS description', 'p.city AS city', 'p.area AS area', 'p.status AS status', 'p.is_featured AS "isFeatured"', 'p.is_available AS "isAvailable"'])
         .addSelect(`(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`, 'listingPhoto')
         .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
         .andWhere('p.is_available = true');
@@ -729,6 +740,7 @@ export class HomeService {
         'p.brand_name AS name',
         'p.profile_photo_url AS image',
         'p.banner_image_url AS "bannerImage"',
+        'p.geocode_precision AS "geocodePrecision"',
         'p.description AS description',
         'p.city AS city',
         'p.area AS area',
@@ -791,6 +803,7 @@ export class HomeService {
         'p.brand_name AS name',
         'p.profile_photo_url AS image',
         'p.banner_image_url AS "bannerImage"',
+        'p.geocode_precision AS "geocodePrecision"',
         'p.description AS description',
         'p.city AS city',
         'p.area AS area',
@@ -849,7 +862,8 @@ export class HomeService {
     if (raw.length === 0 && city && hasLocation) {
       const fallbackQb = this.providerRepo
         .createQueryBuilder('p')
-        .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"', 'p.description AS description', 'p.city AS city', 'p.area AS area', 'p.status AS status', 'p.created_at AS "createdAt"'])
+        .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"',
+        'p.geocode_precision AS "geocodePrecision"', 'p.description AS description', 'p.city AS city', 'p.area AS area', 'p.status AS status', 'p.created_at AS "createdAt"'])
         .addSelect(`(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`, 'listingPhoto')
         .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
         .andWhere('p.is_available = true')
@@ -892,6 +906,7 @@ export class HomeService {
         'p.brand_name AS name',
         'p.profile_photo_url AS image',
         'p.banner_image_url AS "bannerImage"',
+        'p.geocode_precision AS "geocodePrecision"',
         'p.city AS city',
         'p.area AS area',
         'p.status AS status',
@@ -947,7 +962,8 @@ export class HomeService {
       const fallbackRaw = await this.offerRepo
         .createQueryBuilder('o')
         .innerJoin('providers', 'p', 'p.id = o.provider_id')
-        .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"', 'p.city AS city', 'p.area AS area', 'p.status AS status', 'o.id AS "offerId"', 'o.title AS "offerTitle"', 'o.discount_type AS "discountType"', 'o.discount_value AS "discountValue"', 'o.ends_at AS "offerEndsAt"'])
+        .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"',
+        'p.geocode_precision AS "geocodePrecision"', 'p.city AS city', 'p.area AS area', 'p.status AS status', 'o.id AS "offerId"', 'o.title AS "offerTitle"', 'o.discount_type AS "discountType"', 'o.discount_value AS "discountValue"', 'o.ends_at AS "offerEndsAt"'])
         .addSelect(`(SELECT COUNT(*)::int FROM provider_offers po2 WHERE po2.provider_id = p.id AND po2.is_active = true AND po2.starts_at <= NOW() AND po2.ends_at >= NOW() AND po2.approval_status = 'approved')`, 'totalOffers')
         .where('o.is_active = :active', { active: true })
         .andWhere('o.starts_at <= :now', { now })
@@ -991,7 +1007,9 @@ export class HomeService {
       rating: parseFloat(r.rating) || 0,
       reviewCount: parseInt(r.reviewCount, 10) || 0,
       verified: r.status === 'active',
-      distance: r.distance ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
+      // A city-centre pin is not a real location — show the town, not a bogus distance.
+      distance: r.distance && r.geocodePrecision !== 'city' ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
+      approximateLocation: r.geocodePrecision === 'city',
       offerId: r.offerId,
       offerTitle: r.offerTitle,
       discountType: r.discountType,
@@ -1022,6 +1040,7 @@ export class HomeService {
         'p.brand_name AS name',
         'p.profile_photo_url AS image',
         'p.banner_image_url AS "bannerImage"',
+        'p.geocode_precision AS "geocodePrecision"',
         'p.description AS description',
         'p.city AS city',
         'p.area AS area',
@@ -1067,7 +1086,8 @@ export class HomeService {
     if (raw.length === 0 && city && hasLocation) {
       const fallbackQb = this.providerRepo
         .createQueryBuilder('p')
-        .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"', 'p.description AS description', 'p.city AS city', 'p.area AS area', 'p.status AS status', 'p.is_featured AS "isFeatured"', 'p.is_available AS "isAvailable"', 'p.latitude AS latitude', 'p.longitude AS longitude'])
+        .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"',
+        'p.geocode_precision AS "geocodePrecision"', 'p.description AS description', 'p.city AS city', 'p.area AS area', 'p.status AS status', 'p.is_featured AS "isFeatured"', 'p.is_available AS "isAvailable"', 'p.latitude AS latitude', 'p.longitude AS longitude'])
         .addSelect(`(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`, 'listingPhoto')
         .where('p.status IN (:...statuses)', { statuses: ['active', 'unverified'] })
         .andWhere('p.is_available = true')
@@ -1117,6 +1137,7 @@ export class HomeService {
         'p.brand_name AS name',
         'p.profile_photo_url AS image',
         'p.banner_image_url AS "bannerImage"',
+        'p.geocode_precision AS "geocodePrecision"',
         'p.description AS description',
         'p.city AS city',
         'p.area AS area',
@@ -1233,7 +1254,9 @@ export class HomeService {
       services: r.services || null,
       primaryCategory: r.primaryCategory || null,
       verified: r.status === 'active',
-      distance: r.distance ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
+      // A city-centre pin is not a real location — show the town, not a bogus distance.
+      distance: r.distance && r.geocodePrecision !== 'city' ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
+      approximateLocation: r.geocodePrecision === 'city',
       sponsorType: r.sponsorType,
       hasActiveOffer: r.hasActiveOffer === true || r.hasActiveOffer === 't',
       sponsoredListingId: r.sponsoredListingId,
@@ -1273,6 +1296,7 @@ export class HomeService {
         'p.brand_name AS name',
         'p.profile_photo_url AS image',
         'p.banner_image_url AS "bannerImage"',
+        'p.geocode_precision AS "geocodePrecision"',
         'p.description AS description',
         'p.city AS city',
         'p.area AS area',
@@ -1335,7 +1359,8 @@ export class HomeService {
     if (raw.length === 0 && city && hasLocation) {
       const fallbackQb = this.providerRepo
         .createQueryBuilder('p')
-        .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"', 'p.description AS description', 'p.city AS city', 'p.area AS area', 'p.status AS status', 'p.is_featured AS "isFeatured"', 'p.is_available AS "isAvailable"'])
+        .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"',
+        'p.geocode_precision AS "geocodePrecision"', 'p.description AS description', 'p.city AS city', 'p.area AS area', 'p.status AS status', 'p.is_featured AS "isFeatured"', 'p.is_available AS "isAvailable"'])
         .addSelect(`(SELECT ph.image_url FROM photos ph WHERE ph.provider_id = p.id ORDER BY ph.display_order ASC LIMIT 1)`, 'listingPhoto')
         .addSelect(`EXISTS (SELECT 1 FROM sponsored_listings sl WHERE sl.provider_id = p.id AND sl.is_active = true AND sl.starts_at <= NOW() AND sl.ends_at >= NOW() AND (sl.billing_mode = 'free' OR sl.spent_amount < sl.budget_amount) AND sl.approval_status = 'approved' AND (sl.target_category_ids IS NULL OR sl.target_category_ids && ARRAY[${categoryIds.map((id) => `'${id}'`).join(',')}]::uuid[]))`, 'isSponsored')
         .where('EXISTS (SELECT 1 FROM provider_categories pc_f WHERE pc_f.provider_id = p.id AND pc_f.category_id IN (:...categoryIds))', { categoryIds })

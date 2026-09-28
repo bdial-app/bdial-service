@@ -219,6 +219,7 @@ export class ExploreService {
         'p.brand_name AS name',
         'p.profile_photo_url AS image',
         'p.banner_image_url AS "bannerImage"',
+        'p.geocode_precision AS "geocodePrecision"',
         'p.description AS description',
         'p.city AS city',
         'p.area AS area',
@@ -307,7 +308,9 @@ export class ExploreService {
       services: r.services || null,
       verified: r.status === 'active',
       isWomenLed: r.isWomenLed || false,
-      distance: r.distance ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
+      // A city-centre pin is not a real location — show the town, not a bogus distance.
+      distance: r.distance && r.geocodePrecision !== 'city' ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
+      approximateLocation: r.geocodePrecision === 'city',
       sponsoredListingId: r.sponsoredListingId,
       isSponsored: true,
     }));
@@ -331,6 +334,7 @@ export class ExploreService {
         'p.brand_name AS name',
         'p.profile_photo_url AS image',
         'p.banner_image_url AS "bannerImage"',
+        'p.geocode_precision AS "geocodePrecision"',
         'p.city AS city',
         'p.area AS area',
         'p.status AS status',
@@ -375,7 +379,9 @@ export class ExploreService {
       rating: parseFloat(r.rating) || 0,
       reviewCount: parseInt(r.reviewCount, 10) || 0,
       verified: r.status === 'active',
-      distance: r.distance ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
+      // A city-centre pin is not a real location — show the town, not a bogus distance.
+      distance: r.distance && r.geocodePrecision !== 'city' ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
+      approximateLocation: r.geocodePrecision === 'city',
       offerId: r.offerId,
       offerTitle: r.offerTitle,
       discountType: r.discountType,
@@ -423,6 +429,7 @@ export class ExploreService {
         'p.brand_name AS name',
         'p.profile_photo_url AS image',
         'p.banner_image_url AS "bannerImage"',
+        'p.geocode_precision AS "geocodePrecision"',
         'p.city AS city',
         'p.area AS area',
         'p.status AS status',
@@ -553,7 +560,9 @@ export class ExploreService {
       verified: r.status === 'active',
       isWomenLed: r.isWomenLed || false,
       services: r.services || null,
-      distance: r.distance ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
+      // A city-centre pin is not a real location — show the town, not a bogus distance.
+      distance: r.distance && r.geocodePrecision !== 'city' ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
+      approximateLocation: r.geocodePrecision === 'city',
       offerId: r.offerId,
       offerTitle: r.offerTitle,
       discountType: r.discountType,
@@ -585,6 +594,7 @@ export class ExploreService {
         'p.brand_name AS name',
         'p.profile_photo_url AS image',
         'p.banner_image_url AS "bannerImage"',
+        'p.geocode_precision AS "geocodePrecision"',
         'p.description AS description',
         'p.city AS city',
         'p.area AS area',
@@ -632,6 +642,7 @@ export class ExploreService {
         'p.brand_name AS name',
         'p.profile_photo_url AS image',
         'p.banner_image_url AS "bannerImage"',
+        'p.geocode_precision AS "geocodePrecision"',
         'p.city AS city',
         'p.area AS area',
         'p.status AS status',
@@ -691,6 +702,7 @@ export class ExploreService {
         'p.brand_name AS name',
         'p.profile_photo_url AS image',
         'p.banner_image_url AS "bannerImage"',
+        'p.geocode_precision AS "geocodePrecision"',
         'p.city AS city',
         'p.area AS area',
         'p.status AS status',
@@ -751,6 +763,7 @@ export class ExploreService {
         'p.brand_name AS name',
         'p.profile_photo_url AS image',
         'p.banner_image_url AS "bannerImage"',
+        'p.geocode_precision AS "geocodePrecision"',
         'p.city AS city',
         'p.area AS area',
         'p.status AS status',
@@ -1167,6 +1180,7 @@ export class ExploreService {
         'p.brand_name AS name',
         'p.profile_photo_url AS image',
         'p.banner_image_url AS "bannerImage"',
+        'p.geocode_precision AS "geocodePrecision"',
         'p.description AS description',
         'p.city AS city',
         'p.area AS area',
@@ -1202,7 +1216,8 @@ export class ExploreService {
     if (raw.length === 0 && city && hasLocation) {
       const fallbackQb = this.providerRepo
         .createQueryBuilder('p')
-        .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"', 'p.description AS description', 'p.city AS city', 'p.area AS area', 'p.status AS status', 'p.is_featured AS "isFeatured"', 'p.is_women_led AS "isWomenLed"'])
+        .select(['p.id AS id', 'p.brand_name AS name', 'p.profile_photo_url AS image', 'p.banner_image_url AS "bannerImage"',
+        'p.geocode_precision AS "geocodePrecision"', 'p.description AS description', 'p.city AS city', 'p.area AS area', 'p.status AS status', 'p.is_featured AS "isFeatured"', 'p.is_women_led AS "isWomenLed"'])
         .where("p.status IN ('active', 'unverified')")
         .andWhere("p.women_led_status = 'approved'");
       this.withReviewStats(fallbackQb);
@@ -1232,7 +1247,9 @@ export class ExploreService {
       verified: r.status === 'active',
       isWomenLed: r.isWomenLed || false,
       isFeatured: r.isFeatured || false,
-      distance: r.distance ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
+      // A city-centre pin is not a real location — show the town, not a bogus distance.
+      distance: r.distance && r.geocodePrecision !== 'city' ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
+      approximateLocation: r.geocodePrecision === 'city',
     }));
   }
 }

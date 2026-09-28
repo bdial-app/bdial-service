@@ -544,7 +544,7 @@ export class SearchService implements OnModuleInit {
     switch (opts.sortBy) {
       case 'distance':
         orderClause = opts.hasGeo
-          ? `CASE WHEN p.status = 'active' THEN 0 ELSE 1 END ASC, distance ASC NULLS LAST`
+          ? `CASE WHEN p.status = 'active' THEN 0 ELSE 1 END ASC, CASE WHEN p.geocode_precision = 'city' THEN 1 ELSE 0 END ASC, distance ASC NULLS LAST`
           : `CASE WHEN p.status = 'active' THEN 0 ELSE 1 END ASC, relevance_score DESC`;
         break;
       case 'rating':
@@ -611,6 +611,7 @@ export class SearchService implements OnModuleInit {
           p.is_featured,
           p.created_at,
           ${distExpr} AS distance,
+          p.geocode_precision AS geocode_precision,
           rs.avg_rating,
           COALESCE(rs.review_count, 0) AS review_count,
           cn.categories,
@@ -669,7 +670,7 @@ export class SearchService implements OnModuleInit {
           status: r.status,
           isWomenLed: r.women_led_status === 'approved',
           isFeatured: r.is_featured,
-          distance: r.distance != null ? parseFloat(parseFloat(r.distance).toFixed(2)) : null,
+          distance: r.distance != null && r.geocode_precision !== 'city' ? parseFloat(parseFloat(r.distance).toFixed(2)) : null,
           avgRating: r.avg_rating != null ? parseFloat(parseFloat(r.avg_rating).toFixed(1)) : null,
           reviewCount: parseInt(r.review_count, 10),
           categories: r.categories,
@@ -776,6 +777,7 @@ export class SearchService implements OnModuleInit {
           p.id, p.brand_name, p.description, p.profile_photo_url, p.banner_image_url,
           p.city, p.area, p.status, p.is_women_led, p.is_featured,
           ${distExpr} AS distance,
+          p.geocode_precision AS geocode_precision,
           rs.avg_rating, COALESCE(rs.review_count, 0) AS review_count,
           (SELECT string_agg(DISTINCT c.name, ', ') FROM provider_categories pc JOIN categories c ON c.id = pc.category_id WHERE pc.provider_id = p.id) AS categories,
           po.title AS offer_title, po.discount_value, po.discount_type,
@@ -807,7 +809,7 @@ export class SearchService implements OnModuleInit {
         status: r.status,
         isWomenLed: r.is_women_led,
         isFeatured: r.is_featured,
-        distance: r.distance != null ? parseFloat(parseFloat(r.distance).toFixed(2)) : null,
+        distance: r.distance != null && r.geocode_precision !== 'city' ? parseFloat(parseFloat(r.distance).toFixed(2)) : null,
         avgRating: r.avg_rating != null ? parseFloat(parseFloat(r.avg_rating).toFixed(1)) : null,
         reviewCount: parseInt(r.review_count, 10),
         categories: r.categories,
@@ -909,6 +911,7 @@ export class SearchService implements OnModuleInit {
           p.id, p.brand_name, p.description, p.profile_photo_url, p.banner_image_url,
           p.city, p.area, p.status, p.is_women_led, p.is_featured,
           ${distExpr} AS distance,
+          p.geocode_precision AS geocode_precision,
           rs.avg_rating, rs.review_count,
           (SELECT string_agg(DISTINCT c.name, ', ') FROM provider_categories pc JOIN categories c ON c.id = pc.category_id WHERE pc.provider_id = p.id) AS categories
         FROM providers p
@@ -931,7 +934,7 @@ export class SearchService implements OnModuleInit {
         status: r.status,
         isWomenLed: r.is_women_led,
         isFeatured: r.is_featured,
-        distance: r.distance != null ? parseFloat(parseFloat(r.distance).toFixed(2)) : null,
+        distance: r.distance != null && r.geocode_precision !== 'city' ? parseFloat(parseFloat(r.distance).toFixed(2)) : null,
         avgRating: r.avg_rating != null ? parseFloat(parseFloat(r.avg_rating).toFixed(1)) : null,
         reviewCount: parseInt(r.review_count, 10),
         categories: r.categories,
@@ -1030,6 +1033,7 @@ export class SearchService implements OnModuleInit {
           p.is_women_led,
           p.is_featured,
           ${distExpr} AS distance,
+          p.geocode_precision AS geocode_precision,
           sl.id AS sponsored_listing_id,
           sl.cost_per_click,
           rs.avg_rating,
@@ -1092,7 +1096,7 @@ export class SearchService implements OnModuleInit {
         status: r.status,
         isWomenLed: r.is_women_led,
         isFeatured: r.is_featured,
-        distance: r.distance != null ? parseFloat(parseFloat(r.distance).toFixed(2)) : null,
+        distance: r.distance != null && r.geocode_precision !== 'city' ? parseFloat(parseFloat(r.distance).toFixed(2)) : null,
         avgRating: r.avg_rating != null ? parseFloat(parseFloat(r.avg_rating).toFixed(1)) : null,
         reviewCount: parseInt(r.review_count, 10),
         categories: r.categories,
@@ -1213,7 +1217,7 @@ export class SearchService implements OnModuleInit {
           providerName: r.provider_name,
           providerCity: r.provider_city,
           providerArea: r.provider_area,
-          distance: r.distance != null ? parseFloat(parseFloat(r.distance).toFixed(2)) : null,
+          distance: r.distance != null && r.geocode_precision !== 'city' ? parseFloat(parseFloat(r.distance).toFixed(2)) : null,
           relevanceScore: parseFloat(parseFloat(r.relevance_score).toFixed(3)),
         })),
         total,
@@ -1704,6 +1708,7 @@ export class SearchService implements OnModuleInit {
             p.id, p.brand_name, p.description, p.profile_photo_url, p.banner_image_url,
             p.city, p.area, p.status, p.is_women_led, p.is_featured,
             ${distExpr} AS distance,
+          p.geocode_precision AS geocode_precision,
             rs.avg_rating, COALESCE(rs.review_count, 0) AS review_count,
             (SELECT string_agg(DISTINCT c.name, ', ') FROM provider_categories pc JOIN categories c ON c.id = pc.category_id WHERE pc.provider_id = p.id) AS categories,
             GREATEST(
@@ -1730,7 +1735,7 @@ export class SearchService implements OnModuleInit {
             status: r.status,
             isWomenLed: r.is_women_led,
             isFeatured: r.is_featured,
-            distance: r.distance != null ? parseFloat(parseFloat(r.distance).toFixed(2)) : null,
+            distance: r.distance != null && r.geocode_precision !== 'city' ? parseFloat(parseFloat(r.distance).toFixed(2)) : null,
             avgRating: r.avg_rating != null ? parseFloat(parseFloat(r.avg_rating).toFixed(1)) : null,
             reviewCount: parseInt(r.review_count, 10),
             categories: r.categories,
@@ -1794,6 +1799,7 @@ export class SearchService implements OnModuleInit {
           p.id, p.brand_name, p.description, p.profile_photo_url, p.banner_image_url,
           p.city, p.area, p.status, p.is_women_led, p.is_featured,
           ${distExpr} AS distance,
+          p.geocode_precision AS geocode_precision,
           rs.avg_rating, COALESCE(rs.review_count, 0) AS review_count,
           (SELECT string_agg(DISTINCT c.name, ', ') FROM provider_categories pc JOIN categories c ON c.id = pc.category_id WHERE pc.provider_id = p.id) AS categories,
           COALESCE(rs.avg_rating, 0) AS relevance_score
@@ -1817,7 +1823,7 @@ export class SearchService implements OnModuleInit {
         status: r.status,
         isWomenLed: r.is_women_led,
         isFeatured: r.is_featured,
-        distance: r.distance != null ? parseFloat(parseFloat(r.distance).toFixed(2)) : null,
+        distance: r.distance != null && r.geocode_precision !== 'city' ? parseFloat(parseFloat(r.distance).toFixed(2)) : null,
         avgRating: r.avg_rating != null ? parseFloat(parseFloat(r.avg_rating).toFixed(1)) : null,
         reviewCount: parseInt(r.review_count, 10),
         categories: r.categories,

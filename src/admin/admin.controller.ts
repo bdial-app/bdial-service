@@ -8,7 +8,8 @@ import { AdminService } from './admin.service';
 import { AdminCreateUserDto, AdminCreateProviderWithUserDto, AdminSendOtpDto, AdminVerifyOtpDto } from './dto/admin-create-user.dto';
 import { BulkValidateProvidersDto, BulkImportProvidersDto } from './dto/bulk-provider-import.dto';
 import { ImportProviderImageUrlsDto } from './dto/provider-images.dto';
-import { EnrichProvidersDto, ImageCandidatesDto } from './dto/provider-enrichment.dto';
+import { EnrichProvidersDto, GeocodeProvidersDto, ImageCandidatesDto } from './dto/provider-enrichment.dto';
+import { ProviderLocationService } from './provider-location.service';
 import { ProviderEnrichmentService } from './provider-enrichment.service';
 import {
   AdminCreateSponsorshipDto,
@@ -35,6 +36,7 @@ export class AdminController {
   constructor(
     private readonly adminService: AdminService,
     private readonly providerEnrichment: ProviderEnrichmentService,
+    private readonly providerLocation: ProviderLocationService,
   ) {}
 
   @Get('dashboard')
@@ -1340,6 +1342,28 @@ export class AdminController {
   @ApiOperation({ summary: 'Suggest a website, logo and banner for providers (Google + their own website). Saves nothing.' })
   enrichProviders(@Request() req, @Body() dto: EnrichProvidersDto) {
     return this.providerEnrichment.enrich(req.user, dto.ids);
+  }
+
+  @Get('providers/location-stats')
+  @ApiOperation({ summary: 'How many providers have a precise pin, an approximate one, or none' })
+  providerLocationStats(@Request() req) {
+    return this.providerLocation.stats(req.user);
+  }
+
+  @Get('providers/location-candidates')
+  @ApiOperation({ summary: 'IDs of providers whose pin is missing or only city-level' })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  providerLocationCandidates(@Request() req, @Query('limit') limit?: number) {
+    return this.providerLocation.candidates(req.user, limit ? Number(limit) : undefined);
+  }
+
+  @Post('providers/geocode')
+  @Throttle(BULK_IMPORT_THROTTLE)
+  @ApiOperation({
+    summary: 'Pin providers: address/area/pincode via a cached geocoder, else the city centre (free). Precise pins are left alone.',
+  })
+  geocodeProviders(@Request() req, @Body() dto: GeocodeProvidersDto) {
+    return this.providerLocation.backfill(req.user, dto.ids, { allowGoogle: dto.allowGoogle, force: dto.force });
   }
 
   @Post('providers/image-candidates')
