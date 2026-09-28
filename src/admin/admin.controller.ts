@@ -298,6 +298,19 @@ export class AdminController {
     return this.adminService.getProvidersList(req.user, page, limit, search, status, city, isFeatured, isWomenLed);
   }
 
+  @Get('providers/location-stats')
+  @ApiOperation({ summary: 'How many providers have a precise pin, an approximate one, or none' })
+  providerLocationStats(@Request() req) {
+    return this.providerLocation.stats(req.user);
+  }
+
+  @Get('providers/location-candidates')
+  @ApiOperation({ summary: 'IDs of providers whose pin is missing or only city-level' })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  providerLocationCandidates(@Request() req, @Query('limit') limit?: number) {
+    return this.providerLocation.candidates(req.user, limit ? Number(limit) : undefined);
+  }
+
   @Get('providers/:id')
   @ApiOperation({ summary: 'Get full provider detail with all relations' })
   @ApiParam({ name: 'id', description: 'Provider ID' })
@@ -1342,19 +1355,6 @@ export class AdminController {
   @ApiOperation({ summary: 'Suggest a website, logo and banner for providers (Google + their own website). Saves nothing.' })
   enrichProviders(@Request() req, @Body() dto: EnrichProvidersDto) {
     return this.providerEnrichment.enrich(req.user, dto.ids);
-  }
-
-  @Get('providers/location-stats')
-  @ApiOperation({ summary: 'How many providers have a precise pin, an approximate one, or none' })
-  providerLocationStats(@Request() req) {
-    return this.providerLocation.stats(req.user);
-  }
-
-  @Get('providers/location-candidates')
-  @ApiOperation({ summary: 'IDs of providers whose pin is missing or only city-level' })
-  @ApiQuery({ name: 'limit', required: false, type: Number })
-  providerLocationCandidates(@Request() req, @Query('limit') limit?: number) {
-    return this.providerLocation.candidates(req.user, limit ? Number(limit) : undefined);
   }
 
   @Post('providers/geocode')

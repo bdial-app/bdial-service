@@ -1034,11 +1034,34 @@ export class AdminService {
       'isAvailable', 'websiteUrl', 'instagramHandle', 'facebookHandle',
       'youtubeHandle', 'whatsappNumber', 'openTime', 'closeTime',
       'city', 'area', 'pincode', 'address', 'isWomenLed',
+      'latitude', 'longitude',
     ];
     const update: any = {};
     for (const key of allowed) {
       if ((body as any)[key] !== undefined) update[key] = (body as any)[key];
     }
+
+    // A pin an admin placed on the map is as good as the owner's own: stamp it
+    // 'manual' so the geocoding backfill can never move it again. Both halves
+    // must arrive together — half a coordinate would put the shop in the sea.
+    if (update.latitude !== undefined || update.longitude !== undefined) {
+      const lat = Number(update.latitude);
+      const lng = Number(update.longitude);
+      const valid =
+        update.latitude != null && update.longitude != null &&
+        Number.isFinite(lat) && Number.isFinite(lng) &&
+        Math.abs(lat) <= 90 && Math.abs(lng) <= 180 &&
+        !(lat === 0 && lng === 0);
+      if (!valid) {
+        throw new BadRequestException('latitude and longitude must both be valid coordinates');
+      }
+      update.latitude = lat;
+      update.longitude = lng;
+      update.geocodePrecision = 'manual';
+      update.geocodeSource = 'admin';
+      update.geocodedAt = new Date();
+    }
+
     if (Object.keys(update).length === 0) throw new BadRequestException('No valid fields to update');
     await this.providerRepo.update(providerId, update);
     return this.providerRepo.findOne({
