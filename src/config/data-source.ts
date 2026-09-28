@@ -12,6 +12,7 @@ import { Review } from '../entities/review.entity';
 import { ReviewPhoto } from '../entities/review-photo.entity';
 import { ReviewReport } from '../entities/review-report.entity';
 import { Provider } from '../entities/provider.entity';
+import { GeocodeCache } from '../entities/geocode-cache.entity';
 import { SavedLocation } from '../entities/saved-location.entity';
 import { PromoBanner } from '../entities/promo-banner.entity';
 import { Booking } from '../entities/booking.entity';
@@ -49,6 +50,7 @@ import { truncate } from 'fs';
 
 export const ALL_ENTITIES = [
   User,
+  GeocodeCache,
   UserArchive,
   Category,
   ProviderCategory,

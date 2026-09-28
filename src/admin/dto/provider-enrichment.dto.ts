@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { ArrayMaxSize, ArrayNotEmpty, IsArray, IsOptional, IsString, IsUUID, MaxLength, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, ArrayNotEmpty, IsArray, IsBoolean, IsOptional, IsString, IsUUID, MaxLength, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class EnrichProvidersDto {
@@ -42,4 +42,26 @@ export class ImageCandidatesDto {
   @ValidateNested({ each: true })
   @Type(() => ImageCandidateRowDto)
   rows: ImageCandidateRowDto[];
+}
+
+export class GeocodeProvidersDto {
+  @ApiProperty({ type: [String], maxItems: 50, description: 'Provider IDs to pin' })
+  @IsArray()
+  @ArrayNotEmpty()
+  @ArrayMaxSize(50)
+  @IsUUID('all', { each: true })
+  ids: string[];
+
+  @ApiPropertyOptional({
+    default: true,
+    description: 'Allow paid Google lookups for rows that have an address, area or pincode. City-centre pins are always free.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  allowGoogle?: boolean;
+
+  @ApiPropertyOptional({ default: false, description: 'Re-pin even businesses that already have a precise location' })
+  @IsOptional()
+  @IsBoolean()
+  force?: boolean;
 }

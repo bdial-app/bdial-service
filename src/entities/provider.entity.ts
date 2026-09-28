@@ -54,6 +54,20 @@ export class Provider {
   @Column({ type: 'decimal', precision: 9, scale: 6, nullable: true })
   longitude: number | null;
 
+  /**
+   * How exact the pin is. 'manual' and 'rooftop' are real locations; 'city'
+   * means we only know the town, so distance must not be shown for it.
+   */
+  @Column({ name: 'geocode_precision', type: 'enum', enum: ['rooftop', 'street', 'locality', 'pincode', 'city', 'manual'], nullable: true })
+  geocodePrecision: 'rooftop' | 'street' | 'locality' | 'pincode' | 'city' | 'manual' | null;
+
+  /** Where the pin came from: owner, admin, google, city-centre. */
+  @Column({ name: 'geocode_source', type: 'varchar', length: 32, nullable: true })
+  geocodeSource: string | null;
+
+  @Column({ name: 'geocoded_at', type: 'timestamptz', nullable: true })
+  geocodedAt: Date | null;
+
   @Column({ name: 'contact_number', type: 'varchar', length: 15 })
   contactNumber: string;
 

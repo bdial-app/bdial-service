@@ -27,6 +27,67 @@ export class GeocodeService {
     }
   }
 
+  /**
+   * Address → coordinates. Returns the precision Google reports, so callers can
+   * tell a rooftop pin from "somewhere in this city".
+   *
+   * ROOFTOP → rooftop · RANGE_INTERPOLATED → street ·
+   * GEOMETRIC_CENTER → locality · APPROXIMATE → locality (or city for a bare town)
+   */
+  async forwardGeocode(query: string): Promise<{
+    lat: number;
+    lng: number;
+    precision: 'rooftop' | 'street' | 'locality' | 'city';
+    formatted: string;
+  } | null> {
+    this.ensureApiKey();
+    const trimmed = query.trim();
+    if (trimmed.length < 3) return null;
+
+    const url = new URL('https://maps.googleapis.com/maps/api/geocode/json');
+    url.searchParams.set('address', trimmed);
+    url.searchParams.set('region', 'in');
+    url.searchParams.set('key', this.apiKey!);
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10_000);
+    try {
+      const res = await fetch(url, { signal: controller.signal });
+      const data = (await res.json()) as {
+        status?: string;
+        error_message?: string;
+        results?: {
+          formatted_address?: string;
+          geometry?: { location?: { lat: number; lng: number }; location_type?: string };
+          types?: string[];
+        }[];
+      };
+      if (data.status === 'ZERO_RESULTS') return null;
+      if (data.status !== 'OK') {
+        // Never echo the URL — it carries the API key.
+        throw new BadRequestException(data.error_message || data.status || 'Geocoding failed');
+      }
+      const hit = data.results?.[0];
+      const loc = hit?.geometry?.location;
+      if (!loc) return null;
+
+      const kind = hit?.geometry?.location_type;
+      const types = hit?.types ?? [];
+      const precision =
+        kind === 'ROOFTOP' ? 'rooftop'
+          : kind === 'RANGE_INTERPOLATED' ? 'street'
+            : types.includes('locality') || types.includes('administrative_area_level_2') ? 'city'
+              : 'locality';
+
+      return { lat: loc.lat, lng: loc.lng, precision, formatted: hit?.formatted_address ?? trimmed };
+    } catch (err) {
+      if (controller.signal.aborted) throw new BadRequestException('Geocoding timed out');
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   /** Reverse geocode lat/lng → readable address label + city (CACHED — 24h TTL) */
   async reverseGeocode(lat: number, lng: number) {
     this.ensureApiKey();
