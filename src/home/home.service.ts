@@ -100,7 +100,8 @@ export class HomeService {
     return rows.map((r) => ({
       id: r.id,
       name: r.name,
-      image: r.bannerImage || r.image || r.listingPhoto,
+      // The logo is the business's own mark, so it leads on the card; the banner is the fallback.
+      image: r.image || r.bannerImage || r.listingPhoto,
       description: r.description,
       city: r.city,
       area: r.area,
@@ -1002,7 +1003,8 @@ export class HomeService {
     return results.map((r) => ({
       id: r.id,
       name: r.name,
-      image: r.bannerImage || r.image,
+      // The logo is the business's own mark, so it leads on the card; the banner is the fallback.
+      image: r.image || r.bannerImage,
       location: [r.area, r.city].filter(Boolean).map((s: string) => s.replace(/[\r\n]+/g, '').trim()).join(', '),
       rating: parseFloat(r.rating) || 0,
       reviewCount: parseInt(r.reviewCount, 10) || 0,
@@ -1010,6 +1012,7 @@ export class HomeService {
       // A city-centre pin is not a real location — show the town, not a bogus distance.
       distance: r.distance && r.geocodePrecision !== 'city' ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
       approximateLocation: r.geocodePrecision === 'city',
+      city: r.city,
       offerId: r.offerId,
       offerTitle: r.offerTitle,
       discountType: r.discountType,
@@ -1246,7 +1249,8 @@ export class HomeService {
     return results.map((r) => ({
       id: r.id,
       name: r.name,
-      image: r.bannerImage || r.image || r.listingPhoto,
+      // The logo is the business's own mark, so it leads on the card; the banner is the fallback.
+      image: r.image || r.bannerImage || r.listingPhoto,
       description: r.description ? r.description.slice(0, 80) : null,
       location: [r.area, r.city].filter(Boolean).map((s: string) => s.replace(/[\r\n]+/g, '').trim()).join(', '),
       rating: parseFloat(r.rating) || 0,
@@ -1257,6 +1261,7 @@ export class HomeService {
       // A city-centre pin is not a real location — show the town, not a bogus distance.
       distance: r.distance && r.geocodePrecision !== 'city' ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
       approximateLocation: r.geocodePrecision === 'city',
+      city: r.city,
       sponsorType: r.sponsorType,
       hasActiveOffer: r.hasActiveOffer === true || r.hasActiveOffer === 't',
       sponsoredListingId: r.sponsoredListingId,

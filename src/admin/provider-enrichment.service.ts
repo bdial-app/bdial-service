@@ -108,6 +108,25 @@ export function normalizeIndianPhone(phone: string): string {
 }
 
 /** Accepts a handle, @handle or profile URL; returns the bare handle or null. */
+/**
+ * Why Business Discovery will refuse these credentials, if it will. Checked
+ * once at startup rather than once per lookup, so a misconfigured deployment
+ * says what is wrong instead of reporting "Invalid OAuth access token".
+ */
+export function instagramConfigProblem(
+  token: string | undefined,
+  accountId: string | undefined,
+): string | undefined {
+  if (!token || !accountId) return undefined;
+  if (/^IG(AA|Q)/.test(token)) {
+    return 'INSTAGRAM_GRAPH_TOKEN is an Instagram-Login token (starts with IGAA/IGQ). Business Discovery needs a Facebook Page token (starts with EAA) from an app using "Instagram API setup with Facebook login".';
+  }
+  if (!/^\d+$/.test(accountId)) {
+    return `INSTAGRAM_BUSINESS_ACCOUNT_ID must be the numeric Instagram business account id, not "${accountId}". Find it with <PAGE_ID>?fields=instagram_business_account.`;
+  }
+  return undefined;
+}
+
 export function instagramHandleOf(raw: string | null | undefined): string | null {
   const value = raw?.trim();
   if (!value) return null;
@@ -170,14 +189,7 @@ export class ProviderEnrichmentService {
    * both here rather than once per row.
    */
   private checkInstagramConfig(): string | undefined {
-    if (!this.igToken || !this.igAccountId) return undefined;
-    if (/^IG(AA|Q)/.test(this.igToken)) {
-      return 'INSTAGRAM_GRAPH_TOKEN is an Instagram-Login token (starts with IGAA/IGQ). Business Discovery needs a Facebook Page token (starts with EAA) from an app using "Instagram API setup with Facebook login".';
-    }
-    if (!/^\d+$/.test(this.igAccountId)) {
-      return `INSTAGRAM_BUSINESS_ACCOUNT_ID must be the numeric Instagram business account id, not "${this.igAccountId}". Find it with <PAGE_ID>?fields=instagram_business_account.`;
-    }
-    return undefined;
+    return instagramConfigProblem(this.igToken, this.igAccountId);
   }
 
   private assertAdmin(admin: { role?: string }) {
