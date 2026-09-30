@@ -39,6 +39,7 @@ import { CreateOfferDto } from './dto/create-offer.dto';
 import { UpdateOfferDto } from './dto/update-offer.dto';
 import { CreateSponsorshipDto, UpdateSponsorshipDto } from './dto/sponsorship.dto';
 import { Public } from '../common/decorators/public.decorator';
+import { InstagramFeedService } from './instagram-feed.service';
 import { Throttle } from '@nestjs/throttler';
 
 @ApiTags('Providers')
@@ -47,6 +48,7 @@ export class ProvidersController {
   constructor(
     private readonly providersService: ProvidersService,
     private readonly websiteMetaService: WebsiteMetaService,
+    private readonly instagramFeed: InstagramFeedService,
   ) {}
 
   @Post()
@@ -398,6 +400,14 @@ export class ProvidersController {
   @ApiParam({ name: 'id', description: 'Provider ID (UUID)' })
   getProviderById(@Param('id', ParseUUIDPipe) id: string) {
     return this.providersService.findOne(id);
+  }
+
+  @Get(':id/instagram')
+  @Public()
+  @ApiOperation({ summary: "The five most recent posts from the business's Instagram, if it is a business account" })
+  @ApiParam({ name: 'id', description: 'Provider ID (UUID)' })
+  getProviderInstagram(@Param('id', ParseUUIDPipe) id: string) {
+    return this.instagramFeed.forProvider(id);
   }
 
   @Get(':id/details')

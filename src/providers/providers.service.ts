@@ -925,7 +925,8 @@ export class ProvidersService {
     const providers = raw.map((r: any) => ({
       id: r.id,
       name: r.name,
-      image: r.bannerImage || r.image || r.listingPhoto,
+      // The logo is the business's own mark, so it leads on the card; the banner is the fallback.
+      image: r.image || r.bannerImage || r.listingPhoto,
       description: r.description,
       city: r.city,
       area: r.area,

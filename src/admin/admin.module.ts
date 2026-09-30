@@ -4,6 +4,7 @@ import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
 import { ProviderEnrichmentService } from './provider-enrichment.service';
 import { ProviderLocationService } from './provider-location.service';
+import { ProductBulkService } from './product-bulk.service';
 import { GeocodeModule } from '../geocode/geocode.module';
 import { AuthModule } from '../auth/auth.module';
 import { Provider, User, UserArchive, Verification, Review, ReviewReport, Report, ProviderWarning, Product, Category, ProviderCategory, Conversation, ConversationParticipant, Message, PromoBanner, SponsoredListing, ProviderOffer, ProviderBadge, ProviderAnalyticsEvent, ProviderLead, SearchLog, AdEvent, AppInvite, AuditLog, SystemSetting, Photo, ReviewPhoto, Payment, ServiceableCity, GeocodeCache } from '../entities';
@@ -25,6 +26,6 @@ import { GoogleReviewsModule } from '../google-reviews/google-reviews.module';
     GeocodeModule,
   ],
   controllers: [AdminController],
-  providers: [AdminService, ProviderEnrichmentService, ProviderLocationService],
+  providers: [ProductBulkService, AdminService, ProviderEnrichmentService, ProviderLocationService],
 })
 export class AdminModule {}

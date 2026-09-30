@@ -9,6 +9,8 @@ import { AdminCreateUserDto, AdminCreateProviderWithUserDto, AdminSendOtpDto, Ad
 import { BulkValidateProvidersDto, BulkImportProvidersDto } from './dto/bulk-provider-import.dto';
 import { ImportProviderImageUrlsDto } from './dto/provider-images.dto';
 import { EnrichProvidersDto, GeocodeProvidersDto, ImageCandidatesDto } from './dto/provider-enrichment.dto';
+import { BulkProductsDto } from './dto/product-bulk.dto';
+import { ProductBulkService } from './product-bulk.service';
 import { ProviderLocationService } from './provider-location.service';
 import { ProviderEnrichmentService } from './provider-enrichment.service';
 import {
@@ -37,6 +39,7 @@ export class AdminController {
     private readonly adminService: AdminService,
     private readonly providerEnrichment: ProviderEnrichmentService,
     private readonly providerLocation: ProviderLocationService,
+    private readonly productBulk: ProductBulkService,
   ) {}
 
   @Get('dashboard')
@@ -421,6 +424,26 @@ export class AdminController {
   @ApiOperation({ summary: 'Admin create a product for a provider' })
   createProduct(@Request() req, @Body() body: any) {
     return this.adminService.createProductAdmin(req.user, body);
+  }
+
+  @Post('products/bulk-validate')
+  @Throttle(BULK_IMPORT_THROTTLE)
+  @ApiOperation({
+    summary: 'Dry-run a product/service sheet',
+    description: 'Writes nothing. Says which business each row lands on, and what would block or duplicate it.',
+  })
+  bulkValidateProducts(@Request() req, @Body() dto: BulkProductsDto) {
+    return this.productBulk.validate(req.user, dto.rows);
+  }
+
+  @Post('products/bulk-import')
+  @Throttle(BULK_IMPORT_THROTTLE)
+  @ApiOperation({
+    summary: 'Create many products and services from a vetted sheet',
+    description: 'Rows are independent — one bad row never stops the rest. Returns a per-row report.',
+  })
+  bulkImportProducts(@Request() req, @Body() dto: BulkProductsDto) {
+    return this.productBulk.import(req.user, dto.rows);
   }
 
   @Get('products/:id')

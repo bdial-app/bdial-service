@@ -300,7 +300,8 @@ export class ExploreService {
     return results.map((r) => ({
       id: r.id,
       name: r.name,
-      image: r.bannerImage || r.image,
+      // The logo is the business's own mark, so it leads on the card; the banner is the fallback.
+      image: r.image || r.bannerImage,
       description: r.description,
       location: [r.area, r.city].filter(Boolean).map((s: string) => s.replace(/[\r\n]+/g, '').trim()).join(', '),
       rating: parseFloat(r.rating) || 0,
@@ -311,6 +312,7 @@ export class ExploreService {
       // A city-centre pin is not a real location — show the town, not a bogus distance.
       distance: r.distance && r.geocodePrecision !== 'city' ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
       approximateLocation: r.geocodePrecision === 'city',
+      city: r.city,
       sponsoredListingId: r.sponsoredListingId,
       isSponsored: true,
     }));
@@ -374,7 +376,8 @@ export class ExploreService {
     return raw.map((r) => ({
       id: r.id,
       name: r.name,
-      image: r.bannerImage || r.image,
+      // The logo is the business's own mark, so it leads on the card; the banner is the fallback.
+      image: r.image || r.bannerImage,
       location: [r.area, r.city].filter(Boolean).map((s: string) => s.replace(/[\r\n]+/g, '').trim()).join(', '),
       rating: parseFloat(r.rating) || 0,
       reviewCount: parseInt(r.reviewCount, 10) || 0,
@@ -382,6 +385,7 @@ export class ExploreService {
       // A city-centre pin is not a real location — show the town, not a bogus distance.
       distance: r.distance && r.geocodePrecision !== 'city' ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
       approximateLocation: r.geocodePrecision === 'city',
+      city: r.city,
       offerId: r.offerId,
       offerTitle: r.offerTitle,
       discountType: r.discountType,
@@ -553,7 +557,8 @@ export class ExploreService {
     const data = raw.map((r) => ({
       id: r.id,
       name: r.name,
-      image: r.bannerImage || r.image,
+      // The logo is the business's own mark, so it leads on the card; the banner is the fallback.
+      image: r.image || r.bannerImage,
       location: [r.area, r.city].filter(Boolean).map((s: string) => s.replace(/[\r\n]+/g, '').trim()).join(', '),
       rating: parseFloat(r.rating) || 0,
       reviewCount: parseInt(r.reviewCount, 10) || 0,
@@ -563,6 +568,7 @@ export class ExploreService {
       // A city-centre pin is not a real location — show the town, not a bogus distance.
       distance: r.distance && r.geocodePrecision !== 'city' ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
       approximateLocation: r.geocodePrecision === 'city',
+      city: r.city,
       offerId: r.offerId,
       offerTitle: r.offerTitle,
       discountType: r.discountType,
@@ -1238,7 +1244,8 @@ export class ExploreService {
     return raw.map((r) => ({
       id: r.id,
       name: r.name,
-      image: r.bannerImage || r.image,
+      // The logo is the business's own mark, so it leads on the card; the banner is the fallback.
+      image: r.image || r.bannerImage,
       description: r.description || null,
       location: [r.area, r.city].filter(Boolean).map((s: string) => s.replace(/[\r\n]+/g, '').trim()).join(', '),
       rating: parseFloat(r.rating) || 0,
@@ -1250,6 +1257,7 @@ export class ExploreService {
       // A city-centre pin is not a real location — show the town, not a bogus distance.
       distance: r.distance && r.geocodePrecision !== 'city' ? parseFloat(parseFloat(r.distance).toFixed(1)) : null,
       approximateLocation: r.geocodePrecision === 'city',
+      city: r.city,
     }));
   }
 }

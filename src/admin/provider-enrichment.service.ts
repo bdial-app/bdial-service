@@ -16,7 +16,6 @@ import {
   type LogoSource,
   type RawCandidate,
 } from './provider-enrichment.parse';
-import { renderBrandBanner } from './provider-placeholder';
 
 export type CandidateSource = LogoSource | BannerSource | 'instagram';
 
@@ -54,7 +53,7 @@ export interface AutoImageResult {
   brandName: string;
   /** Where the saved logo came from, or null when none was saved. */
   logo: 'instagram' | 'website' | null;
-  banner: 'website' | 'generated' | null;
+  banner: 'website' | null;
   /** True when the provider already had both images. */
   skipped: boolean;
   notes: string[];
@@ -108,6 +107,25 @@ export function normalizeIndianPhone(phone: string): string {
 }
 
 /** Accepts a handle, @handle or profile URL; returns the bare handle or null. */
+/**
+ * Why Business Discovery will refuse these credentials, if it will. Checked
+ * once at startup rather than once per lookup, so a misconfigured deployment
+ * says what is wrong instead of reporting "Invalid OAuth access token".
+ */
+export function instagramConfigProblem(
+  token: string | undefined,
+  accountId: string | undefined,
+): string | undefined {
+  if (!token || !accountId) return undefined;
+  if (/^IG(AA|Q)/.test(token)) {
+    return 'INSTAGRAM_GRAPH_TOKEN is an Instagram-Login token (starts with IGAA/IGQ). Business Discovery needs a Facebook Page token (starts with EAA) from an app using "Instagram API setup with Facebook login".';
+  }
+  if (!/^\d+$/.test(accountId)) {
+    return `INSTAGRAM_BUSINESS_ACCOUNT_ID must be the numeric Instagram business account id, not "${accountId}". Find it with <PAGE_ID>?fields=instagram_business_account.`;
+  }
+  return undefined;
+}
+
 export function instagramHandleOf(raw: string | null | undefined): string | null {
   const value = raw?.trim();
   if (!value) return null;
@@ -133,7 +151,7 @@ export function namesLookAlike(a: string, b: string): boolean {
 /**
  * Suggests a website, logo and banner for providers, in this order: the
  * business's Instagram profile picture, then images from its own website, then
- * a generated branded card. `enrich` only suggests; `autoFillImages` saves.
+ * the business's own website. `enrich` only suggests; `autoFillImages` saves.
  */
 @Injectable()
 export class ProviderEnrichmentService {
@@ -170,14 +188,7 @@ export class ProviderEnrichmentService {
    * both here rather than once per row.
    */
   private checkInstagramConfig(): string | undefined {
-    if (!this.igToken || !this.igAccountId) return undefined;
-    if (/^IG(AA|Q)/.test(this.igToken)) {
-      return 'INSTAGRAM_GRAPH_TOKEN is an Instagram-Login token (starts with IGAA/IGQ). Business Discovery needs a Facebook Page token (starts with EAA) from an app using "Instagram API setup with Facebook login".';
-    }
-    if (!/^\d+$/.test(this.igAccountId)) {
-      return `INSTAGRAM_BUSINESS_ACCOUNT_ID must be the numeric Instagram business account id, not "${this.igAccountId}". Find it with <PAGE_ID>?fields=instagram_business_account.`;
-    }
-    return undefined;
+    return instagramConfigProblem(this.igToken, this.igAccountId);
   }
 
   private assertAdmin(admin: { role?: string }) {
@@ -204,8 +215,9 @@ export class ProviderEnrichmentService {
   }
 
   /**
-   * Fill in missing images: Instagram profile picture → website logo/banner →
-   * generated branded banner. Existing images are never replaced.
+   * Fill in missing images: Instagram profile picture, then the business's own
+   * website. Existing images are never replaced, and nothing is invented — a
+   * business with no real banner keeps none.
    */
   async autoFillImages(admin: { role?: string }, ids: string[]): Promise<AutoImageResult[]> {
     this.assertAdmin(admin);
@@ -252,19 +264,8 @@ export class ProviderEnrichmentService {
           update.bannerImageUrl = saved;
           result.banner = 'website';
         }
-      }
-      if (!update.bannerImageUrl) {
-        // Nothing real to show — a branded card beats an empty tile.
-        const categories = (provider.providerCategories ?? []).map((pc) => pc.category?.name ?? '').filter(Boolean);
-        try {
-          const png = await renderBrandBanner(provider.brandName, categories);
-          const compressed = await compressImage(this.asUpload(png, 'placeholder.png', 'image/png'), 'banner');
-          const { url } = await this.storageService.upload('providers', compressed);
-          update.bannerImageUrl = url;
-          result.banner = 'generated';
-        } catch (err) {
-          result.notes.push(`Couldn't generate a banner: ${(err as Error).message}`);
-        }
+      } else {
+        result.notes.push('No banner found on their website');
       }
     }
 
@@ -273,10 +274,6 @@ export class ProviderEnrichmentService {
       this.logger.log(`Auto images for ${provider.id}: logo=${result.logo ?? '—'} banner=${result.banner ?? '—'}`);
     }
     return result;
-  }
-
-  private asUpload(buffer: Buffer, originalname: string, mimetype: string): Express.Multer.File {
-    return { fieldname: 'image', originalname, encoding: '7bit', mimetype, buffer, size: buffer.length } as Express.Multer.File;
   }
 
   /** Download, compress and store one image. Returns its public URL, or null if it failed. */
