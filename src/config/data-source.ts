@@ -46,6 +46,12 @@ import { VoucherRedemption } from '../entities/voucher-redemption.entity';
 import { UserCategoryInteraction } from '../entities/user-category-interaction.entity';
 import { ServiceableCity } from '../entities/serviceable-city.entity';
 import { CityRequest } from '../entities/city-request.entity';
+import { WhatsAppSettings } from '../entities/whatsapp-settings.entity';
+import { WhatsAppContact } from '../entities/whatsapp-contact.entity';
+import { WhatsAppTemplate } from '../entities/whatsapp-template.entity';
+import { WhatsAppSegment } from '../entities/whatsapp-segment.entity';
+import { WhatsAppCampaign } from '../entities/whatsapp-campaign.entity';
+import { WhatsAppMessage } from '../entities/whatsapp-message.entity';
 import { truncate } from 'fs';
 
 export const ALL_ENTITIES = [
@@ -94,6 +100,12 @@ export const ALL_ENTITIES = [
   UserCategoryInteraction,
   ServiceableCity,
   CityRequest,
+  WhatsAppSettings,
+  WhatsAppContact,
+  WhatsAppTemplate,
+  WhatsAppSegment,
+  WhatsAppCampaign,
+  WhatsAppMessage,
 ];
 
 export function buildTypeOrmOptions(url?: string): DataSourceOptions {

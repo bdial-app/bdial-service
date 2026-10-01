@@ -42,6 +42,7 @@ import { PaymentModule } from './payment/payment.module';
 import { VoucherModule } from './voucher/voucher.module';
 import { ServiceableCitiesModule } from './serviceable-cities/serviceable-cities.module';
 import { GoogleReviewsModule } from './google-reviews/google-reviews.module';
+import { WhatsAppModule } from './whatsapp/whatsapp.module';
 import { SystemSetting } from './entities';
 
 @Module({
@@ -97,6 +98,7 @@ import { SystemSetting } from './entities';
     VoucherModule,
     ServiceableCitiesModule,
     GoogleReviewsModule,
+    WhatsAppModule,
     TypeOrmModule.forFeature([SystemSetting]),
   ],
   controllers: [AppController],
