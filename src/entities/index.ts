@@ -38,3 +38,35 @@ export { UserCategoryInteraction } from './user-category-interaction.entity';
 export { ServiceableCity } from './serviceable-city.entity';
 export { GeocodeCache, type GeocodePrecision } from './geocode-cache.entity';
 export { CityRequest } from './city-request.entity';
+export {
+  WhatsAppSettings,
+  type WhatsAppRates,
+  type WhatsAppPhoneMeta,
+} from './whatsapp-settings.entity';
+export {
+  WhatsAppContact,
+  type WhatsAppConsent,
+} from './whatsapp-contact.entity';
+export {
+  WhatsAppTemplate,
+  type WhatsAppTemplateCategory,
+  type WhatsAppTemplateStatus,
+  type WhatsAppVariableSource,
+  type WhatsAppTemplateVariable,
+  type WhatsAppTemplateComponent,
+  type WhatsAppTemplateButton,
+} from './whatsapp-template.entity';
+export { WhatsAppSegment } from './whatsapp-segment.entity';
+export {
+  WhatsAppCampaign,
+  type WhatsAppCampaignStatus,
+  type WhatsAppVariableMapping,
+  type WhatsAppVariableMappingEntry,
+} from './whatsapp-campaign.entity';
+export {
+  WhatsAppMessage,
+  type WhatsAppDirection,
+  type WhatsAppMessageKind,
+  type WhatsAppMessageStatus,
+  type WhatsAppSkipReason,
+} from './whatsapp-message.entity';
