@@ -118,6 +118,14 @@ export class AudienceFiltersDto implements AudienceFilters {
   @IsBoolean()
   missingProducts?: boolean;
 
+  @ApiPropertyOptional({
+    enum: ['approximate', 'exact'],
+    description: 'approximate = city-centre pin or none',
+  })
+  @IsOptional()
+  @IsIn(['approximate', 'exact'])
+  locationPrecision?: 'approximate' | 'exact';
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsInt()

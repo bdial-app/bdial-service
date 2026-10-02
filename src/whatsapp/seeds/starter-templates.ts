@@ -157,6 +157,23 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
     variables: [brandVar, cityVar],
   },
   {
+    name: 'tijarah_set_location',
+    language: 'en',
+    category: 'utility',
+    description:
+      'Owners whose listing sits at the city centre: ask them to drop their pin so customers get a distance and directions.',
+    components: [
+      body(
+        'Hi {{1}}, customers in {{2}} can see your business on Tijarah Connect but not how far away it is, because its map location is not set. Open the app, go to My business, then Details, and tap Set my location. It takes a minute and lets customers get directions to you.',
+        'Pronttera',
+        'Pune',
+      ),
+      FOOTER,
+      profileButton('Open Tijarah'),
+    ],
+    variables: [brandVar, cityVar],
+  },
+  {
     name: 'tijarah_new_review',
     language: 'en',
     category: 'utility',

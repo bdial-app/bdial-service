@@ -214,6 +214,16 @@ export class WhatsAppAudienceService {
         `NOT EXISTS (SELECT 1 FROM products pr WHERE pr.provider_id = p.id)`,
       );
     }
+    // Mirrors the admin location tiers: city/pincode pins and no pin are "approximate".
+    if (f.locationPrecision === 'approximate') {
+      qb.andWhere(
+        `(p.latitude IS NULL OR p.longitude IS NULL OR p.geocode_precision IS NULL OR p.geocode_precision IN ('city','pincode'))`,
+      );
+    } else if (f.locationPrecision === 'exact') {
+      qb.andWhere(
+        `(p.latitude IS NOT NULL AND p.longitude IS NOT NULL AND p.geocode_precision IN ('manual','rooftop','street','locality'))`,
+      );
+    }
     if (f.notContactedDays) {
       qb.andWhere(
         `NOT EXISTS (
