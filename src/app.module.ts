@@ -43,6 +43,7 @@ import { VoucherModule } from './voucher/voucher.module';
 import { ServiceableCitiesModule } from './serviceable-cities/serviceable-cities.module';
 import { GoogleReviewsModule } from './google-reviews/google-reviews.module';
 import { WhatsAppModule } from './whatsapp/whatsapp.module';
+import { ShareLinksModule } from './share-links/share-links.module';
 import { SystemSetting } from './entities';
 
 @Module({
@@ -99,6 +100,7 @@ import { SystemSetting } from './entities';
     ServiceableCitiesModule,
     GoogleReviewsModule,
     WhatsAppModule,
+    ShareLinksModule,
     TypeOrmModule.forFeature([SystemSetting]),
   ],
   controllers: [AppController],
