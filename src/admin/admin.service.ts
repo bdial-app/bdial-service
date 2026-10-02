@@ -5,6 +5,14 @@ import { Provider, User, Verification, Review, ReviewReport, Report, ProviderWar
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { BugReport } from '../bug-reports/bug-report.entity';
 import { AdminCreateUserDto, AdminCreateProviderWithUserDto } from './dto/admin-create-user.dto';
+import { AdminUserListQueryDto } from './dto/admin-user-list.dto';
+import { AdminProductListQueryDto } from './dto/admin-product-list.dto';
+import { AdminVerificationListQueryDto } from './dto/admin-verification-list.dto';
+import { AdminConversationListQueryDto } from './dto/admin-conversation-list.dto';
+import { AdminPhotoListQueryDto } from './dto/admin-photo-list.dto';
+import { AdminSponsorshipListQueryDto } from './dto/admin-sponsorship-list.dto';
+import { AdminOfferListQueryDto } from './dto/admin-offer-list.dto';
+import { AdminCreateOfferDto } from './dto/admin-offer-create.dto';
 import { BulkValidateProvidersDto, BulkImportProvidersDto } from './dto/bulk-provider-import.dto';
 import { StorageService } from '../storage/storage.service';
 import { OtpService } from '../otp/otp.service';
@@ -24,6 +32,85 @@ import {
   BulkSponsorshipDto,
   StopAllSponsorshipsDto,
 } from './dto/sponsorship-admin.dto';
+
+/**
+ * The admin performing an action, as the auth guard attaches it to the
+ * request. Narrow on purpose: these handlers only ever need the id.
+ */
+export type AdminActor = { id: string; role?: string };
+
+/**
+ * Operational status of a sponsorship, mirroring getOperationalStatus in the
+ * admin UI so filters and segment counts agree with the badge the admin sees.
+ * `s` is the sponsored_listings alias.
+ */
+/** RFC 4180 cell: quote when the value could otherwise break the row. */
+function csvCell(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  const str = value instanceof Date ? value.toISOString() : String(value);
+  return /[",\r\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+}
+
+/** CRLF line endings, so Excel on Windows reads the file as rows. */
+function toCsv(rows: unknown[][]): string {
+  return rows.map((r) => r.map(csvCell).join(',')).join('\r\n');
+}
+
+const SPONSORSHIP_OP_STATUS_SQL = `CASE
+  WHEN s.approval_status = 'rejected' THEN 'rejected'
+  WHEN s.approval_status = 'pending_approval' THEN 'pending'
+  WHEN s.ends_at <= now() THEN 'expired'
+  WHEN NOT s.is_active THEN 'stopped'
+  WHEN s.billing_mode = 'paid' AND s.spent_amount >= s.budget_amount THEN 'exhausted'
+  WHEN s.starts_at > now() THEN 'scheduled'
+  ELSE 'live' END`;
+
+/**
+ * Offer lifecycle in the order the admin UI reads it (inactive beats expired),
+ * extended with the usage cap and the not-yet-started window. `o` is the
+ * provider_offers alias.
+ */
+const OFFER_OP_STATUS_SQL = `CASE
+  WHEN NOT o.is_active THEN 'inactive'
+  WHEN o.ends_at < now() THEN 'expired'
+  WHEN o.usage_limit IS NOT NULL AND o.usage_count >= o.usage_limit THEN 'exhausted'
+  WHEN o.starts_at > now() THEN 'scheduled'
+  ELSE 'live' END`;
+
+/** Conversation predicates shared by the list filters and the segment counts. `c` is the conversations alias. */
+const CONVERSATION_REDACTED_SQL =
+  'EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND m.deleted_at IS NOT NULL)';
+const CONVERSATION_UNANSWERED_SQL = `EXISTS (SELECT 1 FROM conversation_participants cp WHERE cp.conversation_id = c.id AND cp.role = 'customer' AND cp.user_id = c.last_message_sender_id)`;
+const CONVERSATION_REPORTED_SQL = `EXISTS (SELECT 1 FROM reports r JOIN messages m ON m.id = r.entity_id WHERE r.entity_type = 'message' AND m.conversation_id = c.id)`;
+const CONVERSATION_BLOCKED_SQL =
+  'EXISTS (SELECT 1 FROM conversation_participants cp WHERE cp.conversation_id = c.id AND cp.blocked_at IS NOT NULL)';
+const CONVERSATION_MESSAGE_COUNT_SQL =
+  '(SELECT count(*) FROM messages m WHERE m.conversation_id = c.id)';
+
+/**
+ * Every moderatable image as one row set: business gallery photos, review
+ * photos and product photos (one row per URL). Only gallery photos carry an
+ * upload date. photo_url mirrors photo_urls[0] on every current row, so it is
+ * folded in rather than listed twice.
+ */
+const PHOTO_UNION_SQL = `
+  SELECT 'provider'::text AS type, ph.id::text AS row_id, 0 AS idx, ph.image_url, ph.storage_key, ph.uploaded_at,
+         pr.id AS provider_id, pr.brand_name, pr.city, pr.status::text AS provider_status,
+         NULL::text AS product_name, NULL::text AS review_id
+  FROM photos ph JOIN providers pr ON pr.id = ph.provider_id
+  UNION ALL
+  SELECT 'review'::text, rp.id::text, 0, rp.image_url, rp.storage_key, NULL::timestamptz,
+         pr.id, pr.brand_name, pr.city, pr.status::text, NULL::text, rp.review_id::text
+  FROM review_photos rp JOIN reviews r ON r.id = rp.review_id JOIN providers pr ON pr.id = r.provider_id
+  UNION ALL
+  SELECT 'product'::text, p.id::text, (u.idx - 1)::int, u.url, NULL::text, NULL::timestamptz,
+         pr.id, pr.brand_name, pr.city, pr.status::text, p.name, NULL::text
+  FROM products p JOIN providers pr ON pr.id = p.provider_id
+  CROSS JOIN LATERAL unnest(array_remove(
+    CASE WHEN p.photo_url IS NULL OR p.photo_url = ANY(coalesce(p.photo_urls, '{}'))
+         THEN coalesce(p.photo_urls, '{}')
+         ELSE array_prepend(p.photo_url, coalesce(p.photo_urls, '{}')) END,
+    NULL)) WITH ORDINALITY AS u(url, idx)`;
 
 @Injectable()
 export class AdminService {
@@ -266,31 +353,105 @@ export class AdminService {
     };
   }
 
-  async getVerifications(admin: any, page?: number, rows?: number, status?: string, search?: string) {
+  async getVerifications(admin: any, query: AdminVerificationListQueryDto) {
     this.assertAdmin(admin);
-    const currentPage = Math.max(1, page || 1);
-    const pageSize = Math.min(100, Math.max(1, rows || 10));
+    const {
+      search,
+      status,
+      aadhaar,
+      ijamat,
+      submittedFrom,
+      submittedTo,
+      reviewedFrom,
+      reviewedTo,
+      waitingDays,
+      city,
+      hasProvider,
+      reviewer,
+      sort,
+    } = query;
+    const currentPage = Math.max(1, query.page || 1);
+    // `rows` is the legacy name the admin-app still sends for the page size.
+    const pageSize = Math.min(
+      100,
+      Math.max(1, query.limit || query.rows || 10),
+    );
     const skip = (currentPage - 1) * pageSize;
 
-    const qb = this.verificationRepo.createQueryBuilder('v')
+    const qb = this.verificationRepo
+      .createQueryBuilder('v')
       .leftJoinAndSelect('v.user', 'user');
 
-    if (status) {
-      if (status === 'in_review') {
-        qb.andWhere('v.status = :status', { status });
-      } else {
-        qb.andWhere('v.aadhaar_status = :status', { status });
-      }
-    }
     if (search) {
-      qb.andWhere('(user.name ILIKE :search OR user.mobile_number ILIKE :search)', { search: `%${search}%` });
+      qb.andWhere(
+        '(user.name ILIKE :search OR user.mobile_number ILIKE :search)',
+        { search: `%${search}%` },
+      );
+    }
+    // Overall review status and the two document statuses are separate filters.
+    if (status) qb.andWhere('v.status = :status', { status });
+    if (aadhaar) qb.andWhere('v.aadhaar_status = :aadhaar', { aadhaar });
+    if (ijamat) qb.andWhere('v.ijamat_status = :ijamat', { ijamat });
+
+    // Dates are calendar days in IST, the way the admin reads them.
+    if (submittedFrom)
+      qb.andWhere(
+        `(v.created_at AT TIME ZONE 'Asia/Kolkata')::date >= :submittedFrom::date`,
+        { submittedFrom },
+      );
+    if (submittedTo)
+      qb.andWhere(
+        `(v.created_at AT TIME ZONE 'Asia/Kolkata')::date <= :submittedTo::date`,
+        { submittedTo },
+      );
+    if (reviewedFrom)
+      qb.andWhere(
+        `(v.reviewed_at AT TIME ZONE 'Asia/Kolkata')::date >= :reviewedFrom::date`,
+        { reviewedFrom },
+      );
+    if (reviewedTo)
+      qb.andWhere(
+        `(v.reviewed_at AT TIME ZONE 'Asia/Kolkata')::date <= :reviewedTo::date`,
+        { reviewedTo },
+      );
+    if (waitingDays !== undefined) {
+      qb.andWhere(
+        `v.status NOT IN ('approved', 'rejected') AND v.created_at < now() - make_interval(days => :waitingDays)`,
+        { waitingDays },
+      );
     }
 
-    qb.orderBy('v.createdAt', 'ASC').skip(skip).take(pageSize);
+    if (city)
+      qb.andWhere('lower(trim(user.city)) = lower(trim(:city))', { city });
+    const ownsBusiness =
+      'EXISTS (SELECT 1 FROM providers p WHERE p.user_id = v.user_id AND p.deleted_at IS NULL)';
+    if (hasProvider === 'true') qb.andWhere(ownsBusiness);
+    else if (hasProvider === 'false') qb.andWhere(`NOT ${ownsBusiness}`);
+    if (reviewer) qb.andWhere('v.reviewed_by = :reviewer', { reviewer });
+
+    if (sort === 'newest') qb.orderBy('v.createdAt', 'DESC');
+    else if (sort === 'waiting_longest') {
+      // Undecided submissions first, oldest at the top; decided ones trail.
+      qb.addSelect(
+        `CASE WHEN v.status IN ('approved', 'rejected') THEN 1 ELSE 0 END`,
+        'v_decided',
+      )
+        .orderBy('v_decided', 'ASC')
+        .addOrderBy('v.createdAt', 'ASC');
+    } else qb.orderBy('v.createdAt', 'ASC');
+    qb.skip(skip).take(pageSize);
 
     const [items, total] = await qb.getManyAndCount();
+    const now = Date.now();
     return {
-      items: items.map((v) => this.toAdminVerification(v)),
+      items: items.map((v) => ({
+        ...this.toAdminVerification(v),
+        // Whole days the applicant has been waiting; null once a decision is in.
+        waitingDays:
+          v.status === 'approved' || v.status === 'rejected'
+            ? null
+            : Math.floor((now - new Date(v.createdAt).getTime()) / 86_400_000),
+      })),
       meta: {
         total,
         page: currentPage,
@@ -298,6 +459,36 @@ export class AdminService {
         totalPages: Math.ceil(total / pageSize),
       },
     };
+  }
+
+  /** City and reviewer options plus quick-segment counts for the verification list. */
+  async getVerificationFilterOptions(admin: any) {
+    this.assertAdmin(admin);
+    const [cities, reviewers, [counts]] = await Promise.all([
+      this.dataSource.query<{ name: string; count: number }[]>(
+        `SELECT initcap(trim(u.city)) AS name, count(*)::int AS count
+         FROM verifications v JOIN users u ON u.id = v.user_id
+         WHERE u.city IS NOT NULL AND trim(u.city) <> ''
+         GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 100`,
+      ),
+      this.dataSource.query<{ id: string; name: string; count: number }[]>(
+        `SELECT v.reviewed_by AS id, coalesce(u.name, v.reviewer_name, 'Unknown') AS name, count(*)::int AS count
+         FROM verifications v LEFT JOIN users u ON u.id = v.reviewed_by
+         WHERE v.reviewed_by IS NOT NULL
+         GROUP BY 1, 2 ORDER BY 3 DESC, 2`,
+      ),
+      this.dataSource.query<Record<string, number>[]>(
+        `SELECT
+           count(*)::int AS total,
+           count(*) FILTER (WHERE v.aadhaar_status = 'pending')::int AS "needsReview",
+           count(*) FILTER (WHERE v.status NOT IN ('approved', 'rejected') AND v.created_at < now() - interval '3 days')::int AS "waiting3d",
+           count(*) FILTER (WHERE v.status = 'approved' AND (v.reviewed_at AT TIME ZONE 'Asia/Kolkata')::date >= (now() AT TIME ZONE 'Asia/Kolkata')::date - 6)::int AS "approvedThisWeek",
+           count(*) FILTER (WHERE v.status = 'rejected')::int AS rejected,
+           count(*) FILTER (WHERE v.ijamat_status = 'not_submitted')::int AS "ijamatMissing"
+         FROM verifications v`,
+      ),
+    ]);
+    return { cities, reviewers, counts };
   }
 
   async getVerificationStats(admin: any) {
@@ -841,25 +1032,20 @@ export class AdminService {
   // Admin Users Management
   // ============================================
 
-  async getUsers(
-    admin: any,
-    page?: number,
-    limit?: number,
-    search?: string,
-    status?: string,
-    role?: string,
-    city?: string,
-    hasProvider?: string,
-  ) {
+  async getUsers(admin: any, query: AdminUserListQueryDto) {
     this.assertAdmin(admin);
-    const currentPage = Math.max(1, page || 1);
-    const pageSize = Math.min(100, Math.max(1, limit || 10));
+    const { search, status, role, city, hasProvider, providerStatus, gender, mode, activity, joinedFrom, joinedTo, push, hasEmail, hasLocation, engagement, sort } = query;
+    const currentPage = Math.max(1, query.page || 1);
+    const pageSize = Math.min(100, Math.max(1, query.limit || 10));
     const skip = (currentPage - 1) * pageSize;
+    const STAFF_ROLES = ['associate', 'moderator', 'admin', 'super_admin'];
 
-    // Deleted users are in the archive table
+    // Deleted users are in the archive table, which only keeps role and gender.
     if (status === 'deleted') {
       const qb = this.userArchiveRepo.createQueryBuilder('a');
-      if (role) qb.andWhere('a.role = :role', { role });
+      if (role === 'staff') qb.andWhere('a.role IN (:...staff)', { staff: STAFF_ROLES });
+      else if (role) qb.andWhere('a.role = :role', { role });
+      if (gender) qb.andWhere('a.gender = :gender', { gender });
       qb.orderBy('a.deletedAt', 'DESC').skip(skip).take(pageSize);
       const [items, total] = await qb.getManyAndCount();
       return {
@@ -886,28 +1072,84 @@ export class AdminService {
         { search: `%${search}%` },
       );
     }
-    const VALID_USER_STATUSES = ['active', 'suspended', 'paused'];
-    const VALID_USER_ROLES = ['customer', 'admin'];
-    if (status && VALID_USER_STATUSES.includes(status)) qb.andWhere('u.status = :status', { status });
-    if (role && VALID_USER_ROLES.includes(role)) qb.andWhere('u.role = :role', { role });
-    if (city) qb.andWhere('u.city ILIKE :city', { city: `%${city}%` });
+    if (status) qb.andWhere('u.status = :status', { status });
+    if (role === 'staff') qb.andWhere('u.role IN (:...staff)', { staff: STAFF_ROLES });
+    else if (role) qb.andWhere('u.role = :role', { role });
+    // Exact match on the normalised name, so "Pune" doesn't also catch "Pune Cantonment".
+    if (city) qb.andWhere('lower(trim(u.city)) = lower(trim(:city))', { city });
+    if (gender) qb.andWhere('u.gender = :gender', { gender });
+    if (mode) qb.andWhere('u.preferred_mode = :mode', { mode });
 
-    // Filter by whether user has a provider profile
-    if (hasProvider === 'false') {
-      qb.andWhere(
-        'NOT EXISTS (SELECT 1 FROM providers p WHERE p.user_id = u.id AND p.deleted_at IS NULL)',
-      );
-    } else if (hasProvider === 'true') {
-      qb.andWhere(
-        'EXISTS (SELECT 1 FROM providers p WHERE p.user_id = u.id AND p.deleted_at IS NULL)',
-      );
-    }
+    const ownsBusiness = 'EXISTS (SELECT 1 FROM providers p WHERE p.user_id = u.id AND p.deleted_at IS NULL';
+    if (providerStatus) qb.andWhere(`${ownsBusiness} AND p.status = :providerStatus)`, { providerStatus });
+    else if (hasProvider === 'true') qb.andWhere(`${ownsBusiness})`);
+    else if (hasProvider === 'false') qb.andWhere(`NOT ${ownsBusiness})`);
 
-    qb.orderBy('u.createdAt', 'DESC').skip(skip).take(pageSize);
+    // last_seen_at only moves on the chat heartbeat, so "never" means no heartbeat on record.
+    if (activity === 'seen_24h') qb.andWhere(`u.last_seen_at >= now() - interval '24 hours'`);
+    else if (activity === 'seen_7d') qb.andWhere(`u.last_seen_at >= now() - interval '7 days'`);
+    else if (activity === 'seen_30d') qb.andWhere(`u.last_seen_at >= now() - interval '30 days'`);
+    else if (activity === 'inactive_30d') qb.andWhere(`u.last_seen_at < now() - interval '30 days'`);
+    else if (activity === 'never') qb.andWhere('u.last_seen_at IS NULL');
 
-    const [items, total] = await qb.getManyAndCount();
+    // Dates are calendar days in IST, the way the admin reads them.
+    if (joinedFrom) qb.andWhere(`(u.created_at AT TIME ZONE 'Asia/Kolkata')::date >= :joinedFrom::date`, { joinedFrom });
+    if (joinedTo) qb.andWhere(`(u.created_at AT TIME ZONE 'Asia/Kolkata')::date <= :joinedTo::date`, { joinedTo });
+
+    const hasToken = 'EXISTS (SELECT 1 FROM device_tokens d WHERE d.user_id = u.id AND d.is_active';
+    if (push === 'enabled') qb.andWhere(`${hasToken})`);
+    else if (push === 'android' || push === 'ios') qb.andWhere(`${hasToken} AND d.platform = :platform)`, { platform: push });
+    else if (push === 'none') qb.andWhere(`NOT ${hasToken})`);
+
+    if (hasEmail === 'true') qb.andWhere(`u.email IS NOT NULL AND u.email <> ''`);
+    else if (hasEmail === 'false') qb.andWhere(`(u.email IS NULL OR u.email = '')`);
+    if (hasLocation === 'true') qb.andWhere('u.latitude IS NOT NULL AND u.longitude IS NOT NULL');
+    else if (hasLocation === 'false') qb.andWhere('(u.latitude IS NULL OR u.longitude IS NULL)');
+
+    const ENGAGEMENT_SQL = {
+      reviewed: 'EXISTS (SELECT 1 FROM reviews r WHERE r.reviewer_id = u.id)',
+      saved: 'EXISTS (SELECT 1 FROM saved_items s WHERE s.user_id = u.id)',
+      chatted: `EXISTS (SELECT 1 FROM conversation_participants cp WHERE cp.user_id = u.id AND cp.role = 'customer')`,
+      invited: 'EXISTS (SELECT 1 FROM app_invites i WHERE i.inviter_id = u.id)',
+    };
+    if (engagement === 'none') qb.andWhere(`NOT (${Object.values(ENGAGEMENT_SQL).join(' OR ')})`);
+    else if (engagement) qb.andWhere(ENGAGEMENT_SQL[engagement]);
+
+    if (sort === 'oldest') qb.orderBy('u.createdAt', 'ASC');
+    else if (sort === 'last_seen') qb.orderBy('u.lastSeenAt', 'DESC', 'NULLS LAST').addOrderBy('u.createdAt', 'DESC');
+    else if (sort === 'name') qb.orderBy('u.name', 'ASC');
+    else qb.orderBy('u.createdAt', 'DESC');
+    qb.skip(skip).take(pageSize);
+
+    const [users, total] = await qb.getManyAndCount();
+
+    // Business and push reach for this page only: two small lookups instead of joins
+    // that would fan out the paginated query.
+    const ids = users.map((u) => u.id);
+    const [providers, tokens] = ids.length
+      ? await Promise.all([
+          this.providerRepo
+            .createQueryBuilder('p')
+            .select(['p.id', 'p.userId', 'p.brandName', 'p.status'])
+            .where('p.user_id IN (:...ids)', { ids })
+            .andWhere('p.deleted_at IS NULL')
+            .getMany(),
+          this.dataSource.query(
+            // ::text — pg leaves arrays of enum values as an unparsed "{android,ios}" string.
+            `SELECT user_id, array_agg(DISTINCT platform::text) AS platforms FROM device_tokens WHERE is_active AND user_id = ANY($1) GROUP BY user_id`,
+            [ids],
+          ) as Promise<{ user_id: string; platforms: string[] }[]>,
+        ])
+      : [[], []];
+    const providerByUser = new Map(providers.map((p) => [p.userId, { id: p.id, brandName: p.brandName, status: p.status }]));
+    const platformsByUser = new Map(tokens.map((t) => [t.user_id, t.platforms]));
+
     return {
-      items,
+      items: users.map((u) => ({
+        ...u,
+        provider: providerByUser.get(u.id) ?? null,
+        pushPlatforms: platformsByUser.get(u.id) ?? [],
+      })),
       meta: {
         total,
         page: currentPage,
@@ -915,6 +1157,30 @@ export class AdminService {
         totalPages: Math.ceil(total / pageSize),
       },
     };
+  }
+
+  /** Dropdown values and quick-segment counts for the admin user list. */
+  async getUserFilterOptions(admin: any) {
+    this.assertAdmin(admin);
+    const [cities, [counts]] = await Promise.all([
+      this.dataSource.query(
+        `SELECT initcap(trim(city)) AS name, count(*)::int AS count
+         FROM users WHERE city IS NOT NULL AND trim(city) <> ''
+         GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 100`,
+      ) as Promise<{ name: string; count: number }[]>,
+      this.dataSource.query(
+        `SELECT
+           count(*)::int AS total,
+           count(*) FILTER (WHERE EXISTS (SELECT 1 FROM providers p WHERE p.user_id = u.id AND p.deleted_at IS NULL))::int AS "businessOwners",
+           count(*) FILTER (WHERE (u.created_at AT TIME ZONE 'Asia/Kolkata')::date >= (now() AT TIME ZONE 'Asia/Kolkata')::date - 6)::int AS "newThisWeek",
+           count(*) FILTER (WHERE u.last_seen_at >= now() - interval '7 days')::int AS "activeThisWeek",
+           count(*) FILTER (WHERE u.last_seen_at IS NULL)::int AS "neverSeen",
+           count(*) FILTER (WHERE EXISTS (SELECT 1 FROM device_tokens d WHERE d.user_id = u.id AND d.is_active))::int AS "pushEnabled",
+           count(*) FILTER (WHERE u.role IN ('associate', 'moderator', 'admin', 'super_admin'))::int AS staff
+         FROM users u`,
+      ) as Promise<Record<string, number>[]>,
+    ]);
+    return { cities, counts };
   }
 
   async getUserById(admin: any, userId: string) {
@@ -934,21 +1200,375 @@ export class AdminService {
     return { ...user, _stats: { reviewCount, reportCount } };
   }
 
-  async updateUserAdmin(admin: any, userId: string, body: Partial<User>) {
+  async updateUserAdmin(
+    admin: AdminActor,
+    userId: string,
+    body: Partial<User>,
+  ) {
     this.assertAdmin(admin);
-    const allowed: (keyof User)[] = ['status', 'role', 'name', 'city', 'area'];
-    const update: any = {};
+
+    // The login number is identity, not a profile field. It changes only via
+    // updateUserMobileNumber, which requires a code sent to the new number.
+    if ((body as Record<string, unknown>).mobileNumber !== undefined) {
+      throw new BadRequestException({
+        statusCode: 400,
+        message:
+          'Mobile number cannot be changed here. Use PATCH /admin/users/:id/mobile-number, which requires OTP verification.',
+        error_code: 'MOBILE_REQUIRES_OTP',
+      });
+    }
+
+    const user = await this.userRepo.findOneBy({ id: userId });
+    if (!user) throw new NotFoundException('User not found');
+
+    const allowed: (keyof User)[] = [
+      'status',
+      'role',
+      'name',
+      'city',
+      'area',
+      'email',
+      'gender',
+      'pincode',
+    ];
+    const update: Record<string, unknown> = {};
     for (const key of allowed) {
       if (body[key] !== undefined) update[key] = body[key];
     }
-    if (Object.keys(update).length === 0) throw new BadRequestException('No valid fields to update');
+
+    if (typeof update.name === 'string') {
+      update.name = update.name.trim();
+      if (!update.name)
+        throw new BadRequestException({
+          message: 'Name cannot be empty',
+          field: 'name',
+        });
+    }
+
+    // Empty string clears an optional field; the columns are nullable.
+    for (const key of ['email', 'city', 'area', 'pincode'] as const) {
+      const value = update[key];
+      if (typeof value === 'string') {
+        update[key] = value.trim() || null;
+      }
+    }
+
+    if (typeof update.email === 'string' && update.email) {
+      const email = update.email.toLowerCase();
+      update.email = email;
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        throw new BadRequestException({
+          message: 'Enter a valid email address',
+          field: 'email',
+        });
+      }
+      const clash = await this.userRepo.findOne({ where: { email } });
+      if (clash && clash.id !== userId) {
+        throw new BadRequestException({
+          statusCode: 409,
+          message: 'That email is already used by another account',
+          field: 'email',
+          error_code: 'EMAIL_TAKEN',
+        });
+      }
+    }
+
+    if (typeof update.pincode === 'string' && !/^\d{6}$/.test(update.pincode)) {
+      throw new BadRequestException({
+        message: 'Pincode must be exactly 6 digits',
+        field: 'pincode',
+      });
+    }
+
+    // Demoting the last super_admin would lock everyone out of this panel.
+    if (
+      update.role &&
+      user.role === 'super_admin' &&
+      update.role !== 'super_admin'
+    ) {
+      const supers = await this.userRepo.count({
+        where: { role: 'super_admin' },
+      });
+      if (supers <= 1) {
+        throw new BadRequestException({
+          statusCode: 400,
+          message:
+            'This is the last super admin. Promote another account before changing this one.',
+          error_code: 'LAST_SUPER_ADMIN',
+        });
+      }
+    }
+
+    if (Object.keys(update).length === 0)
+      throw new BadRequestException('No valid fields to update');
+
+    const snapshot = user as unknown as Record<string, unknown>;
+    const before: Record<string, unknown> = {};
+    for (const key of Object.keys(update)) before[key] = snapshot[key];
+
     await this.userRepo.update(userId, update);
+
+    await this.createAuditLog(
+      admin.id,
+      'update_user',
+      'user',
+      userId,
+      before,
+      update,
+      `Admin updated ${Object.keys(update).join(', ')} for ${user.name}`,
+    );
+
+    return this.userRepo.findOneBy({ id: userId });
+  }
+
+  /**
+   * Change the number a user signs in with.
+   *
+   * The OTP is verified here rather than in a separate call, so the check
+   * cannot be skipped by calling this endpoint directly — proof of the number
+   * and the write happen together.
+   */
+  async updateUserMobileNumber(
+    admin: AdminActor,
+    userId: string,
+    mobileNumber: string,
+    otp: string,
+  ) {
+    this.assertAdmin(admin);
+
+    const phone = mobileNumber?.replace(/\D/g, '').slice(-10);
+    if (!/^\d{10}$/.test(phone))
+      throw new BadRequestException('Mobile number must be exactly 10 digits');
+    const code = otp?.trim();
+    if (!/^\d{6}$/.test(code))
+      throw new BadRequestException('OTP must be exactly 6 digits');
+
+    const user = await this.userRepo.findOneBy({ id: userId });
+    if (!user) throw new NotFoundException('User not found');
+
+    if (user.mobileNumber === phone) {
+      throw new BadRequestException({
+        statusCode: 400,
+        message: "That is already this user's number",
+        error_code: 'MOBILE_UNCHANGED',
+      });
+    }
+
+    // The column is unique, so catch the clash here and name the holder
+    // rather than surfacing a database error.
+    const clash = await this.userRepo.findOne({
+      where: { mobileNumber: phone },
+    });
+    if (clash) {
+      throw new BadRequestException({
+        statusCode: 409,
+        message: `That number already belongs to another account (${clash.name}).`,
+        error_code: 'MOBILE_TAKEN',
+      });
+    }
+
+    // Scoped to this purpose: a code issued for business verification cannot
+    // be replayed to take over a login number.
+    await this.otpService.verifyOtpWithKey(
+      `admin_action_${phone}_user_mobile_change`,
+      phone,
+      code,
+    );
+
+    const previous = user.mobileNumber;
+    await this.userRepo.update(userId, { mobileNumber: phone });
+
+    await this.createAuditLog(
+      admin.id,
+      'update_user_mobile',
+      'user',
+      userId,
+      { mobileNumber: previous },
+      { mobileNumber: phone },
+      `Admin changed login number for ${user.name} from ${previous ?? '—'} to ${phone} (OTP verified)`,
+    );
+
     return this.userRepo.findOneBy({ id: userId });
   }
 
   // ============================================
   // Admin Providers Management (expanded)
   // ============================================
+
+  /**
+   * The one place the provider list's filters live, so the table, its count and
+   * the CSV export can never answer differently for the same filters.
+   */
+  private providerListQuery(filters: {
+    search?: string;
+    status?: string;
+    city?: string;
+    isFeatured?: string;
+    isWomenLed?: string;
+    categoryId?: string;
+  }) {
+    const VALID_STATUSES = ['active', 'suspended', 'unverified', 'disabled'];
+    const safeStatus =
+      filters.status && VALID_STATUSES.includes(filters.status)
+        ? filters.status
+        : undefined;
+
+    const qb = this.providerRepo
+      .createQueryBuilder('p')
+      .leftJoinAndSelect('p.user', 'user')
+      .leftJoinAndSelect('p.providerCategories', 'pc')
+      .leftJoinAndSelect('pc.category', 'cat');
+
+    if (filters.search) {
+      qb.andWhere(
+        '(p.brand_name ILIKE :search OR user.name ILIKE :search OR user.mobile_number ILIKE :search)',
+        { search: `%${filters.search}%` },
+      );
+    }
+    // Soft-deleted providers are gone as far as the console is concerned.
+    qb.andWhere('p.deleted_at IS NULL');
+    if (safeStatus) qb.andWhere('p.status = :status', { status: safeStatus });
+    if (filters.city)
+      qb.andWhere('p.city ILIKE :city', { city: `%${filters.city}%` });
+    if (filters.isFeatured === 'true') qb.andWhere('p.is_featured = true');
+    if (filters.isWomenLed === 'true') qb.andWhere('p.is_women_led = true');
+    if (filters.isWomenLed === 'pending')
+      qb.andWhere("p.women_led_status = 'pending'");
+    if (filters.isWomenLed === 'approved')
+      qb.andWhere("p.women_led_status = 'approved'");
+    // EXISTS, not a join condition — the joined categories are also selected for
+    // display, and filtering there would hide a provider's other categories.
+    if (filters.categoryId) {
+      qb.andWhere(
+        'EXISTS (SELECT 1 FROM provider_categories pc_f WHERE pc_f.provider_id = p.id AND pc_f.category_id = :categoryId)',
+        { categoryId: filters.categoryId },
+      );
+    }
+    return qb;
+  }
+
+  /**
+   * Every business the current filters match, as a spreadsheet. One row per
+   * business with the fields an admin actually chases: who owns it, how to
+   * reach them, where it is and how precisely, and what is missing.
+   */
+  async exportProviders(
+    admin: any,
+    filters: {
+      search?: string;
+      status?: string;
+      city?: string;
+      isFeatured?: string;
+      isWomenLed?: string;
+      categoryId?: string;
+    },
+  ) {
+    this.assertAdmin(admin);
+    const MAX_ROWS = 20000;
+
+    const providers = await this.providerListQuery(filters)
+      .orderBy('p.createdAt', 'DESC')
+      .take(MAX_ROWS)
+      .getMany();
+
+    // Counts come from two grouped queries rather than joins, so a business
+    // with 40 photos does not multiply its own row.
+    const ids = providers.map((p) => p.id);
+    const [productRows, photoRows] = ids.length
+      ? await Promise.all([
+          this.dataSource.query(
+            `SELECT provider_id, count(*)::int AS n FROM products WHERE provider_id = ANY($1) GROUP BY 1`,
+            [ids],
+          ) as Promise<{ provider_id: string; n: number }[]>,
+          this.dataSource.query(
+            `SELECT provider_id, count(*)::int AS n FROM photos WHERE provider_id = ANY($1) GROUP BY 1`,
+            [ids],
+          ) as Promise<{ provider_id: string; n: number }[]>,
+        ])
+      : [[], []];
+    const productCount = new Map(productRows.map((r) => [r.provider_id, r.n]));
+    const photoCount = new Map(photoRows.map((r) => [r.provider_id, r.n]));
+
+    const date = (d: Date | null | undefined) =>
+      d ? new Date(d).toISOString().slice(0, 10) : '';
+    const yesNo = (v: boolean | null | undefined) => (v ? 'Yes' : 'No');
+
+    const header = [
+      'Provider ID', 'Business Name', 'Owner Name', 'Owner Mobile', 'Contact Number',
+      'WhatsApp Number', 'Email', 'Categories', 'Status', 'Trust Level',
+      'Community Verified', 'Women Led', 'Women Led Status', 'Featured', 'Accepting Customers',
+      'City', 'Area', 'Pincode', 'Address',
+      'Latitude', 'Longitude', 'Location Precision', 'Location Source', 'Located On',
+      'Website', 'Instagram', 'Facebook', 'YouTube', 'LinkedIn',
+      'Description', 'Products', 'Photos', 'Rating', 'Reviews',
+      'Google Rating', 'Google Reviews', 'Opens', 'Closes', 'Joined', 'Last Updated',
+    ];
+
+    const rows = providers.map((p) => [
+      p.id,
+      p.brandName,
+      p.user?.name ?? '',
+      p.user?.mobileNumber ?? '',
+      p.contactNumber ?? '',
+      p.whatsappNumber ?? '',
+      p.user?.email ?? '',
+      (p.providerCategories ?? [])
+        .map((pc) => pc.category?.name)
+        .filter(Boolean)
+        .join('; '),
+      p.status,
+      p.trustLevel,
+      yesNo(p.communityVerified),
+      yesNo(p.isWomenLed),
+      p.womenLedStatus,
+      yesNo(p.isFeatured),
+      yesNo(p.isAvailable),
+      p.city ?? '',
+      p.area ?? '',
+      p.pincode ?? '',
+      p.address ?? '',
+      p.latitude ?? '',
+      p.longitude ?? '',
+      // A city-centre pin is a guess; saying so in the sheet stops it being
+      // read as a real address.
+      p.geocodePrecision === 'city' ? 'city (approximate)' : (p.geocodePrecision ?? ''),
+      p.geocodeSource ?? '',
+      date(p.geocodedAt),
+      p.websiteUrl ?? '',
+      p.instagramHandle ?? '',
+      p.facebookHandle ?? '',
+      p.youtubeHandle ?? '',
+      p.linkedinHandle ?? '',
+      p.description ?? '',
+      productCount.get(p.id) ?? 0,
+      photoCount.get(p.id) ?? 0,
+      p.combinedRating ?? '',
+      p.combinedReviewCount ?? '',
+      p.googleRating ?? '',
+      p.googleReviewCount ?? '',
+      p.openTime ?? '',
+      p.closeTime ?? '',
+      date(p.createdAt),
+      date(p.updatedAt),
+    ]);
+
+    await this.createAuditLog(
+      admin.id,
+      'export_providers',
+      'provider',
+      null,
+      null,
+      { count: rows.length, filters },
+      `Exported ${rows.length} providers`,
+    );
+
+    return {
+      filename: `providers-${new Date().toISOString().slice(0, 10)}.csv`,
+      csv: toCsv([header, ...rows]),
+      count: rows.length,
+      truncated: rows.length === MAX_ROWS,
+    };
+  }
 
   async getProvidersList(
     admin: any,
@@ -966,37 +1586,14 @@ export class AdminService {
     const pageSize = Math.min(100, Math.max(1, limit || 10));
     const skip = (currentPage - 1) * pageSize;
 
-    const VALID_STATUSES = ['active', 'suspended', 'unverified', 'disabled'];
-    const safeStatus = status && VALID_STATUSES.includes(status) ? status : undefined;
-
-    const qb = this.providerRepo.createQueryBuilder('p')
-      .leftJoinAndSelect('p.user', 'user')
-      .leftJoinAndSelect('p.providerCategories', 'pc')
-      .leftJoinAndSelect('pc.category', 'cat');
-
-    if (search) {
-      qb.andWhere(
-        '(p.brand_name ILIKE :search OR user.name ILIKE :search OR user.mobile_number ILIKE :search)',
-        { search: `%${search}%` },
-      );
-    }
-    // Soft-deleted providers are gone as far as the console is concerned.
-    qb.andWhere('p.deleted_at IS NULL');
-    if (safeStatus) qb.andWhere('p.status = :status', { status: safeStatus });
-    if (city) qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
-    if (isFeatured === 'true') qb.andWhere('p.is_featured = true');
-    if (isWomenLed === 'true') qb.andWhere('p.is_women_led = true');
-    if (isWomenLed === 'pending') qb.andWhere("p.women_led_status = 'pending'");
-    if (isWomenLed === 'approved') qb.andWhere("p.women_led_status = 'approved'");
-    // EXISTS, not a join condition — the joined categories are also selected for
-    // display, and filtering there would hide a provider's other categories.
-    if (categoryId) {
-      qb.andWhere(
-        'EXISTS (SELECT 1 FROM provider_categories pc_f WHERE pc_f.provider_id = p.id AND pc_f.category_id = :categoryId)',
-        { categoryId },
-      );
-    }
-
+    const qb = this.providerListQuery({
+      search,
+      status,
+      city,
+      isFeatured,
+      isWomenLed,
+      categoryId,
+    });
     qb.orderBy('p.createdAt', 'DESC').skip(skip).take(pageSize);
 
     const [items, total] = await qb.getManyAndCount();
@@ -1327,80 +1924,136 @@ export class AdminService {
   // Admin Products Management
   // ============================================
 
-  async getProducts(
-    admin: any,
-    page?: number,
-    limit?: number,
-    search?: string,
-    providerId?: string,
-    isActive?: string,
-    productType?: string,
-    priceMin?: string,
-    priceMax?: string,
-    hasImages?: string,
-    sortBy?: string,
-    sortOrder?: string,
-  ) {
+  async getProducts(admin: any, query: AdminProductListQueryDto) {
     this.assertAdmin(admin);
-    const currentPage = Math.max(1, Number(page) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number(limit) || 10));
+    const {
+      search,
+      providerId,
+      isActive,
+      productType,
+      priceMin,
+      priceMax,
+      hasImages,
+      hasPrice,
+      isHero,
+      categoryId,
+      city,
+      providerStatus,
+    } = query;
+    const currentPage = Math.max(1, query.page || 1);
+    const pageSize = Math.min(100, Math.max(1, query.limit || 10));
     const skip = (currentPage - 1) * pageSize;
 
-    try {
-      const qb = this.productRepo.createQueryBuilder('prod')
-        .leftJoinAndSelect('prod.provider', 'provider');
+    const qb = this.productRepo
+      .createQueryBuilder('prod')
+      .leftJoinAndSelect('prod.provider', 'provider');
 
-      if (search) {
-        qb.andWhere('(prod.name ILIKE :search OR prod.description ILIKE :search)', { search: `%${search}%` });
-      }
-      if (providerId) qb.andWhere('prod.provider_id = :providerId', { providerId });
-      if (isActive === 'true') qb.andWhere('prod.is_active = true');
-      if (isActive === 'false') qb.andWhere('prod.is_active = false');
-      if (productType) qb.andWhere('prod.product_type = :productType', { productType });
-      if (priceMin) qb.andWhere('prod.price >= :priceMin', { priceMin: Number(priceMin) });
-      if (priceMax) qb.andWhere('prod.price <= :priceMax', { priceMax: Number(priceMax) });
-      if (hasImages === 'true') qb.andWhere("prod.photo_urls != '{}'");
-      if (hasImages === 'false') qb.andWhere("prod.photo_urls = '{}'");
-
-      const validSortFields: Record<string, string> = { name: 'prod.name', price: 'prod.price', createdAt: 'prod.createdAt', displayOrder: 'prod.display_order' };
-      const sortField = (sortBy && validSortFields[sortBy]) || 'prod.display_order';
-      const order = sortOrder?.toUpperCase() === 'DESC' ? 'DESC' : 'ASC';
-      qb.orderBy(sortField, order).skip(skip).take(pageSize);
-
-      const [items, total] = await qb.getManyAndCount();
-      return {
-        items,
-        meta: {
-          total,
-          page: currentPage,
-          limit: pageSize,
-          totalPages: Math.ceil(total / pageSize),
-        },
-      };
-    } catch (err) {
-      // Fallback: try simpler find approach if QueryBuilder fails
-      const where: any = {};
-      if (providerId) where.providerId = providerId;
-      if (isActive === 'true') where.isActive = true;
-      if (isActive === 'false') where.isActive = false;
-
-      const [items, total] = await this.productRepo.findAndCount({
-        where,
-        relations: ['provider'],
-        order: { displayOrder: 'ASC' },
-        skip,
-        take: pageSize,
-      });
-      return {
-        items,
-        meta: {
-          total,
-          page: currentPage,
-          limit: pageSize,
-          totalPages: Math.ceil(total / pageSize),
-        },
-      };
+    if (search) {
+      qb.andWhere(
+        '(prod.name ILIKE :search OR prod.description ILIKE :search OR provider.brand_name ILIKE :search)',
+        { search: `%${search}%` },
+      );
     }
+    if (providerId)
+      qb.andWhere('prod.provider_id = :providerId', { providerId });
+    if (isActive)
+      qb.andWhere('prod.is_active = :isActive', {
+        isActive: isActive === 'true',
+      });
+    if (productType)
+      qb.andWhere('prod.product_type = :productType', { productType });
+    if (priceMin !== undefined)
+      qb.andWhere('prod.price >= :priceMin', { priceMin });
+    if (priceMax !== undefined)
+      qb.andWhere('prod.price <= :priceMax', { priceMax });
+    // photo_url mirrors photo_urls[0], but older rows may carry only one of them.
+    const hasPhoto =
+      '(coalesce(cardinality(prod.photo_urls), 0) > 0 OR prod.photo_url IS NOT NULL)';
+    if (hasImages === 'true') qb.andWhere(hasPhoto);
+    else if (hasImages === 'false') qb.andWhere(`NOT ${hasPhoto}`);
+    if (hasPrice === 'true') qb.andWhere('prod.price IS NOT NULL');
+    else if (hasPrice === 'false') qb.andWhere('prod.price IS NULL');
+    if (isHero)
+      qb.andWhere('prod.is_hero = :isHero', { isHero: isHero === 'true' });
+    if (categoryId)
+      qb.andWhere(
+        '(prod.category_id = :categoryId OR prod.subcategory_id = :categoryId)',
+        { categoryId },
+      );
+    // Exact match on the normalised name, so "Pune" doesn't also catch "Pune Cantonment".
+    if (city)
+      qb.andWhere('lower(trim(provider.city)) = lower(trim(:city))', { city });
+    if (providerStatus)
+      qb.andWhere('provider.status = :providerStatus', { providerStatus });
+
+    const sort =
+      query.sort ?? this.legacyProductSort(query.sortBy, query.sortOrder);
+    if (sort === 'name_asc') qb.orderBy('prod.name', 'ASC');
+    else if (sort === 'name_desc') qb.orderBy('prod.name', 'DESC');
+    else if (sort === 'price_asc')
+      qb.orderBy('prod.price', 'ASC', 'NULLS LAST');
+    else if (sort === 'price_desc')
+      qb.orderBy('prod.price', 'DESC', 'NULLS LAST');
+    else qb.orderBy('prod.displayOrder', 'ASC').addOrderBy('prod.name', 'ASC');
+    qb.skip(skip).take(pageSize);
+
+    const [items, total] = await qb.getManyAndCount();
+    return {
+      items,
+      meta: {
+        total,
+        page: currentPage,
+        limit: pageSize,
+        totalPages: Math.ceil(total / pageSize),
+      },
+    };
+  }
+
+  /**
+   * The admin-app still sends sortBy/sortOrder; fold them into the sort enum.
+   * Products never had a created_at column, so a `createdAt` sort falls back
+   * to the default order instead of failing.
+   */
+  private legacyProductSort(
+    sortBy?: string,
+    sortOrder?: string,
+  ): AdminProductListQueryDto['sort'] | undefined {
+    if (!sortBy) return undefined;
+    const desc = sortOrder?.toUpperCase() === 'DESC';
+    if (sortBy === 'name') return desc ? 'name_desc' : 'name_asc';
+    if (sortBy === 'price') return desc ? 'price_desc' : 'price_asc';
+    return 'display_order';
+  }
+
+  /** City and category options plus quick-segment counts for the product list. */
+  async getProductFilterOptions(admin: any) {
+    this.assertAdmin(admin);
+    const [cities, categories, [counts]] = await Promise.all([
+      this.dataSource.query<{ name: string; count: number }[]>(
+        `SELECT initcap(trim(pr.city)) AS name, count(*)::int AS count
+         FROM products p JOIN providers pr ON pr.id = p.provider_id
+         WHERE pr.city IS NOT NULL AND trim(pr.city) <> ''
+         GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 100`,
+      ),
+      // A product counts under both its category and its subcategory, matching the categoryId filter.
+      this.dataSource.query<{ id: string; name: string; count: number }[]>(
+        `SELECT c.id, c.name, count(DISTINCT p.id)::int AS count
+         FROM products p JOIN categories c ON c.id IN (p.category_id, p.subcategory_id)
+         GROUP BY c.id, c.name ORDER BY 3 DESC, 2`,
+      ),
+      this.dataSource.query<Record<string, number>[]>(
+        `SELECT
+           count(*)::int AS total,
+           count(*) FILTER (WHERE p.is_active)::int AS active,
+           count(*) FILTER (WHERE NOT p.is_active)::int AS disabled,
+           count(*) FILTER (WHERE p.product_type = 'service')::int AS services,
+           count(*) FILTER (WHERE coalesce(cardinality(p.photo_urls), 0) = 0 AND p.photo_url IS NULL)::int AS "noImages",
+           count(*) FILTER (WHERE p.price IS NULL)::int AS "noPrice",
+           count(*) FILTER (WHERE p.is_hero)::int AS hero
+         FROM products p`,
+      ),
+    ]);
+    return { cities, categories, counts };
   }
 
   async getProductStats(admin: any) {
@@ -1681,6 +2334,138 @@ export class AdminService {
     });
   }
 
+  /**
+   * Record a review on a business from the admin panel — feedback collected
+   * offline, or carried over from an older system.
+   *
+   * The reviewer is optional because the column is nullable, but when one is
+   * named the row is attributable, and every entry is written to the audit log
+   * with the admin who made it.
+   */
+  async adminCreateReview(
+    admin: AdminActor,
+    dto: {
+      providerId: string;
+      reviewerId?: string;
+      starRating: number;
+      reviewText?: string;
+      postedAt?: string;
+    },
+  ) {
+    this.assertAdmin(admin);
+
+    if (
+      !Number.isInteger(dto.starRating) ||
+      dto.starRating < 1 ||
+      dto.starRating > 5
+    ) {
+      throw new BadRequestException({
+        message: 'Rating must be between 1 and 5',
+        field: 'starRating',
+      });
+    }
+
+    const provider = await this.providerRepo.findOne({
+      where: { id: dto.providerId },
+      relations: ['user'],
+    });
+    if (!provider) throw new NotFoundException('Provider not found');
+
+    let reviewer: User | null = null;
+    if (dto.reviewerId) {
+      reviewer = await this.userRepo.findOneBy({ id: dto.reviewerId });
+      if (!reviewer) throw new NotFoundException('Reviewer not found');
+
+      // One review per person per business, matching the table's constraint,
+      // so the clash is reported rather than surfacing a database error.
+      const existing = await this.reviewRepo.findOneBy({
+        providerId: dto.providerId,
+        reviewerId: dto.reviewerId,
+      });
+      if (existing) {
+        throw new BadRequestException({
+          statusCode: 409,
+          message: `${reviewer.name} has already reviewed this business.`,
+          error_code: 'REVIEW_EXISTS',
+        });
+      }
+
+      if (reviewer.id === provider.userId) {
+        throw new BadRequestException({
+          statusCode: 400,
+          message: 'A business owner cannot review their own business.',
+          error_code: 'SELF_REVIEW',
+        });
+      }
+    }
+
+    const text = dto.reviewText?.trim() || null;
+    if (text) {
+      const check = this.contentSanitizer.check(text);
+      if (check.flagged) {
+        throw new BadRequestException({
+          statusCode: 400,
+          message: `The review text contains flagged language: ${check.flaggedWords.join(', ')}`,
+          field: 'reviewText',
+          error_code: 'PROFANITY',
+        });
+      }
+    }
+
+    let postedAt = new Date();
+    if (dto.postedAt) {
+      const parsed = new Date(dto.postedAt);
+      if (Number.isNaN(parsed.getTime())) {
+        throw new BadRequestException({
+          message: 'Invalid date',
+          field: 'postedAt',
+        });
+      }
+      if (parsed.getTime() > Date.now()) {
+        throw new BadRequestException({
+          message: 'The date cannot be in the future',
+          field: 'postedAt',
+        });
+      }
+      postedAt = parsed;
+    }
+
+    const saved = await this.reviewRepo.save(
+      this.reviewRepo.create({
+        providerId: dto.providerId,
+        reviewerId: dto.reviewerId ?? null,
+        starRating: dto.starRating,
+        reviewText: text,
+        postedAt,
+      }),
+    );
+
+    // Without this the business keeps its old average.
+    await this.googleReviewsService
+      .recomputeByProviderId(dto.providerId)
+      .catch(() => {});
+
+    await this.createAuditLog(
+      admin.id,
+      'create_review',
+      'review',
+      saved.id,
+      null,
+      {
+        providerId: dto.providerId,
+        reviewerId: dto.reviewerId ?? null,
+        starRating: dto.starRating,
+      },
+      `Admin recorded a ${dto.starRating}-star review for ${provider.brandName}` +
+        (reviewer ? ` on behalf of ${reviewer.name}` : ' (unattributed)'),
+    );
+
+    return this.reviewRepo.findOne({
+      where: { id: saved.id },
+      relations: ['reviewer', 'provider'],
+    });
+  }
+
   // ============================================
   // Google Reviews Management (Admin)
   // ============================================
@@ -1821,47 +2606,197 @@ export class AdminService {
   // Chat Moderation
   // ============================================
 
-  async getChatConversations(
-    admin: any,
-    page?: number,
-    limit?: number,
-    status?: string,
-    search?: string,
-    type?: string,
-    dateFrom?: string,
-    dateTo?: string,
-    hasRedacted?: string,
-  ) {
+  async getChatConversations(admin: any, query: AdminConversationListQueryDto) {
     this.assertAdmin(admin);
-    const currentPage = Math.max(1, page || 1);
-    const pageSize = Math.min(100, Math.max(1, limit || 10));
+    const {
+      search,
+      status,
+      type,
+      contextType,
+      lastMessageFrom,
+      lastMessageTo,
+      hasRedacted,
+      unanswered,
+      reported,
+      blocked,
+      minMessages,
+      inactiveDays,
+      city,
+      sort,
+    } = query;
+    // dateFrom/dateTo are the legacy names the admin-app still sends.
+    const createdFrom = query.createdFrom ?? query.dateFrom;
+    const createdTo = query.createdTo ?? query.dateTo;
+    const currentPage = Math.max(1, query.page || 1);
+    const pageSize = Math.min(100, Math.max(1, query.limit || 10));
     const skip = (currentPage - 1) * pageSize;
+    const meta = (total: number) => ({
+      total,
+      page: currentPage,
+      limit: pageSize,
+      totalPages: Math.ceil(total / pageSize),
+    });
 
-    const qb = this.conversationRepo.createQueryBuilder('c')
-      .leftJoinAndSelect('c.participants', 'p')
-      .leftJoinAndSelect('p.user', 'u');
+    // Filter and page on conversations alone; participants are loaded for the
+    // page afterwards so the joins can never fan out the pagination.
+    const qb = this.conversationRepo.createQueryBuilder('c');
 
-    if (status) qb.andWhere('c.status = :status', { status });
     if (search) {
-      qb.andWhere('(u.name ILIKE :search OR u.mobile_number ILIKE :search)', { search: `%${search}%` });
+      qb.andWhere(
+        `(c.context_title ILIKE :search OR EXISTS (
+           SELECT 1 FROM conversation_participants cp JOIN users u ON u.id = cp.user_id
+           WHERE cp.conversation_id = c.id AND (u.name ILIKE :search OR u.mobile_number ILIKE :search)))`,
+        { search: `%${search}%` },
+      );
     }
+    if (status) qb.andWhere('c.status = :status', { status });
     if (type) qb.andWhere('c.type = :type', { type });
-    if (dateFrom) qb.andWhere('c.createdAt >= :dateFrom', { dateFrom });
-    if (dateTo) qb.andWhere('c.createdAt <= :dateTo', { dateTo });
-    if (hasRedacted === 'true') qb.andWhere('c.hasRedactedMessages = true');
+    if (contextType)
+      qb.andWhere('c.context_type = :contextType', { contextType });
 
-    qb.orderBy('c.lastMessageAt', 'DESC').skip(skip).take(pageSize);
+    // Dates are calendar days in IST, the way the admin reads them.
+    if (createdFrom)
+      qb.andWhere(
+        `(c.created_at AT TIME ZONE 'Asia/Kolkata')::date >= :createdFrom::date`,
+        { createdFrom },
+      );
+    if (createdTo)
+      qb.andWhere(
+        `(c.created_at AT TIME ZONE 'Asia/Kolkata')::date <= :createdTo::date`,
+        { createdTo },
+      );
+    if (lastMessageFrom)
+      qb.andWhere(
+        `(c.last_message_at AT TIME ZONE 'Asia/Kolkata')::date >= :lastMessageFrom::date`,
+        { lastMessageFrom },
+      );
+    if (lastMessageTo)
+      qb.andWhere(
+        `(c.last_message_at AT TIME ZONE 'Asia/Kolkata')::date <= :lastMessageTo::date`,
+        { lastMessageTo },
+      );
 
-    const [items, total] = await qb.getManyAndCount();
-    return {
-      items,
-      meta: {
-        total,
-        page: currentPage,
-        limit: pageSize,
-        totalPages: Math.ceil(total / pageSize),
-      },
+    const flag = (value: 'true' | 'false' | undefined, sql: string) => {
+      if (value === 'true') qb.andWhere(sql);
+      else if (value === 'false') qb.andWhere(`NOT ${sql}`);
     };
+    flag(hasRedacted, CONVERSATION_REDACTED_SQL);
+    flag(unanswered, CONVERSATION_UNANSWERED_SQL);
+    flag(reported, CONVERSATION_REPORTED_SQL);
+    flag(blocked, CONVERSATION_BLOCKED_SQL);
+
+    if (minMessages !== undefined)
+      qb.andWhere(`${CONVERSATION_MESSAGE_COUNT_SQL} >= :minMessages`, {
+        minMessages,
+      });
+    if (inactiveDays !== undefined) {
+      qb.andWhere(
+        'coalesce(c.last_message_at, c.created_at) < now() - make_interval(days => :inactiveDays)',
+        { inactiveDays },
+      );
+    }
+    if (city) {
+      qb.andWhere(
+        `EXISTS (SELECT 1 FROM conversation_participants cp JOIN providers pr ON pr.user_id = cp.user_id
+                 WHERE cp.conversation_id = c.id AND cp.role = 'provider' AND lower(trim(pr.city)) = lower(trim(:city)))`,
+        { city },
+      );
+    }
+
+    if (sort === 'oldest') qb.orderBy('c.createdAt', 'ASC');
+    else if (sort === 'most_messages') {
+      qb.addSelect(CONVERSATION_MESSAGE_COUNT_SQL, 'c_message_count')
+        .orderBy('c_message_count', 'DESC')
+        .addOrderBy('c.lastMessageAt', 'DESC', 'NULLS LAST');
+    } else
+      qb.orderBy('c.lastMessageAt', 'DESC', 'NULLS LAST').addOrderBy(
+        'c.createdAt',
+        'DESC',
+      );
+    qb.skip(skip).take(pageSize);
+
+    const [pageRows, total] = await qb.getManyAndCount();
+    const ids = pageRows.map((c) => c.id);
+    if (ids.length === 0) return { items: [], meta: meta(total) };
+
+    // Participants, message counts, the business's city and the safety flags
+    // for this page only. The flags use the same predicates as the filters.
+    const [full, messageCounts, providerCities, flags] = await Promise.all([
+      this.conversationRepo.find({
+        where: { id: In(ids) },
+        relations: ['participants', 'participants.user'],
+      }),
+      this.dataSource.query<{ conversation_id: string; count: number }[]>(
+        `SELECT conversation_id, count(*)::int AS count FROM messages WHERE conversation_id = ANY($1) GROUP BY 1`,
+        [ids],
+      ),
+      this.dataSource.query<{ conversation_id: string; city: string | null }[]>(
+        `SELECT cp.conversation_id, pr.city FROM conversation_participants cp
+         JOIN providers pr ON pr.user_id = cp.user_id
+         WHERE cp.role = 'provider' AND cp.conversation_id = ANY($1)`,
+        [ids],
+      ),
+      this.dataSource.query<
+        {
+          id: string;
+          hasRedacted: boolean;
+          reported: boolean;
+          blocked: boolean;
+        }[]
+      >(
+        `SELECT c.id,
+                ${CONVERSATION_REDACTED_SQL} AS "hasRedacted",
+                ${CONVERSATION_REPORTED_SQL} AS reported,
+                ${CONVERSATION_BLOCKED_SQL} AS blocked
+         FROM conversations c WHERE c.id = ANY($1)`,
+        [ids],
+      ),
+    ]);
+    const byId = new Map(full.map((c) => [c.id, c]));
+    const countById = new Map(
+      messageCounts.map((r) => [r.conversation_id, r.count]),
+    );
+    const cityById = new Map(
+      providerCities.map((r) => [r.conversation_id, r.city]),
+    );
+    const flagsById = new Map(flags.map((r) => [r.id, r]));
+
+    return {
+      items: ids.map((id) => ({
+        ...byId.get(id),
+        messageCount: countById.get(id) ?? 0,
+        providerCity: cityById.get(id) ?? null,
+        hasRedacted: flagsById.get(id)?.hasRedacted ?? false,
+        reported: flagsById.get(id)?.reported ?? false,
+        blocked: flagsById.get(id)?.blocked ?? false,
+      })),
+      meta: meta(total),
+    };
+  }
+
+  /** City options and quick-segment counts for the conversation list. */
+  async getChatFilterOptions(admin: any) {
+    this.assertAdmin(admin);
+    const [cities, [counts]] = await Promise.all([
+      this.dataSource.query<{ name: string; count: number }[]>(
+        `SELECT initcap(trim(pr.city)) AS name, count(DISTINCT cp.conversation_id)::int AS count
+         FROM conversation_participants cp JOIN providers pr ON pr.user_id = cp.user_id
+         WHERE cp.role = 'provider' AND pr.city IS NOT NULL AND trim(pr.city) <> ''
+         GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 100`,
+      ),
+      this.dataSource.query<Record<string, number>[]>(
+        `SELECT
+           count(*)::int AS total,
+           count(*) FILTER (WHERE c.status = 'active')::int AS active,
+           count(*) FILTER (WHERE c.type = 'enquiry')::int AS enquiries,
+           count(*) FILTER (WHERE ${CONVERSATION_UNANSWERED_SQL})::int AS unanswered,
+           count(*) FILTER (WHERE ${CONVERSATION_REPORTED_SQL})::int AS reported,
+           count(*) FILTER (WHERE ${CONVERSATION_REDACTED_SQL})::int AS redacted,
+           count(*) FILTER (WHERE coalesce(c.last_message_at, c.created_at) < now() - interval '30 days')::int AS "stale30d"
+         FROM conversations c`,
+      ),
+    ]);
+    return { cities, counts };
   }
 
   async getChatMessages(admin: any, conversationId: string, page?: number, limit?: number) {
@@ -2049,41 +2984,159 @@ export class AdminService {
     return row?.value === 'true';
   }
 
-  async getSponsoredListings(
-    admin: any,
-    page?: number,
-    limit?: number,
-    isActive?: string,
-    type?: string,
-    filters?: { approvalStatus?: string; source?: string; billingMode?: string; providerId?: string; search?: string },
-  ) {
+  async getSponsoredListings(admin: any, query: AdminSponsorshipListQueryDto) {
     this.assertAdmin(admin);
-    const currentPage = Math.max(1, page || 1);
-    const pageSize = Math.min(100, Math.max(1, limit || 10));
+    const {
+      search,
+      isActive,
+      type,
+      approvalStatus,
+      source,
+      billingMode,
+      providerId,
+      opStatus,
+      createdFrom,
+      createdTo,
+      endsFrom,
+      endsTo,
+      budgetMin,
+      budgetMax,
+      spentPctMin,
+      city,
+      minImpressions,
+      sort,
+    } = query;
+    const currentPage = Math.max(1, query.page || 1);
+    const pageSize = Math.min(100, Math.max(1, query.limit || 10));
     const skip = (currentPage - 1) * pageSize;
 
-    const qb = this.sponsoredRepo.createQueryBuilder('s')
+    const qb = this.sponsoredRepo
+      .createQueryBuilder('s')
       .leftJoinAndSelect('s.provider', 'provider')
-      .leftJoinAndSelect('provider.user', 'user');
+      .leftJoinAndSelect('provider.user', 'user')
+      .addSelect(SPONSORSHIP_OP_STATUS_SQL, 's_op_status');
 
-    if (isActive === 'true') qb.andWhere('s.is_active = true');
-    if (isActive === 'false') qb.andWhere('s.is_active = false');
+    if (isActive)
+      qb.andWhere('s.is_active = :isActive', { isActive: isActive === 'true' });
     if (type) qb.andWhere('s.type = :type', { type });
-    if (filters?.approvalStatus) qb.andWhere('s.approval_status = :approvalStatus', { approvalStatus: filters.approvalStatus });
-    if (filters?.source) qb.andWhere('s.source = :source', { source: filters.source });
-    if (filters?.billingMode) qb.andWhere('s.billing_mode = :billingMode', { billingMode: filters.billingMode });
-    if (filters?.providerId) qb.andWhere('s.provider_id = :providerId', { providerId: filters.providerId });
-    if (filters?.search?.trim()) {
-      qb.andWhere('(provider.brand_name ILIKE :q OR provider.city ILIKE :q)', { q: `%${filters.search.trim()}%` });
+    if (approvalStatus)
+      qb.andWhere('s.approval_status = :approvalStatus', { approvalStatus });
+    if (source) qb.andWhere('s.source = :source', { source });
+    if (billingMode)
+      qb.andWhere('s.billing_mode = :billingMode', { billingMode });
+    if (providerId) qb.andWhere('s.provider_id = :providerId', { providerId });
+    if (search?.trim()) {
+      qb.andWhere('(provider.brand_name ILIKE :q OR provider.city ILIKE :q)', {
+        q: `%${search.trim()}%`,
+      });
     }
+    if (opStatus)
+      qb.andWhere(`(${SPONSORSHIP_OP_STATUS_SQL}) = :opStatus`, { opStatus });
 
-    qb.orderBy('s.createdAt', 'DESC').skip(skip).take(pageSize);
+    // Dates are calendar days in IST, the way the admin reads them.
+    if (createdFrom)
+      qb.andWhere(
+        `(s.created_at AT TIME ZONE 'Asia/Kolkata')::date >= :createdFrom::date`,
+        { createdFrom },
+      );
+    if (createdTo)
+      qb.andWhere(
+        `(s.created_at AT TIME ZONE 'Asia/Kolkata')::date <= :createdTo::date`,
+        { createdTo },
+      );
+    if (endsFrom)
+      qb.andWhere(
+        `(s.ends_at AT TIME ZONE 'Asia/Kolkata')::date >= :endsFrom::date`,
+        { endsFrom },
+      );
+    if (endsTo)
+      qb.andWhere(
+        `(s.ends_at AT TIME ZONE 'Asia/Kolkata')::date <= :endsTo::date`,
+        { endsTo },
+      );
 
-    const [items, total] = await qb.getManyAndCount();
+    if (budgetMin !== undefined)
+      qb.andWhere('s.budget_amount >= :budgetMin', { budgetMin });
+    if (budgetMax !== undefined)
+      qb.andWhere('s.budget_amount <= :budgetMax', { budgetMax });
+    if (spentPctMin !== undefined) {
+      qb.andWhere(
+        's.budget_amount > 0 AND s.spent_amount * 100 / s.budget_amount >= :spentPctMin',
+        { spentPctMin },
+      );
+    }
+    // The business's own city, or any city the placement targets.
+    if (city) {
+      qb.andWhere(
+        `(lower(trim(provider.city)) = lower(trim(:city))
+          OR EXISTS (SELECT 1 FROM unnest(coalesce(s.target_cities, '{}')) tc WHERE lower(trim(tc)) = lower(trim(:city))))`,
+        { city },
+      );
+    }
+    if (minImpressions !== undefined)
+      qb.andWhere('s.impressions >= :minImpressions', { minImpressions });
+
+    if (sort === 'ending_soon') qb.orderBy('s.endsAt', 'ASC');
+    else if (sort === 'spend_desc') qb.orderBy('s.spentAmount', 'DESC');
+    else if (sort === 'impressions_desc') qb.orderBy('s.impressions', 'DESC');
+    else if (sort === 'clicks_desc') qb.orderBy('s.clicks', 'DESC');
+    else if (sort === 'ctr_desc') {
+      qb.addSelect(
+        'CASE WHEN s.impressions > 0 THEN s.clicks::numeric / s.impressions ELSE 0 END',
+        's_ctr',
+      ).orderBy('s_ctr', 'DESC');
+    } else qb.orderBy('s.createdAt', 'DESC');
+    qb.addOrderBy('s.id', 'ASC').skip(skip).take(pageSize);
+
+    const [{ entities, raw }, total] = await Promise.all([
+      qb.getRawAndEntities<{ s_id: string; s_op_status: string }>(),
+      qb.getCount(),
+    ]);
+    const opStatusById = new Map<string, string>(
+      raw.map((r) => [r.s_id, r.s_op_status]),
+    );
     return {
-      items,
-      meta: { total, page: currentPage, limit: pageSize, totalPages: Math.ceil(total / pageSize) },
+      items: entities.map((s) => ({
+        ...s,
+        opStatus: opStatusById.get(s.id) ?? null,
+      })),
+      meta: {
+        total,
+        page: currentPage,
+        limit: pageSize,
+        totalPages: Math.ceil(total / pageSize),
+      },
     };
+  }
+
+  /** City options and quick-segment counts for the sponsorship list. */
+  async getSponsorshipFilterOptions(admin: any) {
+    this.assertAdmin(admin);
+    const [cities, [counts]] = await Promise.all([
+      // A listing counts under its business's city and under every city it targets.
+      this.dataSource.query<{ name: string; count: number }[]>(
+        `SELECT initcap(trim(x.city)) AS name, count(DISTINCT x.id)::int AS count
+         FROM (
+           SELECT s.id, pr.city FROM sponsored_listings s JOIN providers pr ON pr.id = s.provider_id
+           UNION ALL
+           SELECT s.id, unnest(s.target_cities) FROM sponsored_listings s
+         ) x
+         WHERE x.city IS NOT NULL AND trim(x.city) <> ''
+         GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 100`,
+      ),
+      this.dataSource.query<Record<string, number>[]>(
+        `SELECT
+           count(*)::int AS total,
+           count(*) FILTER (WHERE s.op_status = 'live')::int AS live,
+           count(*) FILTER (WHERE s.op_status = 'pending')::int AS pending,
+           count(*) FILTER (WHERE s.op_status = 'live' AND s.ends_at <= now() + interval '7 days')::int AS "ending7d",
+           count(*) FILTER (WHERE s.budget_amount > 0 AND s.spent_amount * 100 / s.budget_amount >= 80)::int AS "budget80",
+           count(*) FILTER (WHERE s.source = 'admin_granted')::int AS "adminGranted",
+           count(*) FILTER (WHERE s.op_status = 'rejected')::int AS rejected
+         FROM (SELECT s.*, ${SPONSORSHIP_OP_STATUS_SQL} AS op_status FROM sponsored_listings s) s`,
+      ),
+    ]);
+    return { cities, counts };
   }
 
   async getSponsoredById(admin: any, id: string) {
@@ -2706,29 +3759,246 @@ export class AdminService {
   // Provider Offers Management
   // ============================================
 
-  async getOffers(admin: any, page?: number, limit?: number, isActive?: string, providerId?: string) {
+  /**
+   * Place a deal on any business's listing, the way an admin grants a
+   * sponsorship: no checkout, and no plan quota. A provider creating their own
+   * deal is capped by their subscription and burns their free-deal allowance;
+   * a deal the platform adds for them is a gift, so it does neither. The
+   * owner's own quota is therefore unchanged by this.
+   */
+  async createOffer(admin: any, dto: AdminCreateOfferDto) {
     this.assertAdmin(admin);
-    const currentPage = Math.max(1, page || 1);
-    const pageSize = Math.min(100, Math.max(1, limit || 10));
+
+    const provider = await this.providerRepo.findOne({
+      where: { id: dto.providerId, deletedAt: IsNull() },
+      relations: ['user'],
+    });
+    if (!provider) throw new NotFoundException('Business not found');
+
+    const startsAt = new Date(dto.startsAt);
+    const endsAt = new Date(dto.endsAt);
+    if (isNaN(startsAt.getTime()) || isNaN(endsAt.getTime())) {
+      throw new BadRequestException('Invalid date format');
+    }
+    if (endsAt <= startsAt) {
+      throw new BadRequestException('End date must be after start date');
+    }
+    if (dto.discountType === 'percentage' && dto.discountValue > 100) {
+      throw new BadRequestException('A percentage discount cannot exceed 100%');
+    }
+    if (
+      dto.minOrderAmount != null &&
+      dto.discountType === 'flat' &&
+      dto.discountValue > dto.minOrderAmount
+    ) {
+      throw new BadRequestException(
+        'A flat discount cannot be larger than the minimum order amount',
+      );
+    }
+
+    const approvalStatus = dto.approvalStatus ?? 'approved';
+    const offer = this.offerRepo.create({
+      providerId: provider.id,
+      title: dto.title,
+      description: dto.description ?? null,
+      discountType: dto.discountType,
+      discountValue: dto.discountValue,
+      minOrderAmount: dto.minOrderAmount ?? null,
+      // A cap only means something for a percentage; a flat deal is its own cap.
+      maxDiscount:
+        dto.discountType === 'percentage' ? (dto.maxDiscount ?? null) : null,
+      startsAt,
+      endsAt,
+      usageLimit: dto.usageLimit ?? null,
+      isActive: dto.isActive ?? true,
+      approvalStatus,
+      adminNotes: dto.adminNotes ?? null,
+      reviewedBy: admin.id,
+      reviewedAt: new Date(),
+    });
+    const saved = await this.offerRepo.save(offer);
+
+    await this.createAuditLog(
+      admin.id,
+      'create_offer',
+      'provider_offer',
+      saved.id,
+      null,
+      {
+        providerId: provider.id,
+        title: saved.title,
+        discountType: saved.discountType,
+        discountValue: saved.discountValue,
+        approvalStatus,
+        isActive: saved.isActive,
+      },
+      `Admin created a deal for ${provider.brandName}`,
+    );
+
+    // Only worth telling the owner about a deal that is actually live for them.
+    if (
+      dto.notifyProvider !== false &&
+      approvalStatus === 'approved' &&
+      saved.isActive &&
+      provider.userId
+    ) {
+      this.notificationDispatch
+        .sendToUser(
+          provider.userId,
+          'provider_status',
+          'A new deal is live on your listing',
+          `We added "${saved.title}" to ${provider.brandName}. Customers can see it now.`,
+          { route: '/', offerId: saved.id },
+          undefined,
+          undefined,
+          'provider',
+        )
+        .catch(() => {});
+    }
+
+    return this.offerRepo.findOne({
+      where: { id: saved.id },
+      relations: ['provider'],
+    });
+  }
+
+  async getOffers(admin: any, query: AdminOfferListQueryDto) {
+    this.assertAdmin(admin);
+    const {
+      search,
+      isActive,
+      providerId,
+      approvalStatus,
+      opStatus,
+      discountType,
+      discountMin,
+      discountMax,
+      endsFrom,
+      endsTo,
+      createdFrom,
+      createdTo,
+      usage,
+      city,
+      categoryId,
+      sort,
+    } = query;
+    const currentPage = Math.max(1, query.page || 1);
+    const pageSize = Math.min(100, Math.max(1, query.limit || 10));
     const skip = (currentPage - 1) * pageSize;
 
-    const qb = this.offerRepo.createQueryBuilder('o')
-      .leftJoinAndSelect('o.provider', 'provider');
+    const qb = this.offerRepo
+      .createQueryBuilder('o')
+      .leftJoinAndSelect('o.provider', 'provider')
+      .addSelect(OFFER_OP_STATUS_SQL, 'o_op_status');
 
-    if (isActive === 'true') qb.andWhere('o.is_active = true');
-    if (isActive === 'false') qb.andWhere('o.is_active = false');
+    if (search?.trim()) {
+      qb.andWhere('(o.title ILIKE :q OR provider.brand_name ILIKE :q)', {
+        q: `%${search.trim()}%`,
+      });
+    }
+    if (isActive)
+      qb.andWhere('o.is_active = :isActive', { isActive: isActive === 'true' });
     if (providerId) qb.andWhere('o.provider_id = :providerId', { providerId });
+    if (approvalStatus)
+      qb.andWhere('o.approval_status = :approvalStatus', { approvalStatus });
+    if (opStatus)
+      qb.andWhere(`(${OFFER_OP_STATUS_SQL}) = :opStatus`, { opStatus });
+    if (discountType)
+      qb.andWhere('o.discount_type = :discountType', { discountType });
+    if (discountMin !== undefined)
+      qb.andWhere('o.discount_value >= :discountMin', { discountMin });
+    if (discountMax !== undefined)
+      qb.andWhere('o.discount_value <= :discountMax', { discountMax });
 
-    qb.orderBy('o.createdAt', 'DESC').skip(skip).take(pageSize);
+    // Dates are calendar days in IST, the way the admin reads them.
+    if (endsFrom)
+      qb.andWhere(
+        `(o.ends_at AT TIME ZONE 'Asia/Kolkata')::date >= :endsFrom::date`,
+        { endsFrom },
+      );
+    if (endsTo)
+      qb.andWhere(
+        `(o.ends_at AT TIME ZONE 'Asia/Kolkata')::date <= :endsTo::date`,
+        { endsTo },
+      );
+    if (createdFrom)
+      qb.andWhere(
+        `(o.created_at AT TIME ZONE 'Asia/Kolkata')::date >= :createdFrom::date`,
+        { createdFrom },
+      );
+    if (createdTo)
+      qb.andWhere(
+        `(o.created_at AT TIME ZONE 'Asia/Kolkata')::date <= :createdTo::date`,
+        { createdTo },
+      );
 
-    const [items, total] = await qb.getManyAndCount();
+    if (usage === 'never') qb.andWhere('o.usage_count = 0');
+    else if (usage === 'used') qb.andWhere('o.usage_count > 0');
+    else if (usage === 'exhausted')
+      qb.andWhere(
+        'o.usage_limit IS NOT NULL AND o.usage_count >= o.usage_limit',
+      );
+
+    if (city)
+      qb.andWhere('lower(trim(provider.city)) = lower(trim(:city))', { city });
+    // Offers carry no category of their own; go through the business's categories.
+    if (categoryId) {
+      qb.andWhere(
+        'EXISTS (SELECT 1 FROM provider_categories pc WHERE pc.provider_id = o.provider_id AND pc.category_id = :categoryId)',
+        { categoryId },
+      );
+    }
+
+    if (sort === 'ending_soon') qb.orderBy('o.endsAt', 'ASC');
+    else if (sort === 'most_used') qb.orderBy('o.usageCount', 'DESC');
+    else if (sort === 'discount_desc') qb.orderBy('o.discountValue', 'DESC');
+    else qb.orderBy('o.createdAt', 'DESC');
+    qb.addOrderBy('o.id', 'ASC').skip(skip).take(pageSize);
+
+    const [{ entities, raw }, total] = await Promise.all([
+      qb.getRawAndEntities<{ o_id: string; o_op_status: string }>(),
+      qb.getCount(),
+    ]);
+    const opStatusById = new Map<string, string>(
+      raw.map((r) => [r.o_id, r.o_op_status]),
+    );
     return {
-      items,
-      meta: { total, page: currentPage, limit: pageSize, totalPages: Math.ceil(total / pageSize) },
+      items: entities.map((o) => ({
+        ...o,
+        opStatus: opStatusById.get(o.id) ?? null,
+      })),
+      meta: {
+        total,
+        page: currentPage,
+        limit: pageSize,
+        totalPages: Math.ceil(total / pageSize),
+      },
     };
   }
 
-  // Note: approvalStatus filter is available via getPendingOffers()
+  /** City options and quick-segment counts for the offer list. */
+  async getOfferFilterOptions(admin: any) {
+    this.assertAdmin(admin);
+    const [cities, [counts]] = await Promise.all([
+      this.dataSource.query<{ name: string; count: number }[]>(
+        `SELECT initcap(trim(pr.city)) AS name, count(*)::int AS count
+         FROM provider_offers o JOIN providers pr ON pr.id = o.provider_id
+         WHERE pr.city IS NOT NULL AND trim(pr.city) <> ''
+         GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 100`,
+      ),
+      this.dataSource.query<Record<string, number>[]>(
+        `SELECT
+           count(*)::int AS total,
+           count(*) FILTER (WHERE o.op_status = 'live')::int AS live,
+           count(*) FILTER (WHERE o.approval_status = 'pending_approval')::int AS pending,
+           count(*) FILTER (WHERE o.op_status = 'live' AND o.ends_at <= now() + interval '7 days')::int AS "ending7d",
+           count(*) FILTER (WHERE o.op_status = 'expired')::int AS expired,
+           count(*) FILTER (WHERE o.usage_count = 0)::int AS "neverUsed"
+         FROM (SELECT o.*, ${OFFER_OP_STATUS_SQL} AS op_status FROM provider_offers o) o`,
+      ),
+    ]);
+    return { cities, counts };
+  }
 
   async getOfferById(admin: any, id: string) {
     this.assertAdmin(admin);
@@ -4027,72 +5297,162 @@ export class AdminService {
   // Photo Moderation
   // ============================================
 
-  async getPhotosForModeration(admin: any, page?: number, limit?: number, type?: string) {
+  /**
+   * One grid over gallery, review and product photos. The three sources are
+   * unioned in SQL so filtering, ordering and paging happen in the database;
+   * `id` is `${type}:${rowId}:${index}` and `rowId` is what DELETE /photos/:id takes.
+   */
+  async getPhotosForModeration(admin: any, query: AdminPhotoListQueryDto) {
     this.assertAdmin(admin);
-    const currentPage = Math.max(1, page || 1);
-    const pageSize = Math.min(100, Math.max(1, limit || 20));
+    const {
+      type,
+      search,
+      city,
+      providerStatus,
+      uploadedFrom,
+      uploadedTo,
+      sort,
+    } = query;
+    const currentPage = Math.max(1, query.page || 1);
+    const pageSize = Math.min(100, Math.max(1, query.limit || 20));
     const skip = (currentPage - 1) * pageSize;
 
-    const results: any[] = [];
-    let total = 0;
+    const where: string[] = [];
+    const params: unknown[] = [];
+    const add = (sql: string, value: unknown) => {
+      params.push(value);
+      where.push(sql.split('?').join(`$${params.length}`));
+    };
+    if (type) add('x.type = ?', type);
+    if (search)
+      add('(x.brand_name ILIKE ? OR x.product_name ILIKE ?)', `%${search}%`);
+    if (city) add('lower(trim(x.city)) = lower(trim(?))', city);
+    if (providerStatus) add('x.provider_status = ?', providerStatus);
+    // Only gallery photos have a date; a NULL never passes, so the rest drop out when a date filter is set.
+    if (uploadedFrom)
+      add(
+        `(x.uploaded_at AT TIME ZONE 'Asia/Kolkata')::date >= ?::date`,
+        uploadedFrom,
+      );
+    if (uploadedTo)
+      add(
+        `(x.uploaded_at AT TIME ZONE 'Asia/Kolkata')::date <= ?::date`,
+        uploadedTo,
+      );
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const orderSql =
+      sort === 'oldest'
+        ? 'x.uploaded_at ASC NULLS LAST'
+        : 'x.uploaded_at DESC NULLS LAST';
 
-    if (!type || type === 'provider') {
-      const [photos, count] = await this.photoRepo.findAndCount({
-        relations: ['provider'],
-        order: { uploadedAt: 'DESC' },
-        skip: type === 'provider' ? skip : 0,
-        take: type === 'provider' ? pageSize : undefined,
-      });
-      results.push(...photos.map(p => ({ ...p, photoType: 'provider', brandName: p.provider?.brandName })));
-      total += count;
-    }
+    type PhotoRow = {
+      type: 'provider' | 'review' | 'product';
+      row_id: string;
+      idx: number;
+      image_url: string;
+      storage_key: string | null;
+      uploaded_at: Date | null;
+      provider_id: string;
+      brand_name: string;
+      city: string | null;
+      provider_status: string;
+      product_name: string | null;
+      review_id: string | null;
+    };
+    const [rows, [{ count: total }]] = await Promise.all([
+      this.dataSource.query<PhotoRow[]>(
+        `SELECT * FROM (${PHOTO_UNION_SQL}) x ${whereSql}
+         ORDER BY ${orderSql}, x.type, x.row_id, x.idx
+         LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+        [...params, pageSize, skip],
+      ),
+      this.dataSource.query<{ count: number }[]>(
+        `SELECT count(*)::int AS count FROM (${PHOTO_UNION_SQL}) x ${whereSql}`,
+        params,
+      ),
+    ]);
 
-    if (!type || type === 'review') {
-      const [photos, count] = await this.reviewPhotoRepo.findAndCount({
-        relations: ['review'],
-        skip: type === 'review' ? skip : 0,
-        take: type === 'review' ? pageSize : undefined,
-      });
-      results.push(...photos.map(p => ({ ...p, photoType: 'review' })));
-      total += count;
-    }
-
-    if (!type || type === 'product') {
-      const qb = this.productRepo.createQueryBuilder('p')
-        .select(['p.id', 'p.name', 'p.photoUrl', 'p.photoUrls', 'p.providerId'])
-        .where('(p.photoUrl IS NOT NULL OR array_length(p.photo_urls, 1) > 0)');
-      const productCount = await qb.getCount();
-      total += productCount;
-
-      if (type === 'product') {
-        qb.skip(skip).take(pageSize);
-      }
-      const products = await qb.getMany();
-      for (const prod of products) {
-        const urls = [prod.photoUrl, ...(prod.photoUrls || [])].filter(Boolean);
-        for (const url of urls) {
-          results.push({ id: prod.id, imageUrl: url, photoType: 'product', productName: prod.name, providerId: prod.providerId });
-        }
-      }
-    }
-
-    // Sort by newest and paginate if mixed type
-    if (!type) {
-      const paged = results.slice(skip, skip + pageSize);
-      return { items: paged, meta: { total, page: currentPage, limit: pageSize, totalPages: Math.ceil(total / pageSize) } };
-    }
-
-    return { items: results, meta: { total, page: currentPage, limit: pageSize, totalPages: Math.ceil(total / pageSize) } };
+    return {
+      items: rows.map((r) => ({
+        id: `${r.type}:${r.row_id}:${r.idx}`,
+        rowId: r.row_id,
+        photoType: r.type,
+        imageUrl: r.image_url,
+        storageKey: r.storage_key,
+        uploadedAt: r.uploaded_at,
+        providerId: r.provider_id,
+        brandName: r.brand_name,
+        city: r.city,
+        providerStatus: r.provider_status,
+        productName: r.product_name,
+        reviewId: r.review_id,
+      })),
+      meta: {
+        total,
+        page: currentPage,
+        limit: pageSize,
+        totalPages: Math.ceil(total / pageSize),
+      },
+    };
   }
 
+  /** City options and quick-segment counts for the photo grid. */
+  async getPhotoFilterOptions(admin: any) {
+    this.assertAdmin(admin);
+    const [cities, [counts]] = await Promise.all([
+      this.dataSource.query<{ name: string; count: number }[]>(
+        `SELECT initcap(trim(x.city)) AS name, count(*)::int AS count
+         FROM (${PHOTO_UNION_SQL}) x
+         WHERE x.city IS NOT NULL AND trim(x.city) <> ''
+         GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 100`,
+      ),
+      this.dataSource.query<Record<string, number>[]>(
+        `SELECT
+           count(*)::int AS total,
+           count(*) FILTER (WHERE x.type = 'provider')::int AS provider,
+           count(*) FILTER (WHERE x.type = 'review')::int AS review,
+           count(*) FILTER (WHERE x.type = 'product')::int AS product,
+           count(*) FILTER (WHERE (x.uploaded_at AT TIME ZONE 'Asia/Kolkata')::date >= (now() AT TIME ZONE 'Asia/Kolkata')::date - 6)::int AS "uploadedThisWeek"
+         FROM (${PHOTO_UNION_SQL}) x`,
+      ),
+    ]);
+    return { cities, counts };
+  }
+
+  /**
+   * `id` is a bare row uuid or the moderation grid's composite
+   * `${type}:${rowId}:${index}`. The composite form names its own type and,
+   * for a product, the one URL to drop instead of the whole set.
+   */
   async removePhoto(admin: any, id: string, type: string) {
     this.assertAdmin(admin);
+
+    let index: number | null = null;
+    if (id.includes(':')) {
+      const [compositeType, rowId, rawIndex] = id.split(':');
+      if (!rowId) throw new BadRequestException('Malformed photo id');
+      type = compositeType || type;
+      id = rowId;
+      if (rawIndex !== undefined && rawIndex !== '') {
+        index = Number(rawIndex);
+        if (!Number.isInteger(index) || index < 0)
+          throw new BadRequestException('Malformed photo id');
+      }
+    }
 
     if (type === 'provider') {
       const photo = await this.photoRepo.findOneBy({ id });
       if (!photo) throw new NotFoundException('Photo not found');
       await this.photoRepo.remove(photo);
-      await this.createAuditLog(admin.id, 'remove_photo', 'photo', id, { imageUrl: photo.imageUrl, providerId: photo.providerId }, null, 'Provider gallery photo removed');
+      await this.createAuditLog(
+        admin.id,
+        'remove_photo',
+        'photo',
+        id,
+        { imageUrl: photo.imageUrl, providerId: photo.providerId },
+        null,
+        'Provider gallery photo removed',
+      );
       return { message: 'Provider photo removed' };
     }
 
@@ -4100,19 +5460,60 @@ export class AdminService {
       const photo = await this.reviewPhotoRepo.findOneBy({ id });
       if (!photo) throw new NotFoundException('Review photo not found');
       await this.reviewPhotoRepo.remove(photo);
-      await this.createAuditLog(admin.id, 'remove_photo', 'review_photo', id, { imageUrl: photo.imageUrl, reviewId: photo.reviewId }, null, 'Review photo removed');
+      await this.createAuditLog(
+        admin.id,
+        'remove_photo',
+        'review_photo',
+        id,
+        { imageUrl: photo.imageUrl, reviewId: photo.reviewId },
+        null,
+        'Review photo removed',
+      );
       return { message: 'Review photo removed' };
     }
 
     if (type === 'product') {
       const product = await this.productRepo.findOneBy({ id });
       if (!product) throw new NotFoundException('Product not found');
+      if (index !== null) {
+        // Same row set the grid shows: photo_url folded into photo_urls unless it already appears there.
+        const photoUrls = product.photoUrls ?? [];
+        const urls =
+          product.photoUrl && !photoUrls.includes(product.photoUrl)
+            ? [product.photoUrl, ...photoUrls]
+            : photoUrls;
+        const target = urls[index];
+        if (!target) throw new NotFoundException('Product photo not found');
+        const kept = urls.filter((u) => u !== target);
+        const update = { photoUrl: kept[0] ?? null, photoUrls: kept };
+        await this.productRepo.update(id, update);
+        await this.createAuditLog(
+          admin.id,
+          'remove_photo',
+          'product',
+          id,
+          { photoUrl: product.photoUrl, photoUrls: product.photoUrls },
+          update,
+          'Product photo removed',
+        );
+        return { message: 'Product photo removed' };
+      }
       await this.productRepo.update(id, { photoUrl: null, photoUrls: [] });
-      await this.createAuditLog(admin.id, 'remove_photo', 'product', id, { photoUrl: product.photoUrl, photoUrls: product.photoUrls }, { photoUrl: null, photoUrls: [] }, 'Product photos removed');
+      await this.createAuditLog(
+        admin.id,
+        'remove_photo',
+        'product',
+        id,
+        { photoUrl: product.photoUrl, photoUrls: product.photoUrls },
+        { photoUrl: null, photoUrls: [] },
+        'Product photos removed',
+      );
       return { message: 'Product photos removed' };
     }
 
-    throw new BadRequestException('Invalid photo type. Must be provider, review, or product');
+    throw new BadRequestException(
+      'Invalid photo type. Must be provider, review, or product',
+    );
   }
 
   // ============================================

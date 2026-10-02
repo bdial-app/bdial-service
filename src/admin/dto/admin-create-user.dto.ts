@@ -217,9 +217,9 @@ export class AdminSendOtpDto {
   @Matches(/^\d{10}$/, { message: 'Mobile number must be exactly 10 digits' })
   mobileNumber: string;
 
-  @ApiPropertyOptional({ description: 'Purpose of OTP', enum: ['user_verification', 'business_verification'], default: 'user_verification' })
+  @ApiPropertyOptional({ description: 'Purpose of OTP', enum: ['user_verification', 'business_verification', 'user_mobile_change'], default: 'user_verification' })
   @IsOptional()
-  @IsEnum(['user_verification', 'business_verification'])
+  @IsEnum(['user_verification', 'business_verification', 'user_mobile_change'])
   purpose?: string;
 }
 
@@ -230,6 +230,85 @@ export class AdminVerifyOtpDto {
   mobileNumber: string;
 
   @ApiProperty({ example: '123456' })
+  @IsString()
+  @Matches(/^\d{6}$/, { message: 'OTP must be exactly 6 digits' })
+  otp: string;
+}
+
+/**
+ * Admin edit of a user's profile. The login mobile number is deliberately
+ * absent: it is identity, so it changes only through
+ * AdminUpdateUserMobileDto, which carries a one-time code.
+ */
+export class AdminUpdateUserDto {
+  @ApiPropertyOptional({ example: 'John Doe' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  name?: string;
+
+  @ApiPropertyOptional({
+    example: 'john@example.com',
+    description: 'Send an empty string to clear it',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(150)
+  email?: string;
+
+  @ApiPropertyOptional({ enum: ['male', 'female', 'other'] })
+  @IsOptional()
+  @IsEnum(['male', 'female', 'other'])
+  gender?: string;
+
+  @ApiPropertyOptional({ example: 'Pune' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  city?: string;
+
+  @ApiPropertyOptional({ example: 'Wanowrie' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  area?: string;
+
+  @ApiPropertyOptional({
+    example: '411040',
+    description: '6 digits, or an empty string to clear it',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^(\d{6})?$/, { message: 'Pincode must be exactly 6 digits' })
+  pincode?: string;
+
+  @ApiPropertyOptional({
+    enum: ['customer', 'associate', 'moderator', 'admin', 'super_admin'],
+  })
+  @IsOptional()
+  @IsEnum(['customer', 'associate', 'moderator', 'admin', 'super_admin'])
+  role?: string;
+
+  @ApiPropertyOptional({ enum: ['active', 'suspended', 'paused', 'deleted'] })
+  @IsOptional()
+  @IsEnum(['active', 'suspended', 'paused', 'deleted'])
+  status?: string;
+}
+
+/** Changing the number a user signs in with. The OTP proves they hold it. */
+export class AdminUpdateUserMobileDto {
+  @ApiProperty({
+    example: '9876543210',
+    description: 'The new 10-digit number',
+  })
+  @IsString()
+  @Matches(/^\d{10}$/, { message: 'Mobile number must be exactly 10 digits' })
+  mobileNumber: string;
+
+  @ApiProperty({
+    example: '123456',
+    description: 'Code sent to the NEW number',
+  })
   @IsString()
   @Matches(/^\d{6}$/, { message: 'OTP must be exactly 6 digits' })
   otp: string;

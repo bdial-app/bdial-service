@@ -7,7 +7,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { createHmac, timingSafeEqual } from 'crypto';
 import Razorpay from 'razorpay';
@@ -25,6 +25,12 @@ import { ProviderOffer } from '../entities/provider-offer.entity';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { AppleVerifyService } from './apple-verify.service';
 import {
+  AdminPaymentListQueryDto,
+  AdminRevenueQueryDto,
+  AdminSubscriptionListQueryDto,
+  RevenueGranularity,
+} from './dto/admin-payment-query.dto';
+import {
   CreateSponsorshipCheckoutDto,
   CreateLeadUnlockCheckoutDto,
   CreateSubscriptionCheckoutDto,
@@ -37,19 +43,30 @@ export class PaymentService {
 
   constructor(
     @Inject(RAZORPAY_CLIENT) private readonly razorpay: Razorpay,
-    @InjectRepository(Payment) private readonly paymentRepo: Repository<Payment>,
-    @InjectRepository(Provider) private readonly providerRepo: Repository<Provider>,
-    @InjectRepository(SponsoredListing) private readonly sponsoredListingRepo: Repository<SponsoredListing>,
-    @InjectRepository(ProviderLead) private readonly leadRepo: Repository<ProviderLead>,
-    @InjectRepository(Subscription) private readonly subscriptionRepo: Repository<Subscription>,
-    @InjectRepository(SubscriptionPlan) private readonly planRepo: Repository<SubscriptionPlan>,
-    @InjectRepository(Voucher) private readonly voucherRepo: Repository<Voucher>,
-    @InjectRepository(VoucherRedemption) private readonly redemptionRepo: Repository<VoucherRedemption>,
-    @InjectRepository(SystemSetting) private readonly settingsRepo: Repository<SystemSetting>,
-    @InjectRepository(ProviderOffer) private readonly offerRepo: Repository<ProviderOffer>,
+    @InjectRepository(Payment)
+    private readonly paymentRepo: Repository<Payment>,
+    @InjectRepository(Provider)
+    private readonly providerRepo: Repository<Provider>,
+    @InjectRepository(SponsoredListing)
+    private readonly sponsoredListingRepo: Repository<SponsoredListing>,
+    @InjectRepository(ProviderLead)
+    private readonly leadRepo: Repository<ProviderLead>,
+    @InjectRepository(Subscription)
+    private readonly subscriptionRepo: Repository<Subscription>,
+    @InjectRepository(SubscriptionPlan)
+    private readonly planRepo: Repository<SubscriptionPlan>,
+    @InjectRepository(Voucher)
+    private readonly voucherRepo: Repository<Voucher>,
+    @InjectRepository(VoucherRedemption)
+    private readonly redemptionRepo: Repository<VoucherRedemption>,
+    @InjectRepository(SystemSetting)
+    private readonly settingsRepo: Repository<SystemSetting>,
+    @InjectRepository(ProviderOffer)
+    private readonly offerRepo: Repository<ProviderOffer>,
     private readonly config: ConfigService,
     private readonly notificationDispatch: NotificationDispatchService,
     private readonly appleVerify: AppleVerifyService,
+    private readonly dataSource: DataSource,
   ) {}
 
   // ──────────────────────────────────────────
@@ -74,7 +91,9 @@ export class PaymentService {
       notes: { providerId: provider.id, userId: provider.userId },
     });
 
-    await this.providerRepo.update(provider.id, { gatewayCustomerId: customer.id });
+    await this.providerRepo.update(provider.id, {
+      gatewayCustomerId: customer.id,
+    });
     provider.gatewayCustomerId = customer.id;
 
     return customer.id;
@@ -84,16 +103,23 @@ export class PaymentService {
   // Sponsorship Checkout (Razorpay Order)
   // ──────────────────────────────────────────
 
-  async createSponsorshipCheckout(userId: string, dto: CreateSponsorshipCheckoutDto) {
+  async createSponsorshipCheckout(
+    userId: string,
+    dto: CreateSponsorshipCheckoutDto,
+  ) {
     const provider = await this.providerRepo.findOneBy({ userId });
     if (!provider) throw new NotFoundException('Provider not found');
 
     // Boosts are one feature behind one master switch. While it is off nothing
     // serves anywhere, so refuse the sale rather than take money for a window
     // we already know will be dark.
-    const boostsEnabled = await this.settingsRepo.findOneBy({ key: 'sponsorships_enabled' });
+    const boostsEnabled = await this.settingsRepo.findOneBy({
+      key: 'sponsorships_enabled',
+    });
     if (boostsEnabled?.value !== 'true') {
-      throw new BadRequestException('Boosts are currently unavailable. Please check back soon.');
+      throw new BadRequestException(
+        'Boosts are currently unavailable. Please check back soon.',
+      );
     }
 
     // ── Prevent duplicate/overlapping boosts (anti double-charge) ──
@@ -104,7 +130,10 @@ export class PaymentService {
       where: { providerId: provider.id, type: dto.type, isActive: true },
     });
     const stillRunning = existing.find(
-      (l) => new Date(l.endsAt) > now && (l.billingMode === 'free' || Number(l.spentAmount) < Number(l.budgetAmount)),
+      (l) =>
+        new Date(l.endsAt) > now &&
+        (l.billingMode === 'free' ||
+          Number(l.spentAmount) < Number(l.budgetAmount)),
     );
     if (stillRunning) {
       throw new BadRequestException(
@@ -121,24 +150,33 @@ export class PaymentService {
     if (endsAt <= startsAt) {
       throw new BadRequestException('End date must be after start date');
     }
-    const durationDays = (endsAt.getTime() - startsAt.getTime()) / (1000 * 60 * 60 * 24);
+    const durationDays =
+      (endsAt.getTime() - startsAt.getTime()) / (1000 * 60 * 60 * 24);
     if (durationDays > 31) {
-      throw new BadRequestException('Sponsorship duration cannot exceed 31 days');
+      throw new BadRequestException(
+        'Sponsorship duration cannot exceed 31 days',
+      );
     }
 
     // ── Plan price validation (prevent amount bypass) ──
     // Read min prices from plans setting, fallback to ₹499
     let minPrice = 499;
-    const plansSetting = await this.settingsRepo.findOneBy({ key: 'sponsorship_plans' });
+    const plansSetting = await this.settingsRepo.findOneBy({
+      key: 'sponsorship_plans',
+    });
     if (plansSetting) {
       try {
         const plans = JSON.parse(plansSetting.value);
         const matching = plans.find((p: any) => p.type === dto.type);
         if (matching?.price) minPrice = matching.price;
-      } catch { /* use default */ }
+      } catch {
+        /* use default */
+      }
     }
     if (dto.budgetAmount < minPrice) {
-      throw new BadRequestException(`Minimum budget for ${dto.type} sponsorship is ₹${minPrice}`);
+      throw new BadRequestException(
+        `Minimum budget for ${dto.type} sponsorship is ₹${minPrice}`,
+      );
     }
 
     let amount = dto.budgetAmount;
@@ -146,7 +184,12 @@ export class PaymentService {
     let voucherId: string | null = null;
 
     if (dto.voucherCode) {
-      const result = await this.applyVoucher(dto.voucherCode, 'sponsorship', amount, provider.id);
+      const result = await this.applyVoucher(
+        dto.voucherCode,
+        'sponsorship',
+        amount,
+        provider.id,
+      );
       amount = result.finalAmount;
       discountAmount = result.discountAmount;
       voucherId = result.voucherId;
@@ -158,7 +201,7 @@ export class PaymentService {
       this.settingsRepo.findOneBy({ key: 'sponsorship_cost_per_impression' }),
     ]);
     const costPerClick = cpcSetting ? parseFloat(cpcSetting.value) : 5.0;
-    const costPerImpression = cpiSetting ? parseFloat(cpiSetting.value) : 0.10;
+    const costPerImpression = cpiSetting ? parseFloat(cpiSetting.value) : 0.1;
 
     // The listing itself is NOT created yet. An abandoned checkout must leave
     // nothing behind in sponsored_listings, so the full spec rides along in the
@@ -197,8 +240,13 @@ export class PaymentService {
     // iOS → Apple IAP: return the boost plan's Apple product id for StoreKit
     // instead of a Razorpay order. Fulfilment happens in verifyAppleConsumable.
     if (dto.gateway === 'apple') {
-      const appleProductId = await this.resolveAppleProductId('sponsorship', { sponsorshipType: dto.type });
-      if (!appleProductId) throw new BadRequestException('Apple product not configured for this boost plan');
+      const appleProductId = await this.resolveAppleProductId('sponsorship', {
+        sponsorshipType: dto.type,
+      });
+      if (!appleProductId)
+        throw new BadRequestException(
+          'Apple product not configured for this boost plan',
+        );
       await this.paymentRepo.update(payment.id, {
         metadata: { ...payment.metadata, appleProductId } as any,
         status: 'processing',
@@ -245,11 +293,17 @@ export class PaymentService {
   // Lead Unlock Checkout
   // ──────────────────────────────────────────
 
-  async createLeadUnlockCheckout(userId: string, dto: CreateLeadUnlockCheckoutDto) {
+  async createLeadUnlockCheckout(
+    userId: string,
+    dto: CreateLeadUnlockCheckoutDto,
+  ) {
     const provider = await this.providerRepo.findOneBy({ userId });
     if (!provider) throw new NotFoundException('Provider not found');
 
-    const lead = await this.leadRepo.findOneBy({ id: dto.leadId, providerId: provider.id });
+    const lead = await this.leadRepo.findOneBy({
+      id: dto.leadId,
+      providerId: provider.id,
+    });
     if (!lead) throw new NotFoundException('Lead not found');
     if (lead.isUnlocked) throw new BadRequestException('Lead already unlocked');
 
@@ -261,7 +315,8 @@ export class PaymentService {
     }
 
     // Check if monetization is disabled — free unlock for all
-    const monetizationEnabled = (await this.getSetting('leads_monetization_enabled', 'false')) === 'true';
+    const monetizationEnabled =
+      (await this.getSetting('leads_monetization_enabled', 'false')) === 'true';
     if (!monetizationEnabled) {
       lead.isUnlocked = true;
       await this.leadRepo.save(lead);
@@ -278,24 +333,35 @@ export class PaymentService {
     if (subscription?.plan && subscription.plan.monthlyLeadUnlocks === -1) {
       lead.isUnlocked = true;
       await this.leadRepo.save(lead);
-      return { unlocked: true, method: 'subscription_credit', remainingCredits: -1 };
+      return {
+        unlocked: true,
+        method: 'subscription_credit',
+        remainingCredits: -1,
+      };
     }
 
     // Subscription monthly credits
     if (subscription && subscription.plan) {
-      const remaining = subscription.plan.monthlyLeadUnlocks - subscription.leadUnlocksUsed;
+      const remaining =
+        subscription.plan.monthlyLeadUnlocks - subscription.leadUnlocksUsed;
       if (remaining > 0) {
         lead.isUnlocked = true;
         await this.leadRepo.save(lead);
         subscription.leadUnlocksUsed += 1;
         await this.subscriptionRepo.save(subscription);
-        return { unlocked: true, method: 'subscription_credit', remainingCredits: remaining - 1 };
+        return {
+          unlocked: true,
+          method: 'subscription_credit',
+          remainingCredits: remaining - 1,
+        };
       }
     }
 
     // Check free monthly quota (resets monthly)
     const isWomenLedApproved = provider.womenLedStatus === 'approved';
-    const freeQuotaKey = isWomenLedApproved ? 'women_led_free_leads_per_month' : 'free_lead_quota_monthly';
+    const freeQuotaKey = isWomenLedApproved
+      ? 'women_led_free_leads_per_month'
+      : 'free_lead_quota_monthly';
     const freeQuotaDefault = isWomenLedApproved ? '8' : '5';
     const freeQuotaStr = await this.getSetting(freeQuotaKey, freeQuotaDefault);
     const freeQuota = parseInt(freeQuotaStr, 10);
@@ -304,7 +370,10 @@ export class PaymentService {
     // Reset monthly counter if needed
     if (provider.freeLeadsResetAt) {
       const resetDate = new Date(provider.freeLeadsResetAt);
-      if (now.getMonth() !== resetDate.getMonth() || now.getFullYear() !== resetDate.getFullYear()) {
+      if (
+        now.getMonth() !== resetDate.getMonth() ||
+        now.getFullYear() !== resetDate.getFullYear()
+      ) {
         provider.freeLeadsUsedThisMonth = 0;
         provider.freeLeadsResetAt = now;
         await this.providerRepo.save(provider);
@@ -329,15 +398,34 @@ export class PaymentService {
     // Determine tier-based price
     const tier = lead.tier || 'cold';
     const isGrowthSubscriber = subscription?.plan?.slug === 'growth';
-    const priceKey = isGrowthSubscriber ? `lead_price_${tier}_discounted` : `lead_price_${tier}`;
-    const defaultPrices: Record<string, string> = { hot: '99', warm: '69', soft: '49', cold: '29', hot_discounted: '49', warm_discounted: '35', soft_discounted: '25', cold_discounted: '15' };
-    const priceStr = await this.getSetting(priceKey, defaultPrices[isGrowthSubscriber ? `${tier}_discounted` : tier] || '49');
+    const priceKey = isGrowthSubscriber
+      ? `lead_price_${tier}_discounted`
+      : `lead_price_${tier}`;
+    const defaultPrices: Record<string, string> = {
+      hot: '99',
+      warm: '69',
+      soft: '49',
+      cold: '29',
+      hot_discounted: '49',
+      warm_discounted: '35',
+      soft_discounted: '25',
+      cold_discounted: '15',
+    };
+    const priceStr = await this.getSetting(
+      priceKey,
+      defaultPrices[isGrowthSubscriber ? `${tier}_discounted` : tier] || '49',
+    );
     let amount = parseFloat(priceStr);
     let discountAmount = 0;
     let voucherId: string | null = null;
 
     if (dto.voucherCode) {
-      const result = await this.applyVoucher(dto.voucherCode, 'lead_unlock', amount, provider.id);
+      const result = await this.applyVoucher(
+        dto.voucherCode,
+        'lead_unlock',
+        amount,
+        provider.id,
+      );
       amount = result.finalAmount;
       discountAmount = result.discountAmount;
       voucherId = result.voucherId;
@@ -367,8 +455,13 @@ export class PaymentService {
     // iOS → Apple IAP: stamp the expected product id and return it for StoreKit
     // instead of creating a Razorpay order. Fulfilment happens in verifyAppleConsumable.
     if (dto.gateway === 'apple') {
-      const appleProductId = await this.resolveAppleProductId('lead_unlock', { tier });
-      if (!appleProductId) throw new BadRequestException('Apple product not configured for this lead tier');
+      const appleProductId = await this.resolveAppleProductId('lead_unlock', {
+        tier,
+      });
+      if (!appleProductId)
+        throw new BadRequestException(
+          'Apple product not configured for this lead tier',
+        );
       await this.paymentRepo.update(payment.id, {
         metadata: { ...payment.metadata, appleProductId } as any,
         status: 'processing',
@@ -422,21 +515,37 @@ export class PaymentService {
   // Subscription Checkout (Razorpay Subscription)
   // ──────────────────────────────────────────
 
-  async createSubscriptionCheckout(userId: string, dto: CreateSubscriptionCheckoutDto) {
+  async createSubscriptionCheckout(
+    userId: string,
+    dto: CreateSubscriptionCheckoutDto,
+  ) {
     const provider = await this.providerRepo.findOneBy({ userId });
     if (!provider) throw new NotFoundException('Provider not found');
 
     // Check for existing active subscription
-    const existing = await this.subscriptionRepo.findOneBy({ providerId: provider.id, status: 'active' });
-    if (existing) throw new BadRequestException('Provider already has an active subscription. Cancel first to change plans.');
+    const existing = await this.subscriptionRepo.findOneBy({
+      providerId: provider.id,
+      status: 'active',
+    });
+    if (existing)
+      throw new BadRequestException(
+        'Provider already has an active subscription. Cancel first to change plans.',
+      );
 
-    const plan = await this.planRepo.findOneBy({ id: dto.planId, isActive: true });
+    const plan = await this.planRepo.findOneBy({
+      id: dto.planId,
+      isActive: true,
+    });
     if (!plan) throw new NotFoundException('Subscription plan not found');
 
-    const razorpayPlanId = dto.billingInterval === 'yearly'
-      ? plan.razorpayPlanIdYearly
-      : plan.razorpayPlanIdMonthly;
-    if (!razorpayPlanId) throw new BadRequestException('Plan not configured for this billing interval');
+    const razorpayPlanId =
+      dto.billingInterval === 'yearly'
+        ? plan.razorpayPlanIdYearly
+        : plan.razorpayPlanIdMonthly;
+    if (!razorpayPlanId)
+      throw new BadRequestException(
+        'Plan not configured for this billing interval',
+      );
 
     const customerId = await this.getOrCreateRazorpayCustomer(provider);
 
@@ -454,15 +563,25 @@ export class PaymentService {
 
     // Apply voucher as offer (discount on first payment)
     if (dto.voucherCode) {
-      const price = dto.billingInterval === 'yearly' ? Number(plan.priceYearly) : Number(plan.priceMonthly);
-      const result = await this.applyVoucher(dto.voucherCode, 'subscription', price, provider.id);
+      const price =
+        dto.billingInterval === 'yearly'
+          ? Number(plan.priceYearly)
+          : Number(plan.priceMonthly);
+      const result = await this.applyVoucher(
+        dto.voucherCode,
+        'subscription',
+        price,
+        provider.id,
+      );
       if (result.discountAmount > 0) {
         subscriptionParams.notes.voucherCode = dto.voucherCode;
         subscriptionParams.notes.discountAmount = result.discountAmount;
       }
     }
 
-    const rzpSubscription = await (this.razorpay.subscriptions as any).create(subscriptionParams);
+    const rzpSubscription = await (this.razorpay.subscriptions as any).create(
+      subscriptionParams,
+    );
 
     return {
       subscriptionId: rzpSubscription.id,
@@ -499,11 +618,18 @@ export class PaymentService {
     const provider = await this.providerRepo.findOneBy({ userId });
     if (!provider) throw new NotFoundException('Provider not found');
 
-    const subscription = await this.subscriptionRepo.findOneBy({ providerId: provider.id, status: 'active' });
-    if (!subscription) throw new NotFoundException('No active subscription found');
+    const subscription = await this.subscriptionRepo.findOneBy({
+      providerId: provider.id,
+      status: 'active',
+    });
+    if (!subscription)
+      throw new NotFoundException('No active subscription found');
 
     if (subscription.paymentGateway === 'razorpay') {
-      await (this.razorpay.subscriptions as any).cancel(subscription.gatewaySubscriptionId, { cancel_at_cycle_end: 1 });
+      await (this.razorpay.subscriptions as any).cancel(
+        subscription.gatewaySubscriptionId,
+        { cancel_at_cycle_end: 1 },
+      );
     }
 
     subscription.cancelAtPeriodEnd = true;
@@ -516,12 +642,21 @@ export class PaymentService {
     const provider = await this.providerRepo.findOneBy({ userId });
     if (!provider) throw new NotFoundException('Provider not found');
 
-    const subscription = await this.subscriptionRepo.findOneBy({ providerId: provider.id, status: 'active' });
-    if (!subscription) throw new NotFoundException('No active subscription found');
-    if (!subscription.cancelAtPeriodEnd) throw new BadRequestException('Subscription is not scheduled for cancellation');
+    const subscription = await this.subscriptionRepo.findOneBy({
+      providerId: provider.id,
+      status: 'active',
+    });
+    if (!subscription)
+      throw new NotFoundException('No active subscription found');
+    if (!subscription.cancelAtPeriodEnd)
+      throw new BadRequestException(
+        'Subscription is not scheduled for cancellation',
+      );
 
     if (subscription.paymentGateway === 'razorpay') {
-      this.logger.log(`Resume requested for Razorpay subscription ${subscription.gatewaySubscriptionId}; updating local state`);
+      this.logger.log(
+        `Resume requested for Razorpay subscription ${subscription.gatewaySubscriptionId}; updating local state`,
+      );
     }
 
     subscription.cancelAtPeriodEnd = false;
@@ -574,13 +709,18 @@ export class PaymentService {
 
     if (
       generatedSignature.length !== razorpay_signature.length ||
-      !timingSafeEqual(Buffer.from(generatedSignature), Buffer.from(razorpay_signature))
+      !timingSafeEqual(
+        Buffer.from(generatedSignature),
+        Buffer.from(razorpay_signature),
+      )
     ) {
       throw new BadRequestException('Invalid payment signature');
     }
 
     // Find and fulfill payment (atomic check to prevent double-fulfillment race with webhook)
-    const payment = await this.paymentRepo.findOneBy({ gatewayOrderId: razorpay_order_id });
+    const payment = await this.paymentRepo.findOneBy({
+      gatewayOrderId: razorpay_order_id,
+    });
     if (!payment) throw new NotFoundException('Payment not found');
 
     if (payment.status === 'succeeded') {
@@ -591,7 +731,10 @@ export class PaymentService {
     const result = await this.paymentRepo
       .createQueryBuilder()
       .update()
-      .set({ status: 'succeeded' as PaymentStatus, gatewayPaymentId: razorpay_payment_id })
+      .set({
+        status: 'succeeded' as PaymentStatus,
+        gatewayPaymentId: razorpay_payment_id,
+      })
       .where('id = :id', { id: payment.id })
       .andWhere('status != :s', { s: 'succeeded' })
       .execute();
@@ -616,7 +759,11 @@ export class PaymentService {
     providerId: string;
     billingInterval: 'monthly' | 'yearly';
   }) {
-    const { razorpay_subscription_id, razorpay_payment_id, razorpay_signature } = body;
+    const {
+      razorpay_subscription_id,
+      razorpay_payment_id,
+      razorpay_signature,
+    } = body;
 
     // Verify subscription signature
     const keySecret = this.config.get<string>('RAZORPAY_KEY_SECRET');
@@ -629,14 +776,18 @@ export class PaymentService {
     }
 
     // Check idempotency
-    const existing = await this.subscriptionRepo.findOneBy({ gatewaySubscriptionId: razorpay_subscription_id });
+    const existing = await this.subscriptionRepo.findOneBy({
+      gatewaySubscriptionId: razorpay_subscription_id,
+    });
     if (existing) {
       return { status: 'active', subscriptionId: existing.id };
     }
 
     const { planId, providerId, billingInterval } = body;
 
-    const rzpSub = await (this.razorpay.subscriptions as any).fetch(razorpay_subscription_id);
+    const rzpSub = await (this.razorpay.subscriptions as any).fetch(
+      razorpay_subscription_id,
+    );
     const now = new Date();
 
     const subscription = this.subscriptionRepo.create({
@@ -647,15 +798,22 @@ export class PaymentService {
       gatewayCustomerId: rzpSub.customer_id ?? null,
       status: 'active',
       billingInterval: billingInterval ?? 'monthly',
-      currentPeriodStart: rzpSub.current_start ? new Date(rzpSub.current_start * 1000) : now,
-      currentPeriodEnd: rzpSub.current_end ? new Date(rzpSub.current_end * 1000) : this.addInterval(now, billingInterval),
+      currentPeriodStart: rzpSub.current_start
+        ? new Date(rzpSub.current_start * 1000)
+        : now,
+      currentPeriodEnd: rzpSub.current_end
+        ? new Date(rzpSub.current_end * 1000)
+        : this.addInterval(now, billingInterval),
       leadUnlocksUsed: 0,
       leadUnlocksResetAt: now,
     });
     await this.subscriptionRepo.save(subscription);
 
     const plan = await this.planRepo.findOneBy({ id: planId });
-    const amount = billingInterval === 'yearly' ? Number(plan?.priceYearly ?? 0) : Number(plan?.priceMonthly ?? 0);
+    const amount =
+      billingInterval === 'yearly'
+        ? Number(plan?.priceYearly ?? 0)
+        : Number(plan?.priceMonthly ?? 0);
 
     const payment = this.paymentRepo.create({
       providerId,
@@ -670,13 +828,17 @@ export class PaymentService {
     });
     await this.paymentRepo.save(payment);
 
-    this.logger.log(`Subscription created: ${subscription.id} for provider: ${providerId}`);
+    this.logger.log(
+      `Subscription created: ${subscription.id} for provider: ${providerId}`,
+    );
 
     const provider = await this.providerRepo.findOneBy({ id: providerId });
     if (provider) {
-      this.notificationDispatch.sendTemplated(provider.userId, 'subscription_activated', {
-        planName: plan?.name || 'Premium',
-      }).catch(() => {});
+      this.notificationDispatch
+        .sendTemplated(provider.userId, 'subscription_activated', {
+          planName: plan?.name || 'Premium',
+        })
+        .catch(() => {});
     }
 
     return { status: 'active', subscriptionId: subscription.id };
@@ -686,11 +848,14 @@ export class PaymentService {
   // Apple IAP Verification
   // ──────────────────────────────────────────
 
-  async verifyAppleReceipt(userId: string, body: {
-    transactionId: string;
-    originalTransactionId: string;
-    productId: string;
-  }) {
+  async verifyAppleReceipt(
+    userId: string,
+    body: {
+      transactionId: string;
+      originalTransactionId: string;
+      productId: string;
+    },
+  ) {
     const provider = await this.providerRepo.findOneBy({ userId });
     if (!provider) throw new NotFoundException('Provider not found');
 
@@ -698,26 +863,36 @@ export class PaymentService {
     // Never trust the client-supplied productId/originalTransactionId. We fetch
     // the transaction from the App Store Server API by its id and use Apple's
     // verified values as the source of truth.
-    const verified = await this.appleVerify.verifyTransaction(body.transactionId);
+    const verified = await this.appleVerify.verifyTransaction(
+      body.transactionId,
+    );
     const productId = verified.productId;
     const transactionId = verified.transactionId ?? body.transactionId;
     const originalTransactionId = verified.originalTransactionId;
     if (!productId || !originalTransactionId) {
-      throw new BadRequestException('Apple transaction missing required fields');
+      throw new BadRequestException(
+        'Apple transaction missing required fields',
+      );
     }
 
     // Find the subscription plan matching the VERIFIED Apple product ID
     const plan = await this.planRepo
       .createQueryBuilder('p')
-      .where('p.apple_product_id_monthly = :pid OR p.apple_product_id_yearly = :pid', { pid: productId })
+      .where(
+        'p.apple_product_id_monthly = :pid OR p.apple_product_id_yearly = :pid',
+        { pid: productId },
+      )
       .getOne();
 
     if (!plan) throw new BadRequestException('Unknown Apple product ID');
 
-    const billingInterval = plan.appleProductIdYearly === productId ? 'yearly' : 'monthly';
+    const billingInterval =
+      plan.appleProductIdYearly === productId ? 'yearly' : 'monthly';
 
     // Check idempotency
-    const existing = await this.subscriptionRepo.findOneBy({ gatewaySubscriptionId: originalTransactionId });
+    const existing = await this.subscriptionRepo.findOneBy({
+      gatewaySubscriptionId: originalTransactionId,
+    });
     if (existing) {
       existing.status = 'active';
       await this.subscriptionRepo.save(existing);
@@ -743,7 +918,10 @@ export class PaymentService {
     });
     await this.subscriptionRepo.save(subscription);
 
-    const amount = billingInterval === 'yearly' ? Number(plan.priceYearly) : Number(plan.priceMonthly);
+    const amount =
+      billingInterval === 'yearly'
+        ? Number(plan.priceYearly)
+        : Number(plan.priceMonthly);
     const payment = this.paymentRepo.create({
       providerId: provider.id,
       amount,
@@ -757,11 +935,15 @@ export class PaymentService {
     });
     await this.paymentRepo.save(payment);
 
-    this.logger.log(`Apple IAP subscription created: ${subscription.id} for provider: ${provider.id}`);
+    this.logger.log(
+      `Apple IAP subscription created: ${subscription.id} for provider: ${provider.id}`,
+    );
 
-    this.notificationDispatch.sendTemplated(provider.userId, 'subscription_activated', {
-      planName: plan.name,
-    }).catch(() => {});
+    this.notificationDispatch
+      .sendTemplated(provider.userId, 'subscription_activated', {
+        planName: plan.name,
+      })
+      .catch(() => {});
 
     return { status: 'active', subscriptionId: subscription.id };
   }
@@ -786,7 +968,9 @@ export class PaymentService {
       return (await this.getSetting('deal_apple_product', '')) || null;
     }
     // sponsorship — match the plan by type in the sponsorship_plans JSON setting
-    const plansSetting = await this.settingsRepo.findOneBy({ key: 'sponsorship_plans' });
+    const plansSetting = await this.settingsRepo.findOneBy({
+      key: 'sponsorship_plans',
+    });
     if (plansSetting) {
       try {
         const plans = JSON.parse(plansSetting.value);
@@ -806,11 +990,17 @@ export class PaymentService {
    * confirm the Apple-verified product id matches it before fulfilling, so a
    * cheap product can't unlock an expensive action.
    */
-  async verifyAppleConsumable(userId: string, body: { paymentId: string; transactionId: string }) {
+  async verifyAppleConsumable(
+    userId: string,
+    body: { paymentId: string; transactionId: string },
+  ) {
     const provider = await this.providerRepo.findOneBy({ userId });
     if (!provider) throw new NotFoundException('Provider not found');
 
-    const payment = await this.paymentRepo.findOneBy({ id: body.paymentId, providerId: provider.id });
+    const payment = await this.paymentRepo.findOneBy({
+      id: body.paymentId,
+      providerId: provider.id,
+    });
     if (!payment) throw new NotFoundException('Payment not found');
     if (payment.status === 'succeeded') {
       return { status: 'succeeded', paymentId: payment.id };
@@ -818,20 +1008,30 @@ export class PaymentService {
 
     const expectedProductId = payment.metadata?.appleProductId;
     if (!expectedProductId) {
-      throw new BadRequestException('This payment is not an Apple IAP purchase');
+      throw new BadRequestException(
+        'This payment is not an Apple IAP purchase',
+      );
     }
 
     // Cryptographically verify the transaction with Apple (source of truth).
-    const verified = await this.appleVerify.verifyTransaction(body.transactionId);
+    const verified = await this.appleVerify.verifyTransaction(
+      body.transactionId,
+    );
     if (verified.productId !== expectedProductId) {
-      throw new BadRequestException('Purchased product does not match the requested item');
+      throw new BadRequestException(
+        'Purchased product does not match the requested item',
+      );
     }
 
     // Prevent replaying one Apple transaction across multiple payments.
     const verifiedTxnId = verified.transactionId ?? body.transactionId;
-    const dup = await this.paymentRepo.findOneBy({ gatewayPaymentId: verifiedTxnId });
+    const dup = await this.paymentRepo.findOneBy({
+      gatewayPaymentId: verifiedTxnId,
+    });
     if (dup && dup.id !== payment.id) {
-      throw new BadRequestException('This Apple transaction has already been used');
+      throw new BadRequestException(
+        'This Apple transaction has already been used',
+      );
     }
 
     // Atomic mark-succeeded to avoid double fulfilment.
@@ -854,7 +1054,9 @@ export class PaymentService {
     payment.status = 'succeeded';
     await this.fulfillPayment(payment);
 
-    this.logger.log(`Apple consumable fulfilled: ${payment.id} (${payment.type})`);
+    this.logger.log(
+      `Apple consumable fulfilled: ${payment.id} (${payment.type})`,
+    );
     return { status: 'succeeded', paymentId: payment.id };
   }
 
@@ -864,7 +1066,8 @@ export class PaymentService {
 
   async handleRazorpayWebhook(signature: string, rawBody: Buffer) {
     const webhookSecret = this.config.get<string>('RAZORPAY_WEBHOOK_SECRET');
-    if (!webhookSecret) throw new BadRequestException('Webhook secret not configured');
+    if (!webhookSecret)
+      throw new BadRequestException('Webhook secret not configured');
 
     const expectedSignature = createHmac('sha256', webhookSecret)
       .update(rawBody)
@@ -879,7 +1082,9 @@ export class PaymentService {
     }
 
     const event = JSON.parse(rawBody.toString());
-    this.logger.log(`Razorpay webhook received: ${event.event} [${event.payload?.payment?.entity?.id ?? ''}]`);
+    this.logger.log(
+      `Razorpay webhook received: ${event.event} [${event.payload?.payment?.entity?.id ?? ''}]`,
+    );
 
     switch (event.event) {
       case 'payment.captured':
@@ -889,13 +1094,17 @@ export class PaymentService {
         await this.handlePaymentFailed(event.payload.payment.entity);
         break;
       case 'subscription.activated':
-        await this.handleSubscriptionActivated(event.payload.subscription.entity);
+        await this.handleSubscriptionActivated(
+          event.payload.subscription.entity,
+        );
         break;
       case 'subscription.charged':
         await this.handleSubscriptionCharged(event.payload.subscription.entity);
         break;
       case 'subscription.cancelled':
-        await this.handleSubscriptionCancelled(event.payload.subscription.entity);
+        await this.handleSubscriptionCancelled(
+          event.payload.subscription.entity,
+        );
         break;
       case 'subscription.halted':
         await this.handleSubscriptionHalted(event.payload.subscription.entity);
@@ -917,16 +1126,28 @@ export class PaymentService {
     // For now: validate structure, decode the JWT payload without verification,
     // and restrict to known notification types to reject garbage/forged payloads.
     const VALID_NOTIFICATION_TYPES = [
-      'DID_RENEW', 'EXPIRED', 'DID_FAIL_TO_RENEW', 'DID_CHANGE_RENEWAL_STATUS',
-      'REFUND', 'REVOKE', 'SUBSCRIBED', 'OFFER_REDEEMED', 'GRACE_PERIOD_EXPIRED',
+      'DID_RENEW',
+      'EXPIRED',
+      'DID_FAIL_TO_RENEW',
+      'DID_CHANGE_RENEWAL_STATUS',
+      'REFUND',
+      'REVOKE',
+      'SUBSCRIBED',
+      'OFFER_REDEEMED',
+      'GRACE_PERIOD_EXPIRED',
     ];
 
     const notificationType = body.notificationType;
     const subtype = body.subtype;
     const data = body.data;
 
-    if (!notificationType || !VALID_NOTIFICATION_TYPES.includes(notificationType)) {
-      this.logger.warn(`Apple webhook rejected: invalid notificationType "${notificationType}"`);
+    if (
+      !notificationType ||
+      !VALID_NOTIFICATION_TYPES.includes(notificationType)
+    ) {
+      this.logger.warn(
+        `Apple webhook rejected: invalid notificationType "${notificationType}"`,
+      );
       return { received: true };
     }
 
@@ -935,10 +1156,13 @@ export class PaymentService {
       return { received: true };
     }
 
-    this.logger.log(`Apple webhook received: ${notificationType} ${subtype ?? ''}`);
+    this.logger.log(
+      `Apple webhook received: ${notificationType} ${subtype ?? ''}`,
+    );
 
-    const originalTransactionId = data?.signedTransactionInfo?.originalTransactionId
-      ?? data?.originalTransactionId;
+    const originalTransactionId =
+      data?.signedTransactionInfo?.originalTransactionId ??
+      data?.originalTransactionId;
 
     if (!originalTransactionId) {
       this.logger.warn('Apple webhook: no originalTransactionId found');
@@ -951,7 +1175,9 @@ export class PaymentService {
     });
 
     if (!subscription) {
-      this.logger.warn(`Apple webhook: subscription not found for ${originalTransactionId}`);
+      this.logger.warn(
+        `Apple webhook: subscription not found for ${originalTransactionId}`,
+      );
       return { received: true };
     }
 
@@ -959,7 +1185,10 @@ export class PaymentService {
       case 'DID_RENEW':
         subscription.status = 'active';
         subscription.currentPeriodStart = new Date();
-        subscription.currentPeriodEnd = this.addInterval(new Date(), subscription.billingInterval);
+        subscription.currentPeriodEnd = this.addInterval(
+          new Date(),
+          subscription.billingInterval,
+        );
         subscription.leadUnlocksUsed = 0;
         subscription.leadUnlocksResetAt = new Date();
         await this.subscriptionRepo.save(subscription);
@@ -985,7 +1214,9 @@ export class PaymentService {
       case 'REFUND':
         subscription.status = 'canceled';
         await this.subscriptionRepo.save(subscription);
-        this.logger.log(`Apple subscription revoked/refunded: ${subscription.id}`);
+        this.logger.log(
+          `Apple subscription revoked/refunded: ${subscription.id}`,
+        );
         break;
 
       case 'GRACE_PERIOD_EXPIRED':
@@ -1008,14 +1239,19 @@ export class PaymentService {
     const orderId = rzpPayment.order_id;
     if (!orderId) return;
 
-    const payment = await this.paymentRepo.findOneBy({ gatewayOrderId: orderId });
+    const payment = await this.paymentRepo.findOneBy({
+      gatewayOrderId: orderId,
+    });
     if (!payment || payment.status === 'succeeded') return;
 
     // Atomic conditional update — prevents double-fulfillment race with frontend verify
     const result = await this.paymentRepo
       .createQueryBuilder()
       .update()
-      .set({ status: 'succeeded' as PaymentStatus, gatewayPaymentId: rzpPayment.id })
+      .set({
+        status: 'succeeded' as PaymentStatus,
+        gatewayPaymentId: rzpPayment.id,
+      })
       .where('id = :id', { id: payment.id })
       .andWhere('status != :s', { s: 'succeeded' })
       .execute();
@@ -1031,7 +1267,9 @@ export class PaymentService {
     const orderId = rzpPayment.order_id;
     if (!orderId) return;
 
-    const payment = await this.paymentRepo.findOneBy({ gatewayOrderId: orderId });
+    const payment = await this.paymentRepo.findOneBy({
+      gatewayOrderId: orderId,
+    });
     if (!payment || payment.status === 'succeeded') return;
 
     payment.status = 'failed';
@@ -1040,16 +1278,22 @@ export class PaymentService {
 
     this.logger.warn(`Payment failed: ${payment.id}`);
 
-    const provider = await this.providerRepo.findOneBy({ id: payment.providerId });
+    const provider = await this.providerRepo.findOneBy({
+      id: payment.providerId,
+    });
     if (provider) {
-      this.notificationDispatch.sendTemplated(provider.userId, 'payment_failed', {
-        amount: `₹${payment.amount}`,
-      }).catch(() => {});
+      this.notificationDispatch
+        .sendTemplated(provider.userId, 'payment_failed', {
+          amount: `₹${payment.amount}`,
+        })
+        .catch(() => {});
     }
   }
 
   private async handleSubscriptionActivated(rzpSub: any) {
-    const existing = await this.subscriptionRepo.findOneBy({ gatewaySubscriptionId: rzpSub.id });
+    const existing = await this.subscriptionRepo.findOneBy({
+      gatewaySubscriptionId: rzpSub.id,
+    });
     if (existing) return;
 
     const notes = rzpSub.notes || {};
@@ -1058,7 +1302,9 @@ export class PaymentService {
     const billingInterval = notes.billingInterval || 'monthly';
 
     if (!providerId || !planId) {
-      this.logger.warn('Subscription activated webhook missing providerId/planId in notes');
+      this.logger.warn(
+        'Subscription activated webhook missing providerId/planId in notes',
+      );
       return;
     }
 
@@ -1071,8 +1317,12 @@ export class PaymentService {
       gatewayCustomerId: rzpSub.customer_id ?? null,
       status: 'active',
       billingInterval,
-      currentPeriodStart: rzpSub.current_start ? new Date(rzpSub.current_start * 1000) : now,
-      currentPeriodEnd: rzpSub.current_end ? new Date(rzpSub.current_end * 1000) : this.addInterval(now, billingInterval),
+      currentPeriodStart: rzpSub.current_start
+        ? new Date(rzpSub.current_start * 1000)
+        : now,
+      currentPeriodEnd: rzpSub.current_end
+        ? new Date(rzpSub.current_end * 1000)
+        : this.addInterval(now, billingInterval),
       leadUnlocksUsed: 0,
       leadUnlocksResetAt: now,
     });
@@ -1084,67 +1334,95 @@ export class PaymentService {
       const provider = await this.providerRepo.findOneBy({ id: providerId });
       const plan = await this.planRepo.findOneBy({ id: planId });
       if (provider) {
-        this.notificationDispatch.sendTemplated(provider.userId, 'subscription_activated', {
-          planName: plan?.name || 'Premium',
-        }).catch(() => {});
+        this.notificationDispatch
+          .sendTemplated(provider.userId, 'subscription_activated', {
+            planName: plan?.name || 'Premium',
+          })
+          .catch(() => {});
       }
     } catch (err) {
-      this.logger.warn(`Subscription save failed (likely duplicate): ${(err as Error).message}`);
+      this.logger.warn(
+        `Subscription save failed (likely duplicate): ${(err as Error).message}`,
+      );
     }
   }
 
   private async handleSubscriptionCharged(rzpSub: any) {
-    const subscription = await this.subscriptionRepo.findOneBy({ gatewaySubscriptionId: rzpSub.id });
+    const subscription = await this.subscriptionRepo.findOneBy({
+      gatewaySubscriptionId: rzpSub.id,
+    });
     if (!subscription) return;
 
     subscription.status = 'active';
-    subscription.currentPeriodStart = rzpSub.current_start ? new Date(rzpSub.current_start * 1000) : new Date();
-    subscription.currentPeriodEnd = rzpSub.current_end ? new Date(rzpSub.current_end * 1000) : this.addInterval(new Date(), subscription.billingInterval);
+    subscription.currentPeriodStart = rzpSub.current_start
+      ? new Date(rzpSub.current_start * 1000)
+      : new Date();
+    subscription.currentPeriodEnd = rzpSub.current_end
+      ? new Date(rzpSub.current_end * 1000)
+      : this.addInterval(new Date(), subscription.billingInterval);
     subscription.leadUnlocksUsed = 0;
     subscription.leadUnlocksResetAt = new Date();
     await this.subscriptionRepo.save(subscription);
 
     this.logger.log(`Subscription renewed: ${subscription.id}`);
 
-    const provider = await this.providerRepo.findOneBy({ id: subscription.providerId });
+    const provider = await this.providerRepo.findOneBy({
+      id: subscription.providerId,
+    });
     if (provider) {
       const plan = await this.planRepo.findOneBy({ id: subscription.planId });
-      this.notificationDispatch.sendTemplated(provider.userId, 'subscription_renewal_success', {
-        planName: plan?.name || 'Premium',
-      }).catch(() => {});
+      this.notificationDispatch
+        .sendTemplated(provider.userId, 'subscription_renewal_success', {
+          planName: plan?.name || 'Premium',
+        })
+        .catch(() => {});
     }
   }
 
   private async handleSubscriptionCancelled(rzpSub: any) {
-    const subscription = await this.subscriptionRepo.findOneBy({ gatewaySubscriptionId: rzpSub.id });
+    const subscription = await this.subscriptionRepo.findOneBy({
+      gatewaySubscriptionId: rzpSub.id,
+    });
     if (!subscription) return;
 
     subscription.status = 'canceled';
     await this.subscriptionRepo.save(subscription);
     this.logger.log(`Subscription canceled: ${subscription.id}`);
 
-    const provider = await this.providerRepo.findOneBy({ id: subscription.providerId });
+    const provider = await this.providerRepo.findOneBy({
+      id: subscription.providerId,
+    });
     if (provider) {
       const plan = await this.planRepo.findOneBy({ id: subscription.planId });
-      this.notificationDispatch.sendTemplated(provider.userId, 'subscription_cancelled', {
-        planName: plan?.name || 'Premium',
-      }).catch(() => {});
+      this.notificationDispatch
+        .sendTemplated(provider.userId, 'subscription_cancelled', {
+          planName: plan?.name || 'Premium',
+        })
+        .catch(() => {});
     }
   }
 
   private async handleSubscriptionHalted(rzpSub: any) {
-    const subscription = await this.subscriptionRepo.findOneBy({ gatewaySubscriptionId: rzpSub.id });
+    const subscription = await this.subscriptionRepo.findOneBy({
+      gatewaySubscriptionId: rzpSub.id,
+    });
     if (!subscription) return;
 
     subscription.status = 'past_due';
     await this.subscriptionRepo.save(subscription);
-    this.logger.warn(`Subscription halted (payment failed): ${subscription.id}`);
+    this.logger.warn(
+      `Subscription halted (payment failed): ${subscription.id}`,
+    );
 
-    const provider = await this.providerRepo.findOneBy({ id: subscription.providerId });
+    const provider = await this.providerRepo.findOneBy({
+      id: subscription.providerId,
+    });
     if (provider) {
-      this.notificationDispatch.sendTemplated(provider.userId, 'payment_failed', {
-        amount: '',
-      }).catch(() => {});
+      this.notificationDispatch
+        .sendTemplated(provider.userId, 'payment_failed', {
+          amount: '',
+        })
+        .catch(() => {});
     }
   }
 
@@ -1170,17 +1448,22 @@ export class PaymentService {
     // Re-read metadata: verify and webhook can both land, and the first one to
     // fulfil records the created listing id here.
     const fresh = await this.paymentRepo.findOneBy({ id: payment.id });
-    const metadata = (fresh?.metadata ?? payment.metadata ?? {}) as Record<string, any>;
+    const metadata = fresh?.metadata ?? payment.metadata ?? {};
 
     let listingId: string | null = metadata.sponsoredListingId ?? null;
 
     if (listingId) {
       // Legacy in-flight checkout (listing pre-created) or a second fulfil call.
-      await this.sponsoredListingRepo.update(listingId, { isActive: true, approvalStatus: 'approved' });
+      await this.sponsoredListingRepo.update(listingId, {
+        isActive: true,
+        approvalStatus: 'approved',
+      });
     } else {
       const spec = metadata.sponsorship;
       if (!spec) {
-        this.logger.error(`Sponsorship payment ${payment.id} has no listing spec — cannot fulfil`);
+        this.logger.error(
+          `Sponsorship payment ${payment.id} has no listing spec — cannot fulfil`,
+        );
         return;
       }
       const listing = this.sponsoredListingRepo.create({
@@ -1212,12 +1495,16 @@ export class PaymentService {
 
     this.logger.log(`Sponsorship payment fulfilled: ${payment.id}`);
 
-    const provider = await this.providerRepo.findOneBy({ id: payment.providerId });
+    const provider = await this.providerRepo.findOneBy({
+      id: payment.providerId,
+    });
     if (provider) {
-      this.notificationDispatch.sendTemplated(provider.userId, 'payment_success', {
-        amount: `₹${payment.amount}`,
-        description: 'Sponsorship',
-      }).catch(() => {});
+      this.notificationDispatch
+        .sendTemplated(provider.userId, 'payment_success', {
+          amount: `₹${payment.amount}`,
+          description: 'Sponsorship',
+        })
+        .catch(() => {});
     }
   }
 
@@ -1231,13 +1518,19 @@ export class PaymentService {
       await this.recordVoucherRedemption(payment);
     }
 
-    this.logger.log(`Lead unlock payment fulfilled: ${payment.id}, lead: ${leadId}`);
+    this.logger.log(
+      `Lead unlock payment fulfilled: ${payment.id}, lead: ${leadId}`,
+    );
 
-    const provider = await this.providerRepo.findOneBy({ id: payment.providerId });
+    const provider = await this.providerRepo.findOneBy({
+      id: payment.providerId,
+    });
     if (provider) {
-      this.notificationDispatch.sendTemplated(provider.userId, 'lead_unlocked', {
-        customerName: 'a customer',
-      }).catch(() => {});
+      this.notificationDispatch
+        .sendTemplated(provider.userId, 'lead_unlocked', {
+          customerName: 'a customer',
+        })
+        .catch(() => {});
     }
   }
 
@@ -1248,12 +1541,16 @@ export class PaymentService {
 
     this.logger.log(`Deal creation payment fulfilled: ${payment.id}`);
 
-    const provider = await this.providerRepo.findOneBy({ id: payment.providerId });
+    const provider = await this.providerRepo.findOneBy({
+      id: payment.providerId,
+    });
     if (provider) {
-      this.notificationDispatch.sendTemplated(provider.userId, 'payment_success', {
-        amount: `₹${payment.amount}`,
-        description: 'Deal Creation',
-      }).catch(() => {});
+      this.notificationDispatch
+        .sendTemplated(provider.userId, 'payment_success', {
+          amount: `₹${payment.amount}`,
+          description: 'Deal Creation',
+        })
+        .catch(() => {});
     }
   }
 
@@ -1261,24 +1558,40 @@ export class PaymentService {
   // Voucher Logic
   // ──────────────────────────────────────────
 
-  async validateVoucher(code: string, purchaseType: string, amount: number, providerId?: string) {
+  async validateVoucher(
+    code: string,
+    purchaseType: string,
+    amount: number,
+    providerId?: string,
+  ) {
     // Admin kill-switch — when vouchers are disabled, reject all codes (defense
     // in depth; the UI also hides the voucher inputs).
-    const vouchersEnabled = (await this.getSetting('vouchers_enabled', 'true')) === 'true';
-    if (!vouchersEnabled) return { valid: false, message: 'Vouchers are currently unavailable' };
+    const vouchersEnabled =
+      (await this.getSetting('vouchers_enabled', 'true')) === 'true';
+    if (!vouchersEnabled)
+      return { valid: false, message: 'Vouchers are currently unavailable' };
 
     // Razorpay subscriptions always charge the plan price — a one-off discount
     // can't be passed through, so accepting a code would promise a saving that never happens.
     if (purchaseType === 'subscription') {
-      return { valid: false, message: "Vouchers can't be used on subscriptions yet" };
+      return {
+        valid: false,
+        message: "Vouchers can't be used on subscriptions yet",
+      };
     }
 
-    const voucher = await this.voucherRepo.findOneBy({ code: code.toUpperCase(), isActive: true });
+    const voucher = await this.voucherRepo.findOneBy({
+      code: code.toUpperCase(),
+      isActive: true,
+    });
     if (!voucher) return { valid: false, message: 'Invalid voucher code' };
 
     const now = new Date();
     if (now < voucher.validFrom || now > voucher.validUntil) {
-      return { valid: false, message: 'Voucher has expired or is not yet active' };
+      return {
+        valid: false,
+        message: 'Voucher has expired or is not yet active',
+      };
     }
 
     if (voucher.maxUses !== null && voucher.usedCount >= voucher.maxUses) {
@@ -1286,11 +1599,20 @@ export class PaymentService {
     }
 
     if (voucher.applicableTo && !voucher.applicableTo.includes(purchaseType)) {
-      return { valid: false, message: 'Voucher is not applicable to this purchase type' };
+      return {
+        valid: false,
+        message: 'Voucher is not applicable to this purchase type',
+      };
     }
 
-    if (voucher.minPurchaseAmount !== null && amount < Number(voucher.minPurchaseAmount)) {
-      return { valid: false, message: `Minimum purchase amount is ₹${voucher.minPurchaseAmount}` };
+    if (
+      voucher.minPurchaseAmount !== null &&
+      amount < Number(voucher.minPurchaseAmount)
+    ) {
+      return {
+        valid: false,
+        message: `Minimum purchase amount is ₹${voucher.minPurchaseAmount}`,
+      };
     }
 
     if (providerId && voucher.maxUsesPerProvider !== null) {
@@ -1298,7 +1620,11 @@ export class PaymentService {
         where: { voucherId: voucher.id, providerId },
       });
       if (providerUses >= voucher.maxUsesPerProvider) {
-        return { valid: false, message: 'You have already used this voucher the maximum number of times' };
+        return {
+          valid: false,
+          message:
+            'You have already used this voucher the maximum number of times',
+        };
       }
     }
 
@@ -1316,8 +1642,18 @@ export class PaymentService {
     };
   }
 
-  private async applyVoucher(code: string, purchaseType: string, amount: number, providerId: string) {
-    const result = await this.validateVoucher(code, purchaseType, amount, providerId);
+  private async applyVoucher(
+    code: string,
+    purchaseType: string,
+    amount: number,
+    providerId: string,
+  ) {
+    const result = await this.validateVoucher(
+      code,
+      purchaseType,
+      amount,
+      providerId,
+    );
     if (!result.valid) {
       throw new BadRequestException(result.message);
     }
@@ -1348,7 +1684,10 @@ export class PaymentService {
 
   /** The voucher covered the whole price: mark paid without a gateway and fulfil. */
   private async completeVoucherOnlyPayment(payment: Payment) {
-    await this.paymentRepo.update(payment.id, { status: 'succeeded', paymentGateway: 'voucher' });
+    await this.paymentRepo.update(payment.id, {
+      status: 'succeeded',
+      paymentGateway: 'voucher',
+    });
     payment.status = 'succeeded';
     payment.paymentGateway = 'voucher';
     await this.fulfillPayment(payment);
@@ -1370,16 +1709,22 @@ export class PaymentService {
     await this.voucherRepo.increment({ id: payment.voucherId }, 'usedCount', 1);
 
     const voucher = await this.voucherRepo.findOneBy({ id: payment.voucherId });
-    const provider = await this.providerRepo.findOneBy({ id: payment.providerId });
+    const provider = await this.providerRepo.findOneBy({
+      id: payment.providerId,
+    });
     if (voucher && provider) {
-      const discount = payment.discountAmount ? `₹${payment.discountAmount}` : 'a discount';
-      this.notificationDispatch.sendTemplated(
-        provider.userId,
-        'voucher_redeemed',
-        { voucherCode: voucher.code, discount },
-        undefined,
-        'provider',
-      ).catch(() => {});
+      const discount = payment.discountAmount
+        ? `₹${payment.discountAmount}`
+        : 'a discount';
+      this.notificationDispatch
+        .sendTemplated(
+          provider.userId,
+          'voucher_redeemed',
+          { voucherCode: voucher.code, discount },
+          undefined,
+          'provider',
+        )
+        .catch(() => {});
     }
   }
 
@@ -1387,11 +1732,15 @@ export class PaymentService {
   // Deal Creation Checkout
   // ──────────────────────────────────────────
 
-  async createDealCreationCheckout(userId: string, dto: CreateDealCreationCheckoutDto) {
+  async createDealCreationCheckout(
+    userId: string,
+    dto: CreateDealCreationCheckoutDto,
+  ) {
     const provider = await this.providerRepo.findOneBy({ userId });
     if (!provider) throw new NotFoundException('Provider not found');
 
-    const monetizationEnabled = (await this.getSetting('deals_monetization_enabled', 'false')) === 'true';
+    const monetizationEnabled =
+      (await this.getSetting('deals_monetization_enabled', 'false')) === 'true';
     if (!monetizationEnabled) {
       return { requiresPayment: false, method: 'free' };
     }
@@ -1422,17 +1771,25 @@ export class PaymentService {
     }
 
     const isWomenLedApprovedDeal = provider.womenLedStatus === 'approved';
-    const dealQuotaKey = isWomenLedApprovedDeal ? 'women_led_free_deals_lifetime' : 'free_deal_quota_lifetime';
+    const dealQuotaKey = isWomenLedApprovedDeal
+      ? 'women_led_free_deals_lifetime'
+      : 'free_deal_quota_lifetime';
     const dealQuotaDefault = isWomenLedApprovedDeal ? '5' : '3';
     const freeQuotaStr = await this.getSetting(dealQuotaKey, dealQuotaDefault);
     const freeQuota = parseInt(freeQuotaStr, 10);
 
     if (provider.freeDealsCreated < freeQuota) {
-      return { requiresPayment: false, method: 'free_quota', freeRemaining: freeQuota - provider.freeDealsCreated };
+      return {
+        requiresPayment: false,
+        method: 'free_quota',
+        freeRemaining: freeQuota - provider.freeDealsCreated,
+      };
     }
 
     const isGrowthSubscriber = subscription?.plan?.slug === 'growth';
-    const priceKey = isGrowthSubscriber ? 'deal_creation_price_discounted' : 'deal_creation_price';
+    const priceKey = isGrowthSubscriber
+      ? 'deal_creation_price_discounted'
+      : 'deal_creation_price';
     const defaultPrice = isGrowthSubscriber ? '79' : '149';
     const priceStr = await this.getSetting(priceKey, defaultPrice);
     let amount = parseFloat(priceStr);
@@ -1440,7 +1797,12 @@ export class PaymentService {
     let voucherId: string | null = null;
 
     if (dto.voucherCode) {
-      const result = await this.applyVoucher(dto.voucherCode, 'deal_creation', amount, provider.id);
+      const result = await this.applyVoucher(
+        dto.voucherCode,
+        'deal_creation',
+        amount,
+        provider.id,
+      );
       amount = result.finalAmount;
       discountAmount = result.discountAmount;
       voucherId = result.voucherId;
@@ -1462,14 +1824,21 @@ export class PaymentService {
     // Voucher covered the price — Razorpay can't take an order under ₹1, so fulfil now.
     if (voucherId && amount < 1) {
       await this.completeVoucherOnlyPayment(payment);
-      return { requiresPayment: false, method: 'voucher', paymentId: payment.id };
+      return {
+        requiresPayment: false,
+        method: 'voucher',
+        paymentId: payment.id,
+      };
     }
 
     // iOS → Apple IAP: return the deal-creation Apple product id for StoreKit
     // instead of a Razorpay order. Fulfilment happens in verifyAppleConsumable.
     if (dto.gateway === 'apple') {
       const appleProductId = await this.resolveAppleProductId('deal_creation');
-      if (!appleProductId) throw new BadRequestException('Apple product not configured for deal creation');
+      if (!appleProductId)
+        throw new BadRequestException(
+          'Apple product not configured for deal creation',
+        );
       await this.paymentRepo.update(payment.id, {
         metadata: { ...payment.metadata, appleProductId } as any,
         status: 'processing',
@@ -1524,19 +1893,26 @@ export class PaymentService {
     const provider = await this.providerRepo.findOneBy({ userId });
     if (!provider) throw new NotFoundException('Provider not found');
 
-    const monetizationEnabled = (await this.getSetting('leads_monetization_enabled', 'false')) === 'true';
+    const monetizationEnabled =
+      (await this.getSetting('leads_monetization_enabled', 'false')) === 'true';
 
     const now = new Date();
     if (provider.freeLeadsResetAt) {
       const resetDate = new Date(provider.freeLeadsResetAt);
-      if (now.getMonth() !== resetDate.getMonth() || now.getFullYear() !== resetDate.getFullYear()) {
+      if (
+        now.getMonth() !== resetDate.getMonth() ||
+        now.getFullYear() !== resetDate.getFullYear()
+      ) {
         provider.freeLeadsUsedThisMonth = 0;
         provider.freeLeadsResetAt = now;
         await this.providerRepo.save(provider);
       }
     }
 
-    const freeQuota = parseInt(await this.getSetting('free_lead_quota_monthly', '5'), 10);
+    const freeQuota = parseInt(
+      await this.getSetting('free_lead_quota_monthly', '5'),
+      10,
+    );
 
     const subscription = await this.subscriptionRepo.findOne({
       where: { providerId: provider.id, status: 'active' },
@@ -1554,7 +1930,9 @@ export class PaymentService {
       freeQuota,
       freeUsedThisMonth: provider.freeLeadsUsedThisMonth,
       freeRemaining: Math.max(0, freeQuota - provider.freeLeadsUsedThisMonth),
-      subscriptionCreditsRemaining: isProSubscriber ? -1 : Math.max(0, subscriptionCreditsRemaining),
+      subscriptionCreditsRemaining: isProSubscriber
+        ? -1
+        : Math.max(0, subscriptionCreditsRemaining),
       isProSubscriber,
       isGrowthSubscriber,
       currentPlan: subscription?.plan?.slug || 'free',
@@ -1569,8 +1947,12 @@ export class PaymentService {
     const provider = await this.providerRepo.findOneBy({ userId });
     if (!provider) throw new NotFoundException('Provider not found');
 
-    const monetizationEnabled = (await this.getSetting('deals_monetization_enabled', 'false')) === 'true';
-    const freeQuota = parseInt(await this.getSetting('free_deal_quota_lifetime', '3'), 10);
+    const monetizationEnabled =
+      (await this.getSetting('deals_monetization_enabled', 'false')) === 'true';
+    const freeQuota = parseInt(
+      await this.getSetting('free_deal_quota_lifetime', '3'),
+      10,
+    );
 
     const subscription = await this.subscriptionRepo.findOne({
       where: { providerId: provider.id, status: 'active' },
@@ -1645,19 +2027,56 @@ export class PaymentService {
   // Admin Methods
   // ──────────────────────────────────────────
 
-  async getAdminPayments(filters: { page?: number; limit?: number; status?: PaymentStatus; type?: string; search?: string; dateFrom?: string; dateTo?: string; gateway?: string }) {
-    const { page = 1, limit = 20, status, type, search, dateFrom, dateTo, gateway } = filters;
-    const qb = this.paymentRepo.createQueryBuilder('p')
-      .leftJoinAndSelect('p.provider', 'provider')
-      .orderBy('p.createdAt', 'DESC')
-      .take(limit)
-      .skip((page - 1) * limit);
+  async getAdminPayments(query: AdminPaymentListQueryDto) {
+    const {
+      status,
+      type,
+      search,
+      dateFrom,
+      dateTo,
+      gateway,
+      amountMin,
+      amountMax,
+      hasVoucher,
+      city,
+      providerId,
+      sort,
+    } = query;
+    const page = Math.max(1, query.page || 1);
+    const limit = Math.min(100, Math.max(1, query.limit || 20));
+
+    const qb = this.paymentRepo
+      .createQueryBuilder('p')
+      .leftJoinAndSelect('p.provider', 'provider');
 
     if (status) qb.andWhere('p.status = :status', { status });
     if (type) qb.andWhere('p.type = :type', { type });
     if (gateway) qb.andWhere('p.payment_gateway = :gateway', { gateway });
-    if (dateFrom) qb.andWhere('p.created_at >= :dateFrom', { dateFrom });
-    if (dateTo) qb.andWhere('p.created_at <= :dateTo', { dateTo: `${dateTo}T23:59:59.999Z` });
+    if (providerId) qb.andWhere('p.provider_id = :providerId', { providerId });
+    // Exact match on the normalised city, so "Pune" doesn't also catch "Pune Cantonment".
+    if (city)
+      qb.andWhere('lower(trim(provider.city)) = lower(trim(:city))', { city });
+    if (amountMin !== undefined)
+      qb.andWhere('p.amount >= :amountMin', { amountMin });
+    if (amountMax !== undefined)
+      qb.andWhere('p.amount <= :amountMax', { amountMax });
+    if (hasVoucher === 'true')
+      qb.andWhere('(p.voucher_id IS NOT NULL OR p.discount_amount > 0)');
+    else if (hasVoucher === 'false')
+      qb.andWhere(
+        'p.voucher_id IS NULL AND COALESCE(p.discount_amount, 0) = 0',
+      );
+    // Dates are calendar days in IST, the way the admin reads them.
+    if (dateFrom)
+      qb.andWhere(
+        `(p.created_at AT TIME ZONE 'Asia/Kolkata')::date >= :dateFrom::date`,
+        { dateFrom },
+      );
+    if (dateTo)
+      qb.andWhere(
+        `(p.created_at AT TIME ZONE 'Asia/Kolkata')::date <= :dateTo::date`,
+        { dateTo },
+      );
     if (search) {
       qb.andWhere(
         '(provider.brand_name ILIKE :search OR p.gateway_payment_id ILIKE :search OR p.gateway_order_id ILIKE :search OR CAST(p.id AS TEXT) ILIKE :search)',
@@ -1665,8 +2084,300 @@ export class PaymentService {
       );
     }
 
+    if (sort === 'oldest') qb.orderBy('p.createdAt', 'ASC');
+    else if (sort === 'amount_desc')
+      qb.orderBy('p.amount', 'DESC').addOrderBy('p.createdAt', 'DESC');
+    else if (sort === 'amount_asc')
+      qb.orderBy('p.amount', 'ASC').addOrderBy('p.createdAt', 'DESC');
+    else qb.orderBy('p.createdAt', 'DESC');
+    qb.skip((page - 1) * limit).take(limit);
+
     const [payments, total] = await qb.getManyAndCount();
-    return { payments, total, page, limit, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
+    return {
+      payments,
+      items: payments,
+      total,
+      page,
+      limit,
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) || 1 },
+    };
+  }
+
+  /** Dropdown values and quick-segment counts for the admin payment list. */
+  async getPaymentFilterOptions() {
+    const [cities, gateways, [counts]] = await Promise.all([
+      this.dataSource.query<{ name: string; count: number }[]>(
+        `SELECT initcap(trim(pr.city)) AS name, count(*)::int AS count
+         FROM payments p JOIN providers pr ON pr.id = p.provider_id
+         WHERE pr.city IS NOT NULL AND trim(pr.city) <> ''
+         GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 100`,
+      ),
+      this.dataSource.query<{ value: string; count: number }[]>(
+        `SELECT p.payment_gateway AS value, count(*)::int AS count
+         FROM payments p GROUP BY 1 ORDER BY 2 DESC, 1`,
+      ),
+      this.dataSource.query<Record<string, number>[]>(
+        `SELECT
+           count(*)::int AS total,
+           count(*) FILTER (WHERE p.status = 'succeeded')::int AS succeeded,
+           count(*) FILTER (WHERE p.status = 'failed')::int AS failed,
+           count(*) FILTER (WHERE p.status = 'refunded')::int AS refunded,
+           count(*) FILTER (WHERE (p.created_at AT TIME ZONE 'Asia/Kolkata')::date = (now() AT TIME ZONE 'Asia/Kolkata')::date)::int AS today,
+           count(*) FILTER (WHERE date_trunc('month', p.created_at AT TIME ZONE 'Asia/Kolkata') = date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata'))::int AS "thisMonth",
+           count(*) FILTER (WHERE p.voucher_id IS NOT NULL OR p.discount_amount > 0)::int AS "withVoucher"
+         FROM payments p`,
+      ),
+    ]);
+    return { cities, gateways, counts };
+  }
+
+  // ─── Revenue (filtered) ─────────────────────────────────────
+
+  /** Today's date in IST as YYYY-MM-DD. */
+  private istToday(): string {
+    return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  }
+
+  /** `ymd` shifted by `days` calendar days (UTC arithmetic on a date-only value). */
+  private shiftYmd(ymd: string, days: number): string {
+    const d = new Date(`${ymd}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + days);
+    return d.toISOString().slice(0, 10);
+  }
+
+  private ymdDiffDays(from: string, to: string): number {
+    return Math.round(
+      (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) /
+        86_400_000,
+    );
+  }
+
+  /**
+   * WHERE clause + positional params shared by every revenue query, so each
+   * breakdown sees exactly the same set of payments. `p` is payments and `pr`
+   * the LEFT JOINed providers row.
+   */
+  private revenueWhere(f: {
+    from: string;
+    to: string;
+    types?: string[];
+    gateway?: string;
+    city?: string;
+    planId?: string;
+  }) {
+    const params: unknown[] = [f.from, f.to];
+    const where = [
+      `(p.created_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN $1::date AND $2::date`,
+    ];
+    if (f.types?.length) {
+      params.push(f.types);
+      where.push(`p.type::text = ANY($${params.length}::text[])`);
+    }
+    if (f.gateway) {
+      params.push(f.gateway);
+      where.push(`p.payment_gateway = $${params.length}`);
+    }
+    if (f.city) {
+      params.push(f.city);
+      where.push(`lower(trim(pr.city)) = lower(trim($${params.length}))`);
+    }
+    if (f.planId) {
+      params.push(f.planId);
+      where.push(
+        `EXISTS (SELECT 1 FROM subscriptions s WHERE s.id::text = p.metadata->>'subscriptionId' AND s.plan_id = $${params.length}::uuid)`,
+      );
+    }
+    return { where: where.join(' AND '), params };
+  }
+
+  private async revenueTotals(
+    f: Parameters<PaymentService['revenueWhere']>[0],
+  ) {
+    const { where, params } = this.revenueWhere(f);
+    const [row] = await this.dataSource.query<
+      { revenue: number; transactions: number; refunds: number }[]
+    >(
+      `SELECT
+         COALESCE(SUM(p.amount) FILTER (WHERE p.status = 'succeeded'), 0)::float AS revenue,
+         count(*) FILTER (WHERE p.status = 'succeeded')::int AS transactions,
+         COALESCE(SUM(p.amount) FILTER (WHERE p.status = 'refunded'), 0)::float AS refunds
+       FROM payments p LEFT JOIN providers pr ON pr.id = p.provider_id
+       WHERE ${where}`,
+      params,
+    );
+    return row;
+  }
+
+  async getRevenue(query: AdminRevenueQueryDto) {
+    const to = query.to ?? this.istToday();
+    const from = query.from ?? this.shiftYmd(to, -29);
+    if (from > to) throw new BadRequestException('from must not be after to');
+    const days = this.ymdDiffDays(from, to) + 1;
+    const granularity: RevenueGranularity =
+      query.granularity ??
+      (days <= 31 ? 'day' : days <= 120 ? 'week' : 'month');
+    const filters = {
+      from,
+      to,
+      types: query.types,
+      gateway: query.gateway,
+      city: query.city,
+      planId: query.planId,
+    };
+    const { where, params } = this.revenueWhere(filters);
+    const FROM = `FROM payments p LEFT JOIN providers pr ON pr.id = p.provider_id`;
+    const SUCCEEDED = `${where} AND p.status = 'succeeded'`;
+
+    const seriesParams = [...params, granularity];
+    const g = `$${seriesParams.length}::text`;
+
+    const [
+      totals,
+      seriesRows,
+      byType,
+      byGateway,
+      byCity,
+      byPlan,
+      topProviders,
+      [subs],
+      previous,
+    ] = await Promise.all([
+      this.revenueTotals(filters),
+      // Every bucket in the range, zero-filled, so charts don't skip quiet days.
+      this.dataSource.query<
+        {
+          bucket: string;
+          type: string | null;
+          transactions: number | null;
+          revenue: number | null;
+        }[]
+      >(
+        `WITH buckets AS (
+           SELECT b::date AS bucket
+           FROM generate_series(date_trunc(${g}, $1::date::timestamp), date_trunc(${g}, $2::date::timestamp), ('1 ' || ${g})::interval) b
+         ),
+         agg AS (
+           SELECT date_trunc(${g}, p.created_at AT TIME ZONE 'Asia/Kolkata')::date AS bucket,
+                  p.type::text AS type, count(*)::int AS transactions, COALESCE(SUM(p.amount), 0)::float AS revenue
+           ${FROM} WHERE ${SUCCEEDED}
+           GROUP BY 1, 2
+         )
+         SELECT to_char(buckets.bucket, 'YYYY-MM-DD') AS bucket, agg.type, agg.transactions, agg.revenue
+         FROM buckets LEFT JOIN agg ON agg.bucket = buckets.bucket
+         ORDER BY buckets.bucket`,
+        seriesParams,
+      ),
+      this.dataSource.query<{ type: string; count: number; revenue: number }[]>(
+        `SELECT p.type::text AS type, count(*)::int AS count, COALESCE(SUM(p.amount), 0)::float AS revenue
+         ${FROM} WHERE ${SUCCEEDED} GROUP BY 1 ORDER BY 3 DESC`,
+        params,
+      ),
+      this.dataSource.query<
+        { gateway: string; count: number; revenue: number }[]
+      >(
+        `SELECT p.payment_gateway AS gateway, count(*)::int AS count, COALESCE(SUM(p.amount), 0)::float AS revenue
+         ${FROM} WHERE ${SUCCEEDED} GROUP BY 1 ORDER BY 3 DESC`,
+        params,
+      ),
+      this.dataSource.query<{ city: string; count: number; revenue: number }[]>(
+        `SELECT COALESCE(NULLIF(initcap(trim(pr.city)), ''), 'Unknown') AS city, count(*)::int AS count, COALESCE(SUM(p.amount), 0)::float AS revenue
+         ${FROM} WHERE ${SUCCEEDED} GROUP BY 1 ORDER BY 3 DESC LIMIT 10`,
+        params,
+      ),
+      this.dataSource.query<
+        {
+          planId: string;
+          planName: string;
+          planSlug: string;
+          count: number;
+          revenue: number;
+        }[]
+      >(
+        `SELECT pl.id AS "planId", pl.name AS "planName", pl.slug AS "planSlug", count(*)::int AS count, COALESCE(SUM(p.amount), 0)::float AS revenue
+         ${FROM}
+         JOIN subscriptions s ON s.id::text = p.metadata->>'subscriptionId'
+         JOIN subscription_plans pl ON pl.id = s.plan_id
+         WHERE ${SUCCEEDED} GROUP BY pl.id, pl.name, pl.slug ORDER BY 5 DESC`,
+        params,
+      ),
+      this.dataSource.query<
+        {
+          providerId: string;
+          brandName: string;
+          city: string;
+          count: number;
+          revenue: number;
+        }[]
+      >(
+        `SELECT pr.id AS "providerId", pr.brand_name AS "brandName", pr.city, count(*)::int AS count, COALESCE(SUM(p.amount), 0)::float AS revenue
+         ${FROM} WHERE ${SUCCEEDED} AND pr.id IS NOT NULL
+         GROUP BY pr.id, pr.brand_name, pr.city ORDER BY 5 DESC LIMIT 10`,
+        params,
+      ),
+      // Point-in-time, unfiltered: the same numbers getRevenueStats reports.
+      this.dataSource.query<{ activeSubscriptions: number; mrr: number }[]>(
+        `SELECT count(*)::int AS "activeSubscriptions",
+                COALESCE(SUM(CASE WHEN s.billing_interval = 'yearly' THEN pl.price_yearly / 12 ELSE pl.price_monthly END), 0)::float AS mrr
+         FROM subscriptions s JOIN subscription_plans pl ON pl.id = s.plan_id
+         WHERE s.status = 'active'`,
+      ),
+      query.compare === 'true'
+        ? (async () => {
+            const prevTo = this.shiftYmd(from, -1);
+            const prevFrom = this.shiftYmd(prevTo, -(days - 1));
+            const t = await this.revenueTotals({
+              ...filters,
+              from: prevFrom,
+              to: prevTo,
+            });
+            return { from: prevFrom, to: prevTo, ...t };
+          })()
+        : Promise.resolve(undefined),
+    ]);
+
+    const seriesByBucket = new Map<
+      string,
+      {
+        bucket: string;
+        revenue: number;
+        transactions: number;
+        byType: Record<string, number>;
+      }
+    >();
+    for (const row of seriesRows) {
+      let entry = seriesByBucket.get(row.bucket);
+      if (!entry) {
+        entry = { bucket: row.bucket, revenue: 0, transactions: 0, byType: {} };
+        seriesByBucket.set(row.bucket, entry);
+      }
+      if (row.type) {
+        entry.revenue += row.revenue ?? 0;
+        entry.transactions += row.transactions ?? 0;
+        entry.byType[row.type] =
+          (entry.byType[row.type] ?? 0) + (row.revenue ?? 0);
+      }
+    }
+
+    return {
+      range: { from, to, granularity },
+      totals: {
+        revenue: totals.revenue,
+        transactions: totals.transactions,
+        avgOrder: totals.transactions
+          ? totals.revenue / totals.transactions
+          : 0,
+        refunds: totals.refunds,
+        mrr: subs.mrr,
+        activeSubscriptions: subs.activeSubscriptions,
+      },
+      ...(previous ? { previous } : {}),
+      series: [...seriesByBucket.values()],
+      byType,
+      byGateway,
+      byCity,
+      byPlan,
+      topProviders,
+    };
   }
 
   async getRevenueStats() {
@@ -1679,8 +2390,14 @@ export class PaymentService {
       .groupBy('p.type')
       .getRawMany();
 
-    const totalRevenue = result.reduce((sum, r) => sum + Number(r.totalRevenue), 0);
-    const totalTransactions = result.reduce((sum, r) => sum + Number(r.count), 0);
+    const totalRevenue = result.reduce(
+      (sum, r) => sum + Number(r.totalRevenue),
+      0,
+    );
+    const totalTransactions = result.reduce(
+      (sum, r) => sum + Number(r.count),
+      0,
+    );
 
     const activeSubscriptions = await this.subscriptionRepo
       .createQueryBuilder('s')
@@ -1689,9 +2406,10 @@ export class PaymentService {
       .getMany();
 
     const mrr = activeSubscriptions.reduce((sum, s) => {
-      const price = s.billingInterval === 'yearly'
-        ? Number(s.plan.priceYearly) / 12
-        : Number(s.plan.priceMonthly);
+      const price =
+        s.billingInterval === 'yearly'
+          ? Number(s.plan.priceYearly) / 12
+          : Number(s.plan.priceMonthly);
       return sum + price;
     }, 0);
 
@@ -1715,8 +2433,14 @@ export class PaymentService {
       .groupBy('p.type')
       .getRawMany();
 
-    const totalRevenue = breakdown.reduce((sum, r) => sum + Number(r.totalRevenue), 0);
-    const totalTransactions = breakdown.reduce((sum, r) => sum + Number(r.count), 0);
+    const totalRevenue = breakdown.reduce(
+      (sum, r) => sum + Number(r.totalRevenue),
+      0,
+    );
+    const totalTransactions = breakdown.reduce(
+      (sum, r) => sum + Number(r.count),
+      0,
+    );
 
     // ─── Plans Revenue Model ─────────────────────────────────
     const activeSubscriptions = await this.subscriptionRepo
@@ -1726,9 +2450,10 @@ export class PaymentService {
       .getMany();
 
     const mrr = activeSubscriptions.reduce((sum, s) => {
-      const price = s.billingInterval === 'yearly'
-        ? Number(s.plan.priceYearly) / 12
-        : Number(s.plan.priceMonthly);
+      const price =
+        s.billingInterval === 'yearly'
+          ? Number(s.plan.priceYearly) / 12
+          : Number(s.plan.priceMonthly);
       return sum + price;
     }, 0);
 
@@ -1741,7 +2466,11 @@ export class PaymentService {
       .addSelect('plan.slug', 'planSlug')
       .addSelect('COUNT(*)', 'count')
       .addSelect('COALESCE(SUM(p.amount), 0)', 'revenue')
-      .innerJoin('subscriptions', 's', "p.metadata->>'subscriptionId' = CAST(s.id AS TEXT)")
+      .innerJoin(
+        'subscriptions',
+        's',
+        "p.metadata->>'subscriptionId' = CAST(s.id AS TEXT)",
+      )
       .innerJoin('subscription_plans', 'plan', 's.plan_id = plan.id')
       .where('p.status = :status', { status: 'succeeded' })
       .andWhere('p.type = :type', { type: 'subscription' })
@@ -1849,13 +2578,19 @@ export class PaymentService {
       .createQueryBuilder('p')
       .select('COALESCE(SUM(p.amount), 0)', 'revenue')
       .where('p.status = :status', { status: 'succeeded' })
-      .andWhere('p.created_at >= :start', { start: startOfLastMonth.toISOString() })
+      .andWhere('p.created_at >= :start', {
+        start: startOfLastMonth.toISOString(),
+      })
       .andWhere('p.created_at < :end', { end: startOfMonth.toISOString() })
       .getRawOne();
 
-    const planTotalRevenue = breakdown.find(b => b.type === 'subscription')
-      ? Number(breakdown.find(b => b.type === 'subscription').totalRevenue) : 0;
-    const dealTotalRevenue = dealBreakdown.reduce((sum, r) => sum + Number(r.revenue), 0);
+    const planTotalRevenue = breakdown.find((b) => b.type === 'subscription')
+      ? Number(breakdown.find((b) => b.type === 'subscription').totalRevenue)
+      : 0;
+    const dealTotalRevenue = dealBreakdown.reduce(
+      (sum, r) => sum + Number(r.revenue),
+      0,
+    );
 
     return {
       overview: {
@@ -1888,58 +2623,158 @@ export class PaymentService {
     };
   }
 
-  async getAdminSubscriptions(filters: {
-    page?: number;
-    limit?: number;
-    status?: string;
-    search?: string;
-    planId?: string;
-    billingInterval?: string;
-    dateFrom?: string;
-    dateTo?: string;
-  }) {
-    const { page = 1, limit = 25, status, search, planId, billingInterval, dateFrom, dateTo } = filters;
-    const qb = this.subscriptionRepo.createQueryBuilder('s')
+  /**
+   * "Renewing": active or trialing, not set to cancel, and the current period
+   * ends within the window. Shared by the list filter and the renews7d count.
+   */
+  private static readonly SUB_RENEWING_SQL = `s.status IN ('active', 'trialing') AND s.cancel_at_period_end = false AND s.current_period_end >= now() AND s.current_period_end <= now() + make_interval(days => :renewingWithinDays)`;
+
+  async getAdminSubscriptions(query: AdminSubscriptionListQueryDto) {
+    const {
+      status,
+      search,
+      planId,
+      billingInterval,
+      dateFrom,
+      dateTo,
+      gateway,
+      renewingWithinDays,
+      cancelAtPeriodEnd,
+      periodEndFrom,
+      periodEndTo,
+      city,
+      sort,
+    } = query;
+    const page = Math.max(1, query.page || 1);
+    const limit = Math.min(100, Math.max(1, query.limit || 25));
+
+    const qb = this.subscriptionRepo
+      .createQueryBuilder('s')
       .leftJoinAndSelect('s.plan', 'plan')
-      .leftJoinAndSelect('s.provider', 'provider')
-      .orderBy('s.createdAt', 'DESC')
-      .take(limit)
-      .skip((page - 1) * limit);
+      .leftJoinAndSelect('s.provider', 'provider');
 
     if (status) qb.andWhere('s.status = :status', { status });
-    if (planId) qb.andWhere('s.planId = :planId', { planId });
-    if (billingInterval) qb.andWhere('s.billingInterval = :billingInterval', { billingInterval });
-    if (dateFrom) qb.andWhere('s.createdAt >= :dateFrom', { dateFrom });
-    if (dateTo) qb.andWhere('s.createdAt <= :dateTo', { dateTo: `${dateTo}T23:59:59.999Z` });
+    if (planId) qb.andWhere('s.plan_id = :planId', { planId });
+    if (billingInterval)
+      qb.andWhere('s.billing_interval = :billingInterval', { billingInterval });
+    if (gateway) qb.andWhere('s.payment_gateway = :gateway', { gateway });
+    if (cancelAtPeriodEnd === 'true')
+      qb.andWhere('s.cancel_at_period_end = true');
+    else if (cancelAtPeriodEnd === 'false')
+      qb.andWhere('s.cancel_at_period_end = false');
+    if (renewingWithinDays !== undefined)
+      qb.andWhere(PaymentService.SUB_RENEWING_SQL, { renewingWithinDays });
+    if (city)
+      qb.andWhere('lower(trim(provider.city)) = lower(trim(:city))', { city });
+    // Dates are calendar days in IST, the way the admin reads them.
+    if (dateFrom)
+      qb.andWhere(
+        `(s.created_at AT TIME ZONE 'Asia/Kolkata')::date >= :dateFrom::date`,
+        { dateFrom },
+      );
+    if (dateTo)
+      qb.andWhere(
+        `(s.created_at AT TIME ZONE 'Asia/Kolkata')::date <= :dateTo::date`,
+        { dateTo },
+      );
+    if (periodEndFrom)
+      qb.andWhere(
+        `(s.current_period_end AT TIME ZONE 'Asia/Kolkata')::date >= :periodEndFrom::date`,
+        { periodEndFrom },
+      );
+    if (periodEndTo)
+      qb.andWhere(
+        `(s.current_period_end AT TIME ZONE 'Asia/Kolkata')::date <= :periodEndTo::date`,
+        { periodEndTo },
+      );
     if (search) {
       qb.andWhere(
-        '(provider.brand_name ILIKE :search OR s.gatewaySubscriptionId ILIKE :search OR CAST(s.id AS TEXT) ILIKE :search)',
+        '(provider.brand_name ILIKE :search OR s.gateway_subscription_id ILIKE :search OR CAST(s.id AS TEXT) ILIKE :search)',
         { search: `%${search}%` },
       );
     }
 
+    if (sort === 'period_end_asc')
+      qb.orderBy('s.currentPeriodEnd', 'ASC').addOrderBy('s.createdAt', 'DESC');
+    else if (sort === 'period_end_desc')
+      qb.orderBy('s.currentPeriodEnd', 'DESC').addOrderBy(
+        's.createdAt',
+        'DESC',
+      );
+    else qb.orderBy('s.createdAt', 'DESC');
+    qb.skip((page - 1) * limit).take(limit);
+
     const [subscriptions, total] = await qb.getManyAndCount();
     return {
       subscriptions,
+      items: subscriptions,
       total,
       meta: { total, page, limit, totalPages: Math.ceil(total / limit) || 1 },
     };
   }
 
+  /** Dropdown values and quick-segment counts for the admin subscription list. */
+  async getSubscriptionFilterOptions() {
+    const renewing7d = PaymentService.SUB_RENEWING_SQL.replace(
+      ':renewingWithinDays',
+      '7',
+    );
+    const [cities, plans, [counts]] = await Promise.all([
+      this.dataSource.query<{ name: string; count: number }[]>(
+        `SELECT initcap(trim(pr.city)) AS name, count(*)::int AS count
+         FROM subscriptions s JOIN providers pr ON pr.id = s.provider_id
+         WHERE pr.city IS NOT NULL AND trim(pr.city) <> ''
+         GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 100`,
+      ),
+      // Every plan, including ones with no subscribers, so the dropdown is complete.
+      this.dataSource.query<{ id: string; name: string; count: number }[]>(
+        `SELECT pl.id, pl.name, count(s.id)::int AS count
+         FROM subscription_plans pl LEFT JOIN subscriptions s ON s.plan_id = pl.id
+         GROUP BY pl.id, pl.name, pl.sort_order ORDER BY pl.sort_order, pl.name`,
+      ),
+      this.dataSource.query<Record<string, number>[]>(
+        `SELECT
+           count(*)::int AS total,
+           count(*) FILTER (WHERE s.status = 'active')::int AS active,
+           count(*) FILTER (WHERE s.status = 'trialing')::int AS trialing,
+           count(*) FILTER (WHERE s.status = 'past_due')::int AS "pastDue",
+           count(*) FILTER (WHERE s.status = 'active' AND s.cancel_at_period_end)::int AS cancelling,
+           count(*) FILTER (WHERE ${renewing7d})::int AS "renews7d",
+           count(*) FILTER (WHERE s.payment_gateway = 'apple')::int AS apple
+         FROM subscriptions s`,
+      ),
+    ]);
+    return { cities, plans, counts };
+  }
+
   async getSubscriptionStats() {
-    const qb = this.subscriptionRepo.createQueryBuilder('s')
+    const qb = this.subscriptionRepo
+      .createQueryBuilder('s')
       .leftJoin('s.plan', 'plan');
 
     const total = await qb.getCount();
-    const active = await this.subscriptionRepo.count({ where: { status: 'active' as any } });
-    const trialing = await this.subscriptionRepo.count({ where: { status: 'trialing' as any } });
-    const pastDue = await this.subscriptionRepo.count({ where: { status: 'past_due' as any } });
-    const canceled = await this.subscriptionRepo.count({ where: { status: 'canceled' as any } });
-    const paused = await this.subscriptionRepo.count({ where: { status: 'paused' as any } });
-    const cancelingCount = await this.subscriptionRepo.count({ where: { cancelAtPeriodEnd: true, status: 'active' as any } });
+    const active = await this.subscriptionRepo.count({
+      where: { status: 'active' as any },
+    });
+    const trialing = await this.subscriptionRepo.count({
+      where: { status: 'trialing' as any },
+    });
+    const pastDue = await this.subscriptionRepo.count({
+      where: { status: 'past_due' as any },
+    });
+    const canceled = await this.subscriptionRepo.count({
+      where: { status: 'canceled' as any },
+    });
+    const paused = await this.subscriptionRepo.count({
+      where: { status: 'paused' as any },
+    });
+    const cancelingCount = await this.subscriptionRepo.count({
+      where: { cancelAtPeriodEnd: true, status: 'active' as any },
+    });
 
     // Breakdown by plan
-    const byPlan = await this.subscriptionRepo.createQueryBuilder('s')
+    const byPlan = await this.subscriptionRepo
+      .createQueryBuilder('s')
       .leftJoin('s.plan', 'plan')
       .select('plan.name', 'planName')
       .addSelect('plan.id', 'planId')
@@ -1951,14 +2786,25 @@ export class PaymentService {
       .getRawMany();
 
     // Billing interval breakdown
-    const byInterval = await this.subscriptionRepo.createQueryBuilder('s')
+    const byInterval = await this.subscriptionRepo
+      .createQueryBuilder('s')
       .select('s.billingInterval', 'interval')
       .addSelect('COUNT(*)', 'count')
       .where('s.status = :status', { status: 'active' })
       .groupBy('s.billingInterval')
       .getRawMany();
 
-    return { total, active, trialing, pastDue, canceled, paused, cancelingCount, byPlan, byInterval };
+    return {
+      total,
+      active,
+      trialing,
+      pastDue,
+      canceled,
+      paused,
+      cancelingCount,
+      byPlan,
+      byInterval,
+    };
   }
 
   async getAdminSubscriptionPlans() {
@@ -1984,7 +2830,9 @@ export class PaymentService {
   }) {
     const existing = await this.planRepo.findOneBy({ slug: dto.slug });
     if (existing) {
-      throw new ConflictException(`Plan with slug "${dto.slug}" already exists`);
+      throw new ConflictException(
+        `Plan with slug "${dto.slug}" already exists`,
+      );
     }
 
     const plan = this.planRepo.create({
@@ -2009,19 +2857,22 @@ export class PaymentService {
     return this.planRepo.save(plan);
   }
 
-  async updateSubscriptionPlan(id: string, dto: Partial<{
-    name: string;
-    slug: string;
-    priceMonthly: number;
-    priceYearly: number;
-    features: Record<string, any>;
-    maxActiveDeals: number;
-    maxTotalDeals: number;
-    monthlyLeadUnlocks: number;
-    sponsorshipTypes: string[];
-    isActive: boolean;
-    sortOrder: number;
-  }>) {
+  async updateSubscriptionPlan(
+    id: string,
+    dto: Partial<{
+      name: string;
+      slug: string;
+      priceMonthly: number;
+      priceYearly: number;
+      features: Record<string, any>;
+      maxActiveDeals: number;
+      maxTotalDeals: number;
+      monthlyLeadUnlocks: number;
+      sponsorshipTypes: string[];
+      isActive: boolean;
+      sortOrder: number;
+    }>,
+  ) {
     const plan = await this.planRepo.findOneBy({ id });
     if (!plan) throw new NotFoundException(`Plan ${id} not found`);
 

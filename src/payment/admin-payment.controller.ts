@@ -7,12 +7,15 @@ import {
   Body,
   Query,
   ParseUUIDPipe,
-  ParseIntPipe,
-  DefaultValuePipe,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { PaymentService } from './payment.service';
 import { Roles } from '../common/decorators/roles.decorator';
+import {
+  AdminPaymentListQueryDto,
+  AdminRevenueQueryDto,
+  AdminSubscriptionListQueryDto,
+} from './dto/admin-payment-query.dto';
 
 @ApiTags('Admin — Payments')
 @Controller('admin')
@@ -25,25 +28,16 @@ export class AdminPaymentController {
 
   @Get('payments')
   @ApiOperation({ summary: 'List all payments (admin)' })
-  @ApiQuery({ name: 'page', required: false })
-  @ApiQuery({ name: 'limit', required: false })
-  @ApiQuery({ name: 'status', required: false })
-  @ApiQuery({ name: 'type', required: false })
-  @ApiQuery({ name: 'search', required: false })
-  @ApiQuery({ name: 'dateFrom', required: false })
-  @ApiQuery({ name: 'dateTo', required: false })
-  @ApiQuery({ name: 'gateway', required: false })
-  listPayments(
-    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
-    @Query('status') status?: string,
-    @Query('type') type?: string,
-    @Query('search') search?: string,
-    @Query('dateFrom') dateFrom?: string,
-    @Query('dateTo') dateTo?: string,
-    @Query('gateway') gateway?: string,
-  ) {
-    return this.paymentService.getAdminPayments({ page, limit, status: status as any, type, search, dateFrom, dateTo, gateway });
+  listPayments(@Query() query: AdminPaymentListQueryDto) {
+    return this.paymentService.getAdminPayments(query);
+  }
+
+  @Get('payments/filter-options')
+  @ApiOperation({
+    summary: 'Cities, gateways and quick-segment counts for the payment list',
+  })
+  getPaymentFilterOptions() {
+    return this.paymentService.getPaymentFilterOptions();
   }
 
   @Get('payments/stats')
@@ -59,29 +53,31 @@ export class AdminPaymentController {
     return this.paymentService.getRevenueAnalytics();
   }
 
+  @Roles('admin')
+  @Get('payments/revenue')
+  @ApiOperation({
+    summary: 'Filtered revenue over a date range (admin)',
+    description:
+      'Succeeded payments count as revenue; refunds are the refunded amounts. Buckets are IST calendar days/weeks/months.',
+  })
+  getRevenue(@Query() query: AdminRevenueQueryDto) {
+    return this.paymentService.getRevenue(query);
+  }
+
   // ─── Subscriptions ────────────────────
 
   @Get('subscriptions')
   @ApiOperation({ summary: 'List all subscriptions (admin)' })
-  @ApiQuery({ name: 'page', required: false })
-  @ApiQuery({ name: 'limit', required: false })
-  @ApiQuery({ name: 'status', required: false })
-  @ApiQuery({ name: 'search', required: false })
-  @ApiQuery({ name: 'planId', required: false })
-  @ApiQuery({ name: 'billingInterval', required: false })
-  @ApiQuery({ name: 'dateFrom', required: false })
-  @ApiQuery({ name: 'dateTo', required: false })
-  listSubscriptions(
-    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-    @Query('limit', new DefaultValuePipe(25), ParseIntPipe) limit: number,
-    @Query('status') status?: string,
-    @Query('search') search?: string,
-    @Query('planId') planId?: string,
-    @Query('billingInterval') billingInterval?: string,
-    @Query('dateFrom') dateFrom?: string,
-    @Query('dateTo') dateTo?: string,
-  ) {
-    return this.paymentService.getAdminSubscriptions({ page, limit, status: status as any, search, planId, billingInterval, dateFrom, dateTo });
+  listSubscriptions(@Query() query: AdminSubscriptionListQueryDto) {
+    return this.paymentService.getAdminSubscriptions(query);
+  }
+
+  @Get('subscriptions/filter-options')
+  @ApiOperation({
+    summary: 'Cities, plans and quick-segment counts for the subscription list',
+  })
+  getSubscriptionFilterOptions() {
+    return this.paymentService.getSubscriptionFilterOptions();
   }
 
   @Get('subscriptions/stats')
@@ -93,7 +89,9 @@ export class AdminPaymentController {
   // ─── Subscription Plans ───────────────
 
   @Get('subscription-plans')
-  @ApiOperation({ summary: 'List all subscription plans (admin, including inactive)' })
+  @ApiOperation({
+    summary: 'List all subscription plans (admin, including inactive)',
+  })
   listPlans() {
     return this.paymentService.getAdminSubscriptionPlans();
   }

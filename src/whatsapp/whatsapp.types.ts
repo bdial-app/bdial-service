@@ -33,6 +33,8 @@ export interface AudienceFilters {
   inactiveDays?: number;
   missingLogo?: boolean;
   missingProducts?: boolean;
+  /** 'approximate' = pinned at a city centre or not at all; 'exact' = a real pin. */
+  locationPrecision?: 'approximate' | 'exact';
   notContactedDays?: number;
   consent?: ConsentFilter;
   reachableOnly?: boolean;

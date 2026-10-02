@@ -1,13 +1,24 @@
-import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards, Request, Query, UseInterceptors, UploadedFile, UploadedFiles, ParseFilePipe, MaxFileSizeValidator, FileTypeValidator } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards, Request, Query, Res, UseInterceptors, UploadedFile, UploadedFiles, ParseFilePipe, MaxFileSizeValidator, FileTypeValidator } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiBody, ApiQuery, ApiParam, ApiConsumes } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import { Throttle } from '@nestjs/throttler';
 import { FileInterceptor, FilesInterceptor, FileFieldsInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
+import type { Response } from 'express';
+import type { User } from '../entities';
 import { AdminService } from './admin.service';
-import { AdminCreateUserDto, AdminCreateProviderWithUserDto, AdminSendOtpDto, AdminVerifyOtpDto } from './dto/admin-create-user.dto';
+import { AdminCreateUserDto, AdminCreateProviderWithUserDto, AdminSendOtpDto, AdminVerifyOtpDto, AdminUpdateUserDto, AdminUpdateUserMobileDto } from './dto/admin-create-user.dto';
+import { AdminUserListQueryDto } from './dto/admin-user-list.dto';
 import { BulkValidateProvidersDto, BulkImportProvidersDto } from './dto/bulk-provider-import.dto';
+import { AdminCreateReviewDto } from './dto/admin-review.dto';
 import { ImportProviderImageUrlsDto } from './dto/provider-images.dto';
+import { AdminProductListQueryDto } from './dto/admin-product-list.dto';
+import { AdminVerificationListQueryDto } from './dto/admin-verification-list.dto';
+import { AdminConversationListQueryDto } from './dto/admin-conversation-list.dto';
+import { AdminPhotoListQueryDto } from './dto/admin-photo-list.dto';
+import { AdminSponsorshipListQueryDto } from './dto/admin-sponsorship-list.dto';
+import { AdminOfferListQueryDto } from './dto/admin-offer-list.dto';
+import { AdminCreateOfferDto } from './dto/admin-offer-create.dto';
 import { EnrichProvidersDto, GeocodeProvidersDto, ImageCandidatesDto } from './dto/provider-enrichment.dto';
 import { BulkProductsDto } from './dto/product-bulk.dto';
 import { ProductBulkService } from './product-bulk.service';
@@ -74,25 +85,30 @@ export class AdminController {
 
   //get all verifications by pagination
   @Get('verifications')
-  @ApiOperation({ summary: 'Get verification submissions with pagination and filters' })
-  @ApiQuery({ name: 'page', required: false, type: Number })
-  @ApiQuery({ name: 'rows', required: false, type: Number })
-  @ApiQuery({ name: 'status', required: false, type: String, description: 'Filter by aadhaarStatus: pending, approved, rejected' })
-  @ApiQuery({ name: 'search', required: false, type: String })
+  @ApiOperation({
+    summary: 'Get verification submissions with pagination and filters',
+  })
   getVerifications(
     @Request() req,
-    @Query('page') page?: number,
-    @Query('rows') rows?: number,
-    @Query('status') status?: string,
-    @Query('search') search?: string,
+    @Query() query: AdminVerificationListQueryDto,
   ) {
-    return this.adminService.getVerifications(req.user, page, rows, status, search);
+    return this.adminService.getVerifications(req.user, query);
   }
 
   @Get('verifications/stats')
   @ApiOperation({ summary: 'Get verification stats' })
   getVerificationStats(@Request() req) {
     return this.adminService.getVerificationStats(req.user);
+  }
+
+  // Declared before verifications/:id so "filter-options" is not read as an id.
+  @Get('verifications/filter-options')
+  @ApiOperation({
+    summary:
+      'City and reviewer options plus quick-segment counts for the verification list',
+  })
+  getVerificationFilterOptions(@Request() req) {
+    return this.adminService.getVerificationFilterOptions(req.user);
   }
 
   //get verification by id
@@ -239,24 +255,15 @@ export class AdminController {
 
   @Get('users')
   @ApiOperation({ summary: 'Paginated user list with filters' })
-  @ApiQuery({ name: 'page', required: false, type: Number })
-  @ApiQuery({ name: 'limit', required: false, type: Number })
-  @ApiQuery({ name: 'search', required: false, type: String })
-  @ApiQuery({ name: 'status', required: false, type: String })
-  @ApiQuery({ name: 'role', required: false, type: String })
-  @ApiQuery({ name: 'city', required: false, type: String })
-  @ApiQuery({ name: 'hasProvider', required: false, type: String, description: 'Filter by provider status: true/false' })
-  getUsers(
-    @Request() req,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
-    @Query('search') search?: string,
-    @Query('status') status?: string,
-    @Query('role') role?: string,
-    @Query('city') city?: string,
-    @Query('hasProvider') hasProvider?: string,
-  ) {
-    return this.adminService.getUsers(req.user, page, limit, search, status, role, city, hasProvider);
+  getUsers(@Request() req, @Query() query: AdminUserListQueryDto) {
+    return this.adminService.getUsers(req.user, query);
+  }
+
+  // Declared before users/:id so "filter-options" is not read as an id.
+  @Get('users/filter-options')
+  @ApiOperation({ summary: 'City options and quick-segment counts for the user list' })
+  getUserFilterOptions(@Request() req) {
+    return this.adminService.getUserFilterOptions(req.user);
   }
 
   @Get('users/:id')
@@ -267,12 +274,43 @@ export class AdminController {
   }
 
   @Patch('users/:id')
-  @ApiOperation({ summary: 'Admin update user fields' })
+  @ApiOperation({
+    summary:
+      'Admin update user fields (not the login number — see users/:id/mobile-number)',
+  })
   @ApiParam({ name: 'id', description: 'User ID' })
-  updateUser(@Param('id') id: string, @Request() req, @Body() body: any) {
-    return this.adminService.updateUserAdmin(req.user, id, body);
+  updateUser(
+    @Param('id') id: string,
+    @Request() req,
+    @Body() body: AdminUpdateUserDto,
+  ) {
+    return this.adminService.updateUserAdmin(
+      req.user,
+      id,
+      body as unknown as Partial<User>,
+    );
   }
 
+  @Patch('users/:id/mobile-number')
+  @ApiOperation({
+    summary: 'Change a user login number, proving the new number with an OTP',
+    description:
+      'Send the code first via POST /admin/otp/send with purpose "user_mobile_change". ' +
+      'The code is verified here, in the same call that writes the number, so the check cannot be skipped.',
+  })
+  @ApiParam({ name: 'id', description: 'User ID' })
+  updateUserMobileNumber(
+    @Param('id') id: string,
+    @Request() req,
+    @Body() body: AdminUpdateUserMobileDto,
+  ) {
+    return this.adminService.updateUserMobileNumber(
+      req.user,
+      id,
+      body.mobileNumber,
+      body.otp,
+    );
+  }
   // ============================================
   // Providers Management (expanded)
   // ============================================
@@ -298,7 +336,41 @@ export class AdminController {
     @Query('isWomenLed') isWomenLed?: string,
     @Query('categoryId') categoryId?: string,
   ) {
-    return this.adminService.getProvidersList(req.user, page, limit, search, status, city, isFeatured, isWomenLed);
+    return this.adminService.getProvidersList(req.user, page, limit, search, status, city, isFeatured, isWomenLed, categoryId);
+  }
+
+  // Declared before providers/:id so "export" is not read as an id.
+  @Get('providers/export')
+  @ApiOperation({
+    summary: 'CSV of every provider the given filters match',
+    description: 'Same filters as the provider list, so the file matches what is on screen.',
+  })
+  @ApiQuery({ name: 'search', required: false, type: String })
+  @ApiQuery({ name: 'status', required: false, type: String })
+  @ApiQuery({ name: 'city', required: false, type: String })
+  @ApiQuery({ name: 'isFeatured', required: false, type: String })
+  @ApiQuery({ name: 'isWomenLed', required: false, type: String })
+  @ApiQuery({ name: 'categoryId', required: false, type: String })
+  async exportProviders(
+    @Request() req,
+    @Res() res: Response,
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+    @Query('city') city?: string,
+    @Query('isFeatured') isFeatured?: string,
+    @Query('isWomenLed') isWomenLed?: string,
+    @Query('categoryId') categoryId?: string,
+  ) {
+    const { filename, csv, count, truncated } = await this.adminService.exportProviders(req.user, {
+      search, status, city, isFeatured, isWomenLed, categoryId,
+    });
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    // Read by the browser so it can report what it downloaded.
+    res.setHeader('X-Export-Count', String(count));
+    res.setHeader('X-Export-Truncated', String(truncated));
+    res.setHeader('Access-Control-Expose-Headers', 'X-Export-Count, X-Export-Truncated, Content-Disposition');
+    res.status(200).send(csv);
   }
 
   @Get('providers/location-stats')
@@ -310,8 +382,16 @@ export class AdminController {
   @Get('providers/location-candidates')
   @ApiOperation({ summary: 'IDs of providers whose pin is missing or only city-level' })
   @ApiQuery({ name: 'limit', required: false, type: Number })
-  providerLocationCandidates(@Request() req, @Query('limit') limit?: number) {
-    return this.providerLocation.candidates(req.user, limit ? Number(limit) : undefined);
+  @ApiQuery({ name: 'kind', required: false, enum: ['text', 'name'], description: 'text = has an address to geocode; name = ask Google Places by name/phone' })
+  providerLocationCandidates(@Request() req, @Query('limit') limit?: number, @Query('kind') kind?: string) {
+    return this.providerLocation.candidates(req.user, limit ? Number(limit) : undefined, kind === 'name' ? 'name' : 'text');
+  }
+
+  @Post('providers/pin-by-name')
+  @Throttle(BULK_IMPORT_THROTTLE)
+  @ApiOperation({ summary: 'Pin providers by asking Google Places for the business itself (phone, then name within the city)' })
+  pinProvidersByName(@Request() req, @Body() dto: GeocodeProvidersDto) {
+    return this.providerLocation.pinByName(req.user, dto.ids, { force: dto.force });
   }
 
   @Get('providers/:id')
@@ -404,20 +484,18 @@ export class AdminController {
 
   @Get('products')
   @ApiOperation({ summary: 'Paginated product list with filters' })
-  @ApiQuery({ name: 'page', required: false, type: Number })
-  @ApiQuery({ name: 'limit', required: false, type: Number })
-  @ApiQuery({ name: 'search', required: false, type: String })
-  @ApiQuery({ name: 'providerId', required: false, type: String })
-  @ApiQuery({ name: 'isActive', required: false, type: String })
-  getProducts(
-    @Request() req,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
-    @Query('search') search?: string,
-    @Query('providerId') providerId?: string,
-    @Query('isActive') isActive?: string,
-  ) {
-    return this.adminService.getProducts(req.user, page, limit, search, providerId, isActive);
+  getProducts(@Request() req, @Query() query: AdminProductListQueryDto) {
+    return this.adminService.getProducts(req.user, query);
+  }
+
+  // Declared before products/:id so "filter-options" is not read as an id.
+  @Get('products/filter-options')
+  @ApiOperation({
+    summary:
+      'City and category options plus quick-segment counts for the product list',
+  })
+  getProductFilterOptions(@Request() req) {
+    return this.adminService.getProductFilterOptions(req.user);
   }
 
   @Post('products')
@@ -510,6 +588,18 @@ export class AdminController {
     @Query('maxRating') maxRating?: number,
   ) {
     return this.adminService.getReviews(req.user, page, limit, status, providerId, minRating, maxRating);
+  }
+
+  @Post('reviews')
+  @ApiOperation({
+    summary: 'Record a review on a business from the admin panel',
+    description:
+      'For feedback collected offline or carried over from an older system. ' +
+      'Naming a reviewer keeps the row attributable; omitting one leaves it unattributed. ' +
+      'Every entry is written to the audit log against the admin who made it.',
+  })
+  adminCreateReview(@Request() req, @Body() body: AdminCreateReviewDto) {
+    return this.adminService.adminCreateReview(req.user, body);
   }
 
   @Get('reviews/:id')
@@ -652,18 +742,20 @@ export class AdminController {
 
   @Get('chat/conversations')
   @ApiOperation({ summary: 'Paginated conversation list' })
-  @ApiQuery({ name: 'page', required: false, type: Number })
-  @ApiQuery({ name: 'limit', required: false, type: Number })
-  @ApiQuery({ name: 'status', required: false, type: String })
-  @ApiQuery({ name: 'search', required: false, type: String })
   getChatConversations(
     @Request() req,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
-    @Query('status') status?: string,
-    @Query('search') search?: string,
+    @Query() query: AdminConversationListQueryDto,
   ) {
-    return this.adminService.getChatConversations(req.user, page, limit, status, search);
+    return this.adminService.getChatConversations(req.user, query);
+  }
+
+  // Declared before chat/conversations/:id/* so "filter-options" is not read as an id.
+  @Get('chat/conversations/filter-options')
+  @ApiOperation({
+    summary: 'City options and quick-segment counts for the conversation list',
+  })
+  getChatFilterOptions(@Request() req) {
+    return this.adminService.getChatFilterOptions(req.user);
   }
 
   @Get('chat/conversations/:id/messages')
@@ -780,30 +872,20 @@ export class AdminController {
 
   @Get('sponsorships')
   @ApiOperation({ summary: 'List all sponsored listings' })
-  @ApiQuery({ name: 'page', required: false, type: Number })
-  @ApiQuery({ name: 'limit', required: false, type: Number })
-  @ApiQuery({ name: 'isActive', required: false, type: String })
-  @ApiQuery({ name: 'type', required: false, type: String })
-  @ApiQuery({ name: 'approvalStatus', required: false, type: String })
-  @ApiQuery({ name: 'source', required: false, type: String, description: 'provider_paid | admin_granted' })
-  @ApiQuery({ name: 'billingMode', required: false, type: String, description: 'paid | free' })
-  @ApiQuery({ name: 'providerId', required: false, type: String })
-  @ApiQuery({ name: 'search', required: false, type: String })
   getSponsoredListings(
     @Request() req,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
-    @Query('isActive') isActive?: string,
-    @Query('type') type?: string,
-    @Query('approvalStatus') approvalStatus?: string,
-    @Query('source') source?: string,
-    @Query('billingMode') billingMode?: string,
-    @Query('providerId') providerId?: string,
-    @Query('search') search?: string,
+    @Query() query: AdminSponsorshipListQueryDto,
   ) {
-    return this.adminService.getSponsoredListings(req.user, page, limit, isActive, type, {
-      approvalStatus, source, billingMode, providerId, search,
-    });
+    return this.adminService.getSponsoredListings(req.user, query);
+  }
+
+  // Declared before sponsorships/:id so "filter-options" is not read as an id.
+  @Get('sponsorships/filter-options')
+  @ApiOperation({
+    summary: 'City options and quick-segment counts for the sponsorship list',
+  })
+  getSponsorshipFilterOptions(@Request() req) {
+    return this.adminService.getSponsorshipFilterOptions(req.user);
   }
 
   @Post('sponsorships')
@@ -933,26 +1015,47 @@ export class AdminController {
   // Provider Offers Management
   // ============================================
 
+  @Post('offers')
+  @ApiOperation({
+    summary: 'Create a deal for any business',
+    description:
+      "Admin-placed deals skip the owner's plan quota and free-deal allowance, and are approved by default.",
+  })
+  createOffer(@Request() req, @Body() dto: AdminCreateOfferDto) {
+    return this.adminService.createOffer(req.user, dto);
+  }
+
   @Get('offers')
   @ApiOperation({ summary: 'List all offers' })
-  @ApiQuery({ name: 'page', required: false, type: Number })
-  @ApiQuery({ name: 'limit', required: false, type: Number })
-  @ApiQuery({ name: 'isActive', required: false, type: String })
-  @ApiQuery({ name: 'providerId', required: false, type: String })
-  getOffers(
-    @Request() req,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
-    @Query('isActive') isActive?: string,
-    @Query('providerId') providerId?: string,
-  ) {
-    return this.adminService.getOffers(req.user, page, limit, isActive, providerId);
+  getOffers(@Request() req, @Query() query: AdminOfferListQueryDto) {
+    return this.adminService.getOffers(req.user, query);
   }
 
   @Get('offers/stats')
   @ApiOperation({ summary: 'Offer statistics' })
   getOfferStats(@Request() req) {
     return this.adminService.getOfferStats(req.user);
+  }
+
+  // Both declared before offers/:id so neither path is read as an id.
+  @Get('offers/filter-options')
+  @ApiOperation({
+    summary: 'City options and quick-segment counts for the offer list',
+  })
+  getOfferFilterOptions(@Request() req) {
+    return this.adminService.getOfferFilterOptions(req.user);
+  }
+
+  @Get('offers/pending')
+  @ApiOperation({ summary: 'List offers pending approval' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  getPendingOffers(
+    @Request() req,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.adminService.getPendingOffers(req.user, page, limit);
   }
 
   @Get('offers/:id')
@@ -1349,16 +1452,17 @@ export class AdminController {
 
   @Get('photos')
   @ApiOperation({ summary: 'Paginated list of all photos for moderation' })
-  @ApiQuery({ name: 'page', required: false, type: Number })
-  @ApiQuery({ name: 'limit', required: false, type: Number })
-  @ApiQuery({ name: 'type', required: false, type: String, description: 'provider | product | review' })
-  getPhotos(
-    @Request() req,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
-    @Query('type') type?: string,
-  ) {
-    return this.adminService.getPhotosForModeration(req.user, page, limit, type);
+  getPhotos(@Request() req, @Query() query: AdminPhotoListQueryDto) {
+    return this.adminService.getPhotosForModeration(req.user, query);
+  }
+
+  // Declared before photos/:id so "filter-options" is not read as an id.
+  @Get('photos/filter-options')
+  @ApiOperation({
+    summary: 'City options and quick-segment counts for the photo grid',
+  })
+  getPhotoFilterOptions(@Request() req) {
+    return this.adminService.getPhotoFilterOptions(req.user);
   }
 
   @Delete('photos/:id')
@@ -1466,19 +1570,8 @@ export class AdminController {
 
   // ============================================
   // Offer Approval Workflow
+  // (GET offers/pending lives above offers/:id so it is not read as an id.)
   // ============================================
-
-  @Get('offers/pending')
-  @ApiOperation({ summary: 'List offers pending approval' })
-  @ApiQuery({ name: 'page', required: false, type: Number })
-  @ApiQuery({ name: 'limit', required: false, type: Number })
-  getPendingOffers(
-    @Request() req,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
-  ) {
-    return this.adminService.getPendingOffers(req.user, page, limit);
-  }
 
   @Patch('offers/:id/approve')
   @ApiOperation({ summary: 'Approve an offer' })
@@ -1528,14 +1621,21 @@ export class AdminController {
   @ApiQuery({ name: 'status', required: false, type: String })
   @ApiQuery({ name: 'city', required: false, type: String })
   @ApiQuery({ name: 'search', required: false, type: String })
-  exportData(
+  async exportData(
     @Param('entity') entity: string,
     @Request() req,
+    @Res() res: Response,
     @Query('status') status?: string,
     @Query('city') city?: string,
     @Query('search') search?: string,
   ) {
-    return this.adminService.exportData(req.user, entity, { status, city, search });
+    const { csv, count } = await this.adminService.exportData(req.user, entity, { status, city, search });
+    // Sent as a real CSV body: the caller saves this straight to a .csv file.
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${entity}-${new Date().toISOString().slice(0, 10)}.csv"`);
+    res.setHeader('X-Export-Count', String(count));
+    res.setHeader('Access-Control-Expose-Headers', 'X-Export-Count, Content-Disposition');
+    res.status(200).send(csv);
   }
 
   // ============================================

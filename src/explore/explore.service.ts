@@ -48,6 +48,8 @@ export class ExploreService {
 
   // ─── Performance Helpers ─────────────────────────────────────
 
+  // Wherever results are ordered by distance, city-centre pins go after real
+  // ones: their "distance" is to the town centre, not to the business.
   /** Parameterized haversine × 1.4 circuity factor — approximate road distance */
   private static readonly HAVERSINE =
     `1.4 * 6371 * acos(LEAST(1.0, cos(radians(:lat)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians(:lng)) + sin(radians(:lat)) * sin(radians(p.latitude))))`;
@@ -367,7 +369,8 @@ export class ExploreService {
       qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
     }
 
-    qb.orderBy(hasLocation ? 'distance' : 'o.discount_value', hasLocation ? 'ASC' : 'DESC');
+    if (hasLocation) qb.orderBy("CASE WHEN p.geocode_precision = 'city' THEN 1 ELSE 0 END", 'ASC').addOrderBy('distance', 'ASC');
+    else qb.orderBy('o.discount_value', 'DESC');
 
     qb.limit(8);
 
@@ -531,7 +534,7 @@ export class ExploreService {
         break;
       case 'distance':
         if (hasLocation) {
-          qb.orderBy('distance', 'ASC');
+          qb.orderBy("CASE WHEN p.geocode_precision = 'city' THEN 1 ELSE 0 END", 'ASC').addOrderBy('distance', 'ASC');
         } else {
           qb.orderBy('o.discount_value', 'DESC');
         }
@@ -620,7 +623,7 @@ export class ExploreService {
       }
       qb.addSelect("CASE WHEN p.status = 'active' THEN 0 ELSE 1 END", 'status_rank');
       qb.orderBy('status_rank', 'ASC')
-        .addOrderBy('distance', 'ASC');
+        .addOrderBy("CASE WHEN p.geocode_precision = 'city' THEN 1 ELSE 0 END", 'ASC').addOrderBy('distance', 'ASC');
     } else if (city) {
       qb.andWhere('p.city ILIKE :city', { city: `%${city}%` })
         .orderBy('p.is_featured', 'DESC')
@@ -669,7 +672,7 @@ export class ExploreService {
         qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
       }
       qb.orderBy('rating', 'DESC')
-        .addOrderBy('distance', 'ASC');
+        .addOrderBy("CASE WHEN p.geocode_precision = 'city' THEN 1 ELSE 0 END", 'ASC').addOrderBy('distance', 'ASC');
     } else if (city) {
       qb.andWhere('p.city ILIKE :city', { city: `%${city}%` })
         .orderBy('rating', 'DESC');
@@ -728,7 +731,7 @@ export class ExploreService {
       if (city) {
         qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
       }
-      qb.orderBy('distance', 'ASC');
+      qb.orderBy("CASE WHEN p.geocode_precision = 'city' THEN 1 ELSE 0 END", 'ASC').addOrderBy('distance', 'ASC');
     } else if (city) {
       qb.andWhere('p.city ILIKE :city', { city: `%${city}%` })
         .orderBy('p.created_at', 'DESC');
@@ -805,7 +808,7 @@ export class ExploreService {
         'distance',
       );
       qb.orderBy('p.created_at', 'DESC')
-        .addOrderBy('distance', 'ASC')
+        .addOrderBy("CASE WHEN p.geocode_precision = 'city' THEN 1 ELSE 0 END", 'ASC').addOrderBy('distance', 'ASC')
         .addOrderBy('p.id', 'ASC');
     } else if (city) {
       qb.andWhere('p.city ILIKE :city', { city: `%${city}%` })
@@ -1206,7 +1209,7 @@ export class ExploreService {
         qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
       }
       qb.orderBy('COALESCE(rs.avg_rating, 0)', 'DESC')
-        .addOrderBy('distance', 'ASC');
+        .addOrderBy("CASE WHEN p.geocode_precision = 'city' THEN 1 ELSE 0 END", 'ASC').addOrderBy('distance', 'ASC');
     } else if (city) {
       qb.andWhere('p.city ILIKE :city', { city: `%${city}%` })
         .orderBy('COALESCE(rs.avg_rating, 0)', 'DESC');
@@ -1230,7 +1233,7 @@ export class ExploreService {
       this.withCategoryServices(fallbackQb);
       this.withGeo(fallbackQb, lat!, lng!, 100);
       fallbackQb.orderBy('COALESCE(rs.avg_rating, 0)', 'DESC')
-        .addOrderBy('distance', 'ASC')
+        .addOrderBy("CASE WHEN p.geocode_precision = 'city' THEN 1 ELSE 0 END", 'ASC').addOrderBy('distance', 'ASC')
         .limit(limit);
       raw = await fallbackQb.getRawMany();
     }
