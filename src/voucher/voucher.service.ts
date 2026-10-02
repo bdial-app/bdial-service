@@ -4,27 +4,46 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { Voucher } from '../entities/voucher.entity';
 import { VoucherRedemption } from '../entities/voucher-redemption.entity';
 import { CreateVoucherDto, UpdateVoucherDto } from './dto/voucher.dto';
+import { AdminVoucherListQueryDto } from './dto/admin-voucher-list.dto';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { Provider } from '../entities';
+
+/**
+ * Operational status, mutually exclusive and checked in this order. Shared by
+ * the list filter and the segment counts so "Expired (12)" matches 12 rows.
+ */
+const VOUCHER_OP_STATUS_SQL = {
+  inactive: 'NOT v.is_active',
+  expired: 'v.is_active AND v.valid_until < now()',
+  scheduled: 'v.is_active AND v.valid_until >= now() AND v.valid_from > now()',
+  exhausted:
+    'v.is_active AND v.valid_until >= now() AND v.valid_from <= now() AND v.max_uses IS NOT NULL AND v.used_count >= v.max_uses',
+  live: 'v.is_active AND v.valid_until >= now() AND v.valid_from <= now() AND (v.max_uses IS NULL OR v.used_count < v.max_uses)',
+} as const;
 
 @Injectable()
 export class VoucherService {
   constructor(
-    @InjectRepository(Voucher) private readonly voucherRepo: Repository<Voucher>,
-    @InjectRepository(VoucherRedemption) private readonly redemptionRepo: Repository<VoucherRedemption>,
-    @InjectRepository(Provider) private readonly providerRepo: Repository<Provider>,
+    @InjectRepository(Voucher)
+    private readonly voucherRepo: Repository<Voucher>,
+    @InjectRepository(VoucherRedemption)
+    private readonly redemptionRepo: Repository<VoucherRedemption>,
+    @InjectRepository(Provider)
+    private readonly providerRepo: Repository<Provider>,
     private readonly notificationDispatch: NotificationDispatchService,
+    private readonly dataSource: DataSource,
   ) {}
 
   async create(dto: CreateVoucherDto, adminUserId: string) {
     const code = dto.code.toUpperCase().trim();
 
     const existing = await this.voucherRepo.findOneBy({ code });
-    if (existing) throw new ConflictException(`Voucher code "${code}" already exists`);
+    if (existing)
+      throw new ConflictException(`Voucher code "${code}" already exists`);
 
     const voucher = this.voucherRepo.create({
       code,
@@ -49,35 +68,113 @@ export class VoucherService {
     return saved;
   }
 
-  async findAll(filters: { page?: number; limit?: number; isActive?: boolean; search?: string; discountType?: string; dateFrom?: string; dateTo?: string }) {
-    const { page = 1, limit = 25, isActive, search, discountType, dateFrom, dateTo } = filters;
-    const qb = this.voucherRepo.createQueryBuilder('v')
-      .orderBy('v.createdAt', 'DESC')
-      .take(limit)
-      .skip((page - 1) * limit);
+  async findAll(query: AdminVoucherListQueryDto) {
+    const {
+      isActive,
+      search,
+      discountType,
+      dateFrom,
+      dateTo,
+      opStatus,
+      applicableTo,
+      usage,
+      expiringWithinDays,
+      validFrom,
+      validTo,
+      createdBy,
+      sort,
+    } = query;
+    const page = Math.max(1, query.page || 1);
+    const limit = Math.min(100, Math.max(1, query.limit || 25));
 
-    if (isActive !== undefined) {
-      qb.andWhere('v.isActive = :isActive', { isActive });
-    }
+    const qb = this.voucherRepo
+      .createQueryBuilder('v')
+      .leftJoin('v.creator', 'creator')
+      .addSelect(['creator.id', 'creator.name']);
+
+    if (isActive === 'true') qb.andWhere('v.is_active = true');
+    else if (isActive === 'false') qb.andWhere('v.is_active = false');
     if (search) {
-      qb.andWhere('(v.code ILIKE :search OR v.description ILIKE :search)', { search: `%${search}%` });
+      qb.andWhere('(v.code ILIKE :search OR v.description ILIKE :search)', {
+        search: `%${search}%`,
+      });
     }
-    if (discountType) {
-      qb.andWhere('v.discountType = :discountType', { discountType });
+    if (discountType)
+      qb.andWhere('v.discount_type = :discountType', { discountType });
+    if (opStatus) qb.andWhere(`(${VOUCHER_OP_STATUS_SQL[opStatus]})`);
+    if (applicableTo)
+      qb.andWhere(':applicableTo = ANY(v.applicable_to)', { applicableTo });
+    if (usage === 'never') qb.andWhere('v.used_count = 0');
+    else if (usage === 'used') qb.andWhere('v.used_count > 0');
+    else if (usage === 'exhausted')
+      qb.andWhere('v.max_uses IS NOT NULL AND v.used_count >= v.max_uses');
+    if (expiringWithinDays !== undefined) {
+      qb.andWhere(
+        `v.valid_until >= now() AND v.valid_until <= now() + make_interval(days => :expiringWithinDays)`,
+        { expiringWithinDays },
+      );
     }
-    if (dateFrom) {
-      qb.andWhere('v.createdAt >= :dateFrom', { dateFrom });
-    }
-    if (dateTo) {
-      qb.andWhere('v.createdAt <= :dateTo', { dateTo: `${dateTo}T23:59:59.999Z` });
-    }
+    if (createdBy) qb.andWhere('v.created_by = :createdBy', { createdBy });
+
+    // Dates are calendar days in IST, the way the admin reads them.
+    if (dateFrom)
+      qb.andWhere(
+        `(v.created_at AT TIME ZONE 'Asia/Kolkata')::date >= :dateFrom::date`,
+        { dateFrom },
+      );
+    if (dateTo)
+      qb.andWhere(
+        `(v.created_at AT TIME ZONE 'Asia/Kolkata')::date <= :dateTo::date`,
+        { dateTo },
+      );
+    if (validFrom)
+      qb.andWhere(
+        `(v.valid_until AT TIME ZONE 'Asia/Kolkata')::date >= :validFrom::date`,
+        { validFrom },
+      );
+    if (validTo)
+      qb.andWhere(
+        `(v.valid_until AT TIME ZONE 'Asia/Kolkata')::date <= :validTo::date`,
+        { validTo },
+      );
+
+    if (sort === 'expiring_soon')
+      qb.orderBy('v.validUntil', 'ASC').addOrderBy('v.createdAt', 'DESC');
+    else if (sort === 'most_used')
+      qb.orderBy('v.usedCount', 'DESC').addOrderBy('v.createdAt', 'DESC');
+    else qb.orderBy('v.createdAt', 'DESC');
+    qb.skip((page - 1) * limit).take(limit);
 
     const [vouchers, total] = await qb.getManyAndCount();
     return {
       vouchers,
+      items: vouchers,
       total,
       meta: { total, page, limit, totalPages: Math.ceil(total / limit) || 1 },
     };
+  }
+
+  /** Creator dropdown and quick-segment counts for the admin voucher list. */
+  async getFilterOptions() {
+    const s = VOUCHER_OP_STATUS_SQL;
+    const [creators, [counts]] = await Promise.all([
+      this.dataSource.query<{ id: string; name: string; count: number }[]>(
+        `SELECT u.id, u.name, count(*)::int AS count
+         FROM vouchers v JOIN users u ON u.id = v.created_by
+         GROUP BY u.id, u.name ORDER BY 3 DESC, 2 ASC LIMIT 100`,
+      ),
+      this.dataSource.query<Record<string, number>[]>(
+        `SELECT
+           count(*)::int AS total,
+           count(*) FILTER (WHERE ${s.live})::int AS live,
+           count(*) FILTER (WHERE ${s.live} AND v.valid_until <= now() + interval '7 days')::int AS "expiring7d",
+           count(*) FILTER (WHERE v.used_count = 0)::int AS "neverUsed",
+           count(*) FILTER (WHERE ${s.exhausted})::int AS exhausted,
+           count(*) FILTER (WHERE ${s.expired})::int AS expired
+         FROM vouchers v`,
+      ),
+    ]);
+    return { creators, counts };
   }
 
   async findOne(id: string) {
@@ -93,14 +190,19 @@ export class VoucherService {
       dto.code = dto.code.toUpperCase().trim();
       if (dto.code !== voucher.code) {
         const existing = await this.voucherRepo.findOneBy({ code: dto.code });
-        if (existing) throw new ConflictException(`Voucher code "${dto.code}" already exists`);
+        if (existing)
+          throw new ConflictException(
+            `Voucher code "${dto.code}" already exists`,
+          );
       }
     }
 
     Object.assign(voucher, {
       ...dto,
       validFrom: dto.validFrom ? new Date(dto.validFrom) : voucher.validFrom,
-      validUntil: dto.validUntil ? new Date(dto.validUntil) : voucher.validUntil,
+      validUntil: dto.validUntil
+        ? new Date(dto.validUntil)
+        : voucher.validUntil,
     });
 
     return this.voucherRepo.save(voucher);
@@ -122,7 +224,9 @@ export class VoucherService {
 
   async getStats() {
     const totalVouchers = await this.voucherRepo.count();
-    const activeVouchers = await this.voucherRepo.count({ where: { isActive: true } });
+    const activeVouchers = await this.voucherRepo.count({
+      where: { isActive: true },
+    });
     const totalRedemptions = await this.redemptionRepo.count();
 
     const totalDiscountGiven = await this.redemptionRepo
@@ -139,10 +243,15 @@ export class VoucherService {
   }
 
   private async notifyProvidersOfNewVoucher(voucher: Voucher) {
-    const discountLabel = voucher.discountType === 'percentage'
-      ? `${voucher.discountValue}%`
-      : `₹${voucher.discountValue}`;
-    const expiryDate = voucher.validUntil.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+    const discountLabel =
+      voucher.discountType === 'percentage'
+        ? `${voucher.discountValue}%`
+        : `₹${voucher.discountValue}`;
+    const expiryDate = voucher.validUntil.toLocaleDateString('en-IN', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    });
 
     // Get all active providers
     const providers = await this.providerRepo.find({
@@ -151,13 +260,15 @@ export class VoucherService {
     });
 
     for (const provider of providers) {
-      this.notificationDispatch.sendTemplated(
-        provider.userId,
-        'voucher_available',
-        { voucherCode: voucher.code, discount: discountLabel, expiryDate },
-        undefined,
-        'provider',
-      ).catch(() => {});
+      this.notificationDispatch
+        .sendTemplated(
+          provider.userId,
+          'voucher_available',
+          { voucherCode: voucher.code, discount: discountLabel, expiryDate },
+          undefined,
+          'provider',
+        )
+        .catch(() => {});
     }
   }
 }

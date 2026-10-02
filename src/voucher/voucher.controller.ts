@@ -11,9 +11,15 @@ import {
   ParseIntPipe,
   DefaultValuePipe,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiBearerAuth,
+  ApiQuery,
+} from '@nestjs/swagger';
 import { VoucherService } from './voucher.service';
 import { CreateVoucherDto, UpdateVoucherDto } from './dto/voucher.dto';
+import { AdminVoucherListQueryDto } from './dto/admin-voucher-list.dto';
 import { Roles } from '../common/decorators/roles.decorator';
 
 @ApiTags('Admin — Vouchers')
@@ -32,31 +38,17 @@ export class VoucherController {
 
   @Get()
   @ApiOperation({ summary: 'List all vouchers' })
-  @ApiQuery({ name: 'page', required: false })
-  @ApiQuery({ name: 'limit', required: false })
-  @ApiQuery({ name: 'isActive', required: false })
-  @ApiQuery({ name: 'search', required: false })
-  @ApiQuery({ name: 'discountType', required: false })
-  @ApiQuery({ name: 'dateFrom', required: false })
-  @ApiQuery({ name: 'dateTo', required: false })
-  findAll(
-    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-    @Query('limit', new DefaultValuePipe(25), ParseIntPipe) limit: number,
-    @Query('isActive') isActive?: string,
-    @Query('search') search?: string,
-    @Query('discountType') discountType?: string,
-    @Query('dateFrom') dateFrom?: string,
-    @Query('dateTo') dateTo?: string,
-  ) {
-    return this.voucherService.findAll({
-      page,
-      limit,
-      isActive: isActive === 'true' ? true : isActive === 'false' ? false : undefined,
-      search,
-      discountType,
-      dateFrom,
-      dateTo,
-    });
+  findAll(@Query() query: AdminVoucherListQueryDto) {
+    return this.voucherService.findAll(query);
+  }
+
+  // Declared before :id so "filter-options" is not read as an id.
+  @Get('filter-options')
+  @ApiOperation({
+    summary: 'Creator list and quick-segment counts for the voucher list',
+  })
+  getFilterOptions() {
+    return this.voucherService.getFilterOptions();
   }
 
   @Get('stats')
@@ -74,7 +66,10 @@ export class VoucherController {
   @Roles('admin')
   @Patch(':id')
   @ApiOperation({ summary: 'Update a voucher' })
-  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateVoucherDto) {
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateVoucherDto,
+  ) {
     return this.voucherService.update(id, dto);
   }
 
