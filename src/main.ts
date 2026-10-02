@@ -1,7 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { AppModule } from './app.module';
-import { ValidationPipe, ClassSerializerInterceptor, Logger } from '@nestjs/common';
+import { ValidationPipe, ClassSerializerInterceptor, Logger, RequestMethod } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import helmet from 'helmet';
@@ -19,7 +19,16 @@ async function bootstrap() {
   const configService = app.get(ConfigService);
 
   // Global prefix
-  app.setGlobalPrefix('api');
+  // Shared links and the files the phones fetch to verify them live at the
+  // root: /b/<id>, /p/<id> and /.well-known/*. Everything else stays under /api.
+  app.setGlobalPrefix('api', {
+    exclude: [
+      { path: 'b/:id', method: RequestMethod.GET },
+      { path: 'p/:id', method: RequestMethod.GET },
+      { path: '.well-known/apple-app-site-association', method: RequestMethod.GET },
+      { path: '.well-known/assetlinks.json', method: RequestMethod.GET },
+    ],
+  });
 
   // CORS — must be FIRST so error responses also get CORS headers.
   // Mobile carriers often proxy requests, modifying headers. We must be explicit
