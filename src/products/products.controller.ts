@@ -65,6 +65,13 @@ export class ProductsController {
     return this.catalogService.browse(dto);
   }
 
+  @Get('catalog/seller/:providerId')
+  @Public()
+  @ApiOperation({ summary: "One business's whole catalogue — products and services, grouped by category" })
+  getSellerCatalogue(@Param('providerId', ParseUUIDPipe) providerId: string) {
+    return this.catalogService.getSellerCatalogue(providerId);
+  }
+
   @Get(':id/similar')
   @Public()
   @ApiOperation({ summary: 'Similar items of the same type from other businesses' })

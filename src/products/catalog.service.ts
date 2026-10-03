@@ -387,6 +387,88 @@ export class CatalogService {
     };
   }
 
+  // ─── One business's whole catalogue (the shared /c/<id> link) ──────
+
+  /**
+   * Every live product and service of one business, featured first, with
+   * the shop's summary and category counts — what a shared catalogue link
+   * opens. Shown for any business that isn't suspended, disabled or deleted,
+   * so an owner can share it while verification is still in review.
+   */
+  async getSellerCatalogue(providerId: string) {
+    const [shop]: {
+      id: string;
+      brand_name: string;
+      profile_photo_url: string | null;
+      banner_image_url: string | null;
+      city: string | null;
+      area: string | null;
+      status: string;
+      is_women_led: boolean;
+      is_available: boolean;
+      user_id: string;
+      rating: string | number;
+      review_count: string | number;
+    }[] = await this.dataSource.query(
+      `SELECT p.id, p.brand_name, p.profile_photo_url, p.banner_image_url, p.city, p.area, p.status,
+              p.is_women_led, p.is_available, p.user_id,
+              COALESCE(rs.avg_rating, 0) AS rating, COALESCE(rs.review_count, 0) AS review_count
+         FROM providers p
+         LEFT JOIN (
+           SELECT provider_id, AVG(star_rating)::numeric(2,1) AS avg_rating, COUNT(*)::int AS review_count
+             FROM reviews WHERE status = 'active' GROUP BY provider_id
+         ) rs ON rs.provider_id = p.id
+        WHERE p.id = $1 AND p.deleted_at IS NULL AND p.status NOT IN ('suspended', 'disabled')`,
+      [providerId],
+    );
+    if (!shop) throw new NotFoundException('Business not found');
+
+    const rows: any[] = await this.dataSource.query(
+      `SELECT ${CatalogService.ITEM_COLUMNS}, NULL::float AS distance
+         ${CatalogService.ITEM_FROM}
+        WHERE prod.provider_id = $1 AND prod.is_active = true
+        ORDER BY prod.is_hero DESC, prod.display_order ASC, prod.name ASC
+        LIMIT 500`,
+      [providerId],
+    );
+    const items = rows.map((r) => this.mapItem(r));
+
+    // Group labels: the item's own (sub)category, else "Other".
+    const counts = new Map<string, number>();
+    for (const i of items) {
+      const name = i.categoryName ?? 'Other';
+      counts.set(name, (counts.get(name) ?? 0) + 1);
+    }
+    const categories = [...counts.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) =>
+        a.name === 'Other' ? 1 : b.name === 'Other' ? -1 : b.count - a.count,
+      );
+
+    return {
+      provider: {
+        id: shop.id,
+        userId: shop.user_id,
+        name: shop.brand_name,
+        logoUrl: shop.profile_photo_url,
+        bannerUrl: shop.banner_image_url,
+        city: shop.city,
+        area: shop.area,
+        verified: shop.status === 'active',
+        isWomenLed: !!shop.is_women_led,
+        isOpen: !!shop.is_available,
+        rating: Number(shop.rating) || 0,
+        reviewCount: Number(shop.review_count) || 0,
+      },
+      counts: {
+        products: items.filter((i) => i.productType === 'product').length,
+        services: items.filter((i) => i.productType === 'service').length,
+      },
+      categories,
+      items,
+    };
+  }
+
   // ─── Similar items from other sellers ───────────────────────────────
 
   async getSimilar(productId: string, dto: SimilarProductsDto) {
