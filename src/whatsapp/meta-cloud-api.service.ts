@@ -56,6 +56,11 @@ interface MetaErrorBody {
     error_subcode?: number;
     fbtrace_id?: string;
     error_data?: { details?: string };
+    // Template rejections carry their reason here, not in error_data: a body
+    // with too many variables comes back as a bare "Invalid parameter" with
+    // "Params Words Ratio Exceeds Limit" in error_user_title.
+    error_user_title?: string;
+    error_user_msg?: string;
   };
 }
 
@@ -304,8 +309,14 @@ export class MetaCloudApiService {
     if (!res.ok) {
       const errBody = (json ?? {}) as MetaErrorBody;
       const e = errBody.error ?? {};
+      const reason = [e.error_user_title, e.error_user_msg]
+        .filter(Boolean)
+        .join(': ');
       const message =
-        e.error_data?.details || e.message || `Meta HTTP ${res.status}`;
+        reason ||
+        e.error_data?.details ||
+        e.message ||
+        `Meta HTTP ${res.status}`;
       this.logger.warn(
         `Meta ${method} ${path.split('?')[0]} → ${res.status} code=${e.code ?? '-'} ${message}`,
       );
