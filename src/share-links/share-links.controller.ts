@@ -94,7 +94,7 @@ export class ShareLinksController {
         details: [
           {
             appID,
-            paths: ['/b/*', '/p/*', '/provider-details*', '/product-details*'],
+            paths: ['/b/*', '/p/*', '/c/*', '/shop*', '/provider-details*', '/product-details*'],
           },
         ],
       },
