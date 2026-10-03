@@ -4356,6 +4356,134 @@ export class AdminService {
   // Geographic Distribution
   // ============================================
 
+  /**
+   * Which categories the catalogue covers, and how many businesses sit in each.
+   *
+   * Every business is counted **once**, under one primary category, so the
+   * figures add up to the number of businesses rather than to the number of
+   * category links. 191 of 300 businesses list more than one category, so the
+   * choice is made by a fixed rule: the most specific category wins (a
+   * subcategory says more than its parent), then the catalogue's own display
+   * order, then name. The same rule every time, so the number does not move
+   * between two page loads.
+   *
+   * `listed` is kept alongside it because the two answer different questions:
+   * `primary` is "how many businesses are these", `listed` is "how many a
+   * customer finds when they open this category" — browsing matches every
+   * category a business chose, not just its primary one. A category can
+   * therefore have 0 primary and still not be empty.
+   */
+  async getCategoryStats(admin: any) {
+    this.assertAdmin(admin);
+
+    // Live = not soft-deleted, which is what the console treats as existing.
+    const LINKS = `
+      WITH RECURSIVE roots AS (
+        -- Every category mapped to its top-level ancestor. The tree is mostly two
+        -- deep but not always, so parent_id alone would strand a grandchild's
+        -- businesses outside every family. The depth guard stops a bad parent
+        -- loop from spinning forever.
+        SELECT id, id AS root_id, 1 AS depth FROM categories WHERE parent_id IS NULL
+        UNION ALL
+        SELECT c.id, r.root_id, r.depth + 1
+          FROM categories c
+          JOIN roots r ON c.parent_id = r.id
+         WHERE r.depth < 10
+      ),
+      link AS (
+        SELECT pc.provider_id, pc.category_id, c.parent_id, c.display_order, c.name
+          FROM provider_categories pc
+          JOIN categories c ON c.id = pc.category_id
+          JOIN providers p ON p.id = pc.provider_id AND p.deleted_at IS NULL
+      ),
+      primary_pick AS (
+        SELECT DISTINCT ON (provider_id) provider_id, category_id
+          FROM link
+         ORDER BY provider_id, (parent_id IS NULL), display_order, name, category_id
+      )`;
+
+    const rows = (await this.dataSource.query(`
+      ${LINKS}
+      SELECT c.id,
+             c.name,
+             c.parent_id   AS "parentId",
+             parent.name   AS "parentName",
+             c.is_active   AS "isActive",
+             (SELECT count(*) FROM primary_pick pp WHERE pp.category_id = c.id)::int              AS "primary",
+             (SELECT count(DISTINCT l.provider_id) FROM link l WHERE l.category_id = c.id)::int   AS "listed"
+        FROM categories c
+        LEFT JOIN categories parent ON parent.id = c.parent_id
+       ORDER BY "primary" DESC, "listed" DESC, c.display_order, c.name
+    `)) as {
+      id: string;
+      name: string;
+      parentId: string | null;
+      parentName: string | null;
+      isActive: boolean;
+      primary: number;
+      listed: number;
+    }[];
+
+    // A parent stands for its whole family: a business whose primary category is
+    // one of its children counts here, once.
+    const topLevel = (await this.dataSource.query(`
+      ${LINKS}
+      SELECT t.id,
+             t.name,
+             (SELECT count(*) FROM primary_pick pp
+                JOIN roots r ON r.id = pp.category_id
+               WHERE r.root_id = t.id)::int                                            AS "primary",
+             (SELECT count(DISTINCT l.provider_id) FROM link l
+                JOIN roots r ON r.id = l.category_id
+               WHERE r.root_id = t.id)::int                                            AS "listed"
+        FROM categories t
+       WHERE t.parent_id IS NULL
+       ORDER BY "primary" DESC, "listed" DESC, t.display_order, t.name
+    `)) as { id: string; name: string; primary: number; listed: number }[];
+
+    const [counts] = (await this.dataSource.query(`
+      SELECT
+        (SELECT count(*) FROM providers WHERE deleted_at IS NULL)::int AS "liveBusinesses",
+        (SELECT count(DISTINCT pc.provider_id)
+           FROM provider_categories pc
+           JOIN providers p ON p.id = pc.provider_id AND p.deleted_at IS NULL)::int AS "businessesListed",
+        (SELECT count(*) FROM provider_categories pc
+           JOIN providers p ON p.id = pc.provider_id AND p.deleted_at IS NULL)::int AS "links",
+        (SELECT count(*) FROM (
+            SELECT pc.provider_id
+              FROM provider_categories pc
+              JOIN providers p ON p.id = pc.provider_id AND p.deleted_at IS NULL
+             GROUP BY pc.provider_id HAVING count(*) > 1) multi)::int AS "multiCategory"
+    `)) as {
+      liveBusinesses: number;
+      businessesListed: number;
+      links: number;
+      multiCategory: number;
+    }[];
+
+    // "Empty" means a customer opening it finds nothing, so it follows `listed`.
+    const inUse = rows.filter((r) => r.listed > 0).length;
+    return {
+      totals: {
+        categories: rows.length,
+        active: rows.filter((r) => r.isActive).length,
+        topLevel: topLevel.length,
+        subcategories: rows.length - topLevel.length,
+        inUse,
+        empty: rows.length - inUse,
+        liveBusinesses: counts.liveBusinesses,
+        businessesListed: counts.businessesListed,
+        uncategorised: counts.liveBusinesses - counts.businessesListed,
+        multiCategory: counts.multiCategory,
+        avgCategoriesPerBusiness: counts.businessesListed
+          ? Number((counts.links / counts.businessesListed).toFixed(2))
+          : 0,
+      },
+      topLevel,
+      categories: rows,
+    };
+  }
+
   async getGeographicStats(admin: any) {
     this.assertAdmin(admin);
 

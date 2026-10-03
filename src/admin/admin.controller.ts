@@ -1155,6 +1155,15 @@ export class AdminController {
     return this.adminService.getSearchTrends(req.user, days ? Number(days) : 30, limit ? Number(limit) : 50);
   }
 
+  @Get('analytics/categories')
+  @ApiOperation({
+    summary: 'Category coverage: how many businesses sit in each category',
+    description: 'Counts overlap because a business can be listed in several categories; businessesListed is the unique total.',
+  })
+  getCategoryStats(@Request() req) {
+    return this.adminService.getCategoryStats(req.user);
+  }
+
   @Get('analytics/geographic')
   @ApiOperation({ summary: 'Geographic distribution: users, providers, searches by city' })
   getGeographicStats(@Request() req) {
