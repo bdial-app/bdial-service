@@ -44,6 +44,7 @@ import { ServiceableCitiesModule } from './serviceable-cities/serviceable-cities
 import { GoogleReviewsModule } from './google-reviews/google-reviews.module';
 import { WhatsAppModule } from './whatsapp/whatsapp.module';
 import { ShareLinksModule } from './share-links/share-links.module';
+import { AppVersionModule } from './app-version/app-version.module';
 import { SystemSetting } from './entities';
 
 @Module({
@@ -101,6 +102,7 @@ import { SystemSetting } from './entities';
     GoogleReviewsModule,
     WhatsAppModule,
     ShareLinksModule,
+    AppVersionModule,
     TypeOrmModule.forFeature([SystemSetting]),
   ],
   controllers: [AppController],
