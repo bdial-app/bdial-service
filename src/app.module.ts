@@ -45,6 +45,7 @@ import { GoogleReviewsModule } from './google-reviews/google-reviews.module';
 import { WhatsAppModule } from './whatsapp/whatsapp.module';
 import { ShareLinksModule } from './share-links/share-links.module';
 import { AppVersionModule } from './app-version/app-version.module';
+import { AudienceModule } from './audience/audience.module';
 import { SystemSetting } from './entities';
 
 @Module({
@@ -103,6 +104,7 @@ import { SystemSetting } from './entities';
     WhatsAppModule,
     ShareLinksModule,
     AppVersionModule,
+    AudienceModule,
     TypeOrmModule.forFeature([SystemSetting]),
   ],
   controllers: [AppController],
