@@ -20,7 +20,8 @@ const FOOTER: WhatsAppTemplateComponent = {
 
 const PROFILE_URL_BASE = 'https://tijarahapp.in/provider-details?id=';
 const PROFILE_URL_EXAMPLE = `${PROFILE_URL_BASE}3f9c2e1a-0000-4000-8000-000000000000`;
-const APP_URL = 'https://play.google.com/store/apps/details?id=com.tijarah.app';
+const APP_URL =
+  'https://play.google.com/store/apps/details?id=com.pronttera.tijarah';
 
 const brandVar: WhatsAppTemplateVariable = {
   index: 1,
@@ -226,9 +227,9 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
     description: 'Generic announcement; {{2}} is free text set per campaign.',
     components: [
       body(
-        'Hi {{1}}, {{2}}',
+        'Hi {{1}}, here is an update from the Tijarah Connect team for your business:\n\n{{2}}\n\nOpen the app to see what has changed.',
         'Pronttera',
-        'we have launched a new Deals section where you can post offers for free this month.',
+        'we have launched a new Deals section where you can post offers for free this month',
       ),
       FOOTER,
       appButton('Open Tijarah'),
