@@ -122,18 +122,24 @@ export class WhatsAppCampaignService {
   }
 
   /**
-   * When the next held-back message is due, or null when nothing is waiting.
-   * Outside the send window the worker parks queued messages until it opens,
-   * so a campaign can sit at "sending" for hours with nothing happening —
-   * this is what lets the page say why.
+   * When the send window next opens, if it is the reason this campaign's
+   * queued messages are not going out; otherwise null. Outside the window a
+   * campaign sits at "sending" for hours with nothing happening — this is what
+   * lets the page say why. Worked out from the current settings, so it moves
+   * the moment the window is changed.
    */
   private async nextSendAt(id: string): Promise<Date | null> {
-    const rows = await this.messageRepo.query<Array<{ at: Date | null }>>(
-      `SELECT MIN(send_after) AS at FROM whatsapp_messages
-        WHERE campaign_id = $1 AND status = 'queued' AND send_after > now()`,
+    const rows = await this.messageRepo.query<Array<{ queued: string }>>(
+      `SELECT COUNT(*)::text AS queued FROM whatsapp_messages
+        WHERE campaign_id = $1 AND status = 'queued'`,
       [id],
     );
-    return rows[0]?.at ?? null;
+    if (!Number(rows[0]?.queued ?? 0)) return null;
+    const settings = await this.settings.getRow();
+    const now = new Date();
+    return this.settings.isWithinSendWindow(settings, now)
+      ? null
+      : this.settings.nextWindowStart(settings, now);
   }
 
   async create(dto: CreateCampaignDto, userId: string | null) {
