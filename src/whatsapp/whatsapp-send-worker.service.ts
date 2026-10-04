@@ -135,19 +135,11 @@ export class WhatsAppSendWorkerService {
     const settings = await this.settings.getRow();
     const now = new Date();
 
-    // 1. Send window (IST): defer queued rows until it opens.
-    if (!this.settings.isWithinSendWindow(settings, now)) {
-      const next = this.settings.nextWindowStart(settings, now);
-      await this.dataSource.query(
-        `UPDATE whatsapp_messages m
-            SET send_after = $1
-          WHERE m.status = 'queued'
-            AND (m.send_after IS NULL OR m.send_after < $1)
-            AND m.campaign_id IN (SELECT id FROM whatsapp_campaigns WHERE status = 'sending')`,
-        [next],
-      );
-      return;
-    }
+    // 1. Send window (IST): claim nothing until it opens. Queued rows are left
+    // as they are rather than stamped with the opening time, so widening the
+    // window in Settings takes effect on the next tick instead of after the
+    // old opening time.
+    if (!this.settings.isWithinSendWindow(settings, now)) return;
 
     // 2. Claim.
     const perTick = sending.reduce(
