@@ -51,7 +51,7 @@ export class WhatsAppTemplateService {
   async list(query: TemplateListQueryDto): Promise<{ items: TemplateJson[] }> {
     const qb = this.templateRepo
       .createQueryBuilder('t')
-      .orderBy('t.updated_at', 'DESC')
+      .orderBy('t.updatedAt', 'DESC')
       .take(200);
     if (query.status)
       qb.andWhere('t.status = :status', { status: query.status });

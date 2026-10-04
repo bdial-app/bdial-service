@@ -10,6 +10,7 @@ import {
   WhatsAppApiError,
 } from './meta-cloud-api.service';
 import { WhatsAppSettingsService } from './whatsapp-settings.service';
+import { returnedRows } from './whatsapp-db.util';
 import {
   backoffMs,
   describeMetaError,
@@ -159,7 +160,7 @@ export class WhatsAppSendWorkerService {
       0,
     );
     const n = Math.min(WHATSAPP_CLAIM_CAP_PER_TICK, perTick);
-    const claimed = await this.dataSource.query<ClaimedRow[]>(
+    const claimRes: unknown = await this.dataSource.query(
       `UPDATE whatsapp_messages
           SET status = 'sending', locked_at = now(), attempts = attempts + 1
         WHERE id IN (
@@ -173,6 +174,7 @@ export class WhatsAppSendWorkerService {
         RETURNING id, contact_id, campaign_id, payload, attempts`,
       [n],
     );
+    const claimed = returnedRows<ClaimedRow>(claimRes);
     if (!claimed.length) return;
 
     // 3. Daily cap on unique recipients per rolling 24h.
@@ -339,7 +341,7 @@ export class WhatsAppSendWorkerService {
           `Paused automatically: ${message}${code != null ? ` (Meta ${code})` : ''}`,
         ],
       );
-      if (Array.isArray(res) && res.length) {
+      if (returnedRows(res).length) {
         this.logger.warn(`Campaign ${row.campaign_id} paused: ${message}`);
       }
     }
@@ -355,8 +357,9 @@ export class WhatsAppSendWorkerService {
              WHERE m.campaign_id = c.id AND m.status IN ('queued','sending'))
         RETURNING c.id`,
     );
-    if (Array.isArray(res) && res.length) {
-      this.logger.log(`Completed ${res.length} campaign(s)`);
+    const completed = returnedRows(res).length;
+    if (completed) {
+      this.logger.log(`Completed ${completed} campaign(s)`);
     }
   }
 }

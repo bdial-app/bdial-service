@@ -91,9 +91,11 @@ export function toCampaignDetail(
     message: string;
     count: number;
   }>,
+  nextSendAt: Date | null = null,
 ) {
   return {
     ...toCampaignSummary(c),
+    nextSendAt: nextSendAt ? new Date(nextSendAt).toISOString() : null,
     audience: c.audience ?? {},
     variableMapping: c.variableMapping ?? {},
     headerMediaUrl: c.headerMediaUrl,
