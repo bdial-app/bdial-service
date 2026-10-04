@@ -20,6 +20,7 @@ import { WhatsAppAudienceService } from './whatsapp-audience.service';
 import { WhatsAppVariableService } from './whatsapp-variable.service';
 import { WhatsAppInboxService } from './whatsapp-inbox.service';
 import { toApiDigits, toE164 } from './whatsapp-phone.util';
+import { returnedRows } from './whatsapp-db.util';
 import { META_ERROR_MAP, WHATSAPP_INSERT_CHUNK } from './whatsapp.constants';
 import {
   CampaignSummary,
@@ -82,7 +83,7 @@ export class WhatsAppCampaignService {
       .createQueryBuilder('c')
       .leftJoinAndSelect('c.template', 't')
       .leftJoinAndSelect('c.creator', 'u')
-      .orderBy('c.created_at', 'DESC')
+      .orderBy('c.createdAt', 'DESC')
       .skip((page - 1) * limit)
       .take(limit);
     if (query.status)
@@ -112,11 +113,27 @@ export class WhatsAppCampaignService {
 
   async get(id: string) {
     const c = await this.getEntity(id);
-    const [skipBreakdown, failureBreakdown] = await Promise.all([
+    const [skipBreakdown, failureBreakdown, nextSendAt] = await Promise.all([
       this.skipBreakdown(id),
       this.failureBreakdown(id),
+      this.nextSendAt(id),
     ]);
-    return toCampaignDetail(c, skipBreakdown, failureBreakdown);
+    return toCampaignDetail(c, skipBreakdown, failureBreakdown, nextSendAt);
+  }
+
+  /**
+   * When the next held-back message is due, or null when nothing is waiting.
+   * Outside the send window the worker parks queued messages until it opens,
+   * so a campaign can sit at "sending" for hours with nothing happening —
+   * this is what lets the page say why.
+   */
+  private async nextSendAt(id: string): Promise<Date | null> {
+    const rows = await this.messageRepo.query<Array<{ at: Date | null }>>(
+      `SELECT MIN(send_after) AS at FROM whatsapp_messages
+        WHERE campaign_id = $1 AND status = 'queued' AND send_after > now()`,
+      [id],
+    );
+    return rows[0]?.at ?? null;
   }
 
   async create(dto: CreateCampaignDto, userId: string | null) {
@@ -426,7 +443,7 @@ export class WhatsAppCampaignService {
           RETURNING id`,
         [id],
       );
-      const n = Array.isArray(res) ? res.length : 0;
+      const n = returnedRows(res).length;
       await trx.query(
         `UPDATE whatsapp_campaigns
             SET status = 'cancelled', completed_at = now(),
@@ -453,7 +470,7 @@ export class WhatsAppCampaignService {
         RETURNING id`,
       [id, RETRYABLE_CODES],
     );
-    const requeued = Array.isArray(res) ? res.length : 0;
+    const requeued = returnedRows(res).length;
     if (requeued) {
       await this.dataSource.query(
         `UPDATE whatsapp_campaigns
@@ -598,7 +615,7 @@ export class WhatsAppCampaignService {
       .innerJoinAndSelect('m.contact', 'c')
       .leftJoinAndSelect('c.provider', 'p')
       .where('m.campaign_id = :id', { id })
-      .orderBy('m.created_at', 'ASC');
+      .orderBy('m.createdAt', 'ASC');
     if (status) qb.andWhere('m.status = :status', { status });
     if (search) {
       qb.andWhere(

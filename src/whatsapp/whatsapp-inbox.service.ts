@@ -159,7 +159,7 @@ export class WhatsAppInboxService {
       .createQueryBuilder('m')
       .leftJoinAndSelect('m.campaign', 'c')
       .where('m.contact_id = :contactId', { contactId })
-      .orderBy('m.created_at', 'DESC')
+      .orderBy('m.createdAt', 'DESC')
       .take(limit);
     if (query.before) {
       qb.andWhere('m.created_at < :before', { before: new Date(query.before) });

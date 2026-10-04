@@ -95,7 +95,7 @@ export class WhatsAppAudienceService {
           'u.name AS owner_name',
         ])
         .where('p.deleted_at IS NULL')
-        .orderBy('p.created_at', 'ASC');
+        .orderBy('p.createdAt', 'ASC');
 
       if (manual) {
         qb.andWhere('p.id IN (:...ids)', { ids: f.providerIds });
@@ -375,7 +375,7 @@ export class WhatsAppAudienceService {
     const qb = this.contactRepo
       .createQueryBuilder('c')
       .leftJoinAndSelect('c.provider', 'p')
-      .orderBy('c.updated_at', 'DESC')
+      .orderBy('c.updatedAt', 'DESC')
       .skip((page - 1) * limit)
       .take(limit);
     if (query.search) {
