@@ -245,6 +245,39 @@ export class MetaCloudApiService {
     return this.request('POST', `/${this.wabaId}/message_templates`, body);
   }
 
+  /** A template's name and language as Meta has them, or null if it is gone. */
+  async getTemplateIdentity(
+    metaTemplateId: string,
+  ): Promise<{ name: string; language: string } | null> {
+    this.assertConfigured();
+    try {
+      return await this.request<{ name: string; language: string }>(
+        'GET',
+        `/${metaTemplateId}?fields=name,language`,
+      );
+    } catch (err) {
+      if (
+        err instanceof WhatsAppApiError &&
+        (err.code === 100 || err.httpStatus === 404)
+      )
+        return null;
+      throw err;
+    }
+  }
+
+  /**
+   * Edit a template in place: how a rejected or paused template is fixed and
+   * re-reviewed. Unlike delete-and-create it keeps the name, which Meta may
+   * refuse to reuse for a while after a delete.
+   */
+  async editTemplate(
+    metaTemplateId: string,
+    body: { category: unknown; components: unknown },
+  ): Promise<void> {
+    this.assertConfigured();
+    await this.request('POST', `/${metaTemplateId}`, body);
+  }
+
   async deleteTemplate(
     name: string,
     metaTemplateId?: string | null,

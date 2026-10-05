@@ -184,8 +184,9 @@ export class WhatsAppTemplateService {
   }
 
   /**
-   * Create at Meta. Meta templates are immutable once approved, so when a
-   * copy already exists we delete-then-create.
+   * Send to Meta for review. A rejected or paused template that Meta still
+   * holds under the same name is edited in place; anything else is created
+   * (replacing an older copy under another name or language).
    */
   private async submitEntity(
     t: WhatsAppTemplate,
@@ -193,20 +194,40 @@ export class WhatsAppTemplateService {
   ): Promise<WhatsAppTemplate> {
     this.meta.assertConfigured();
     this.validateDefinition(t.components, t.variables ?? []);
-    if (replaceExisting && t.metaTemplateId) {
-      try {
-        await this.meta.deleteTemplate(t.name, t.metaTemplateId);
-      } catch (err) {
-        // 100 / "does not exist" is fine — nothing to replace.
-        this.logger.warn(
-          `Delete before re-create failed for ${t.name}: ${errMessage(err)}`,
-        );
-      }
-    }
     try {
-      const res = await this.meta.createTemplate(
-        await this.withHeaderSample(this.buildMetaCreateBody(t)),
-      );
+      const body = await this.withHeaderSample(this.buildMetaCreateBody(t));
+
+      if (replaceExisting && t.metaTemplateId) {
+        const remote = await this.meta.getTemplateIdentity(t.metaTemplateId);
+        const sameIdentity =
+          remote?.name === t.name && remote?.language === t.language;
+        if (
+          remote &&
+          sameIdentity &&
+          ['rejected', 'paused'].includes(t.status)
+        ) {
+          await this.meta.editTemplate(t.metaTemplateId, {
+            category: body.category,
+            components: body.components,
+          });
+          t.status = 'pending';
+          t.rejectedReason = null;
+          t.lastSyncedAt = new Date();
+          return this.templateRepo.save(t);
+        }
+        if (remote) {
+          // Renamed, or not editable: retire the old copy, then create.
+          try {
+            await this.meta.deleteTemplate(remote.name, t.metaTemplateId);
+          } catch (err) {
+            this.logger.warn(
+              `Delete before re-create failed for ${remote.name}: ${errMessage(err)}`,
+            );
+          }
+        }
+      }
+
+      const res = await this.meta.createTemplate(body);
       t.metaTemplateId = res.id ?? t.metaTemplateId;
       t.status =
         (META_TEMPLATE_STATUS_MAP[res.status] as WhatsAppTemplateStatus) ||
