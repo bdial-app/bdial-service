@@ -1,10 +1,13 @@
 import {
+  Inject,
   Injectable,
   NotFoundException,
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Logger,
 } from '@nestjs/common';
+import { CACHE_MANAGER, Cache } from '@nestjs/cache-manager';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
@@ -14,7 +17,53 @@ import {
   GoogleReviewResponse,
   CombinedReviewsResponse,
 } from './dto';
-import { GoogleReviewsSyncService } from './google-reviews-sync.service';
+import {
+  GoogleReviewsSyncService,
+  tenDigits,
+} from './google-reviews-sync.service';
+import { OtpService } from '../otp/otp.service';
+
+/**
+ * The outcome of an owner pressing "Connect Google Business". An owner never
+ * picks a listing: it is the one Google has under the business's phone
+ * number, and it links only once the owner has shown they control that number.
+ */
+export type GoogleConnectResult =
+  | { status: 'linked'; via: 'login_number' | 'code' }
+  | { status: 'already_linked' }
+  | {
+      status: 'otp_required';
+      maskedPhone: string;
+      expiresInSeconds: number;
+      /** Development only, like the other OTP screens. */
+      devCode?: string;
+      place: {
+        name: string;
+        address: string;
+        rating: number | null;
+        userRatingCount: number | null;
+      } | null;
+    }
+  | { status: 'not_found'; numbersChecked: string[] }
+  | { status: 'ambiguous' }
+  | { status: 'taken' };
+
+/** What a code-pending connection remembers between the two requests. */
+interface PendingConnect {
+  placeId: string;
+  phone: string;
+  userId: string;
+  attempts: number;
+}
+
+const PENDING_TTL_MS = 10 * 60 * 1000;
+const MAX_CODE_ATTEMPTS = 5;
+const OWNER_UPDATE_APP =
+  'Please update the app to connect your Google Business — it now verifies your listing by phone.';
+const pendingKey = (providerId: string) => `google-connect:${providerId}`;
+const otpKey = (providerId: string) => `google_link_${providerId}`;
+const mask = (digits: string) =>
+  `+91 ${digits.slice(0, 2)}•••• •${digits.slice(-4)}`;
 
 /** "3 days ago", "2 months ago" — worked out now, so it never goes stale in storage. */
 function relativeTime(date: Date | null): string {
@@ -47,6 +96,8 @@ export class GoogleReviewsService {
     private googleReviewRepo: Repository<GoogleReview>,
     private config: ConfigService,
     private sync: GoogleReviewsSyncService,
+    private otp: OtpService,
+    @Inject(CACHE_MANAGER) private cache: Cache,
   ) {
     this.apiKey = this.config.get<string>('GOOGLE_MAPS_API_KEY');
   }
@@ -94,10 +145,12 @@ export class GoogleReviewsService {
     actorUserId?: string,
   ): Promise<GooglePlaceCandidate[]> {
     this.ensureApiKey();
+    // Owners connect with connectForOwner: their listing is matched by phone
+    // and verified, never chosen from a list.
+    if (actorUserId) throw new ForbiddenException(OWNER_UPDATE_APP);
 
     const provider = await this.providerRepo.findOneBy({ id: providerId });
     if (!provider) throw new NotFoundException('Provider not found');
-    if (actorUserId) this.assertOwnership(provider, actorUserId);
 
     const phone = phoneOverride || provider.contactNumber;
     if (phone) {
@@ -177,10 +230,12 @@ export class GoogleReviewsService {
     actorUserId?: string,
   ): Promise<Provider> {
     this.ensureApiKey();
+    // This took any place ID from an owner, so anyone could attach someone
+    // else's Google listing to their business. Admins only now.
+    if (actorUserId) throw new ForbiddenException(OWNER_UPDATE_APP);
 
     const provider = await this.providerRepo.findOneBy({ id: providerId });
     if (!provider) throw new NotFoundException('Provider not found');
-    if (actorUserId) this.assertOwnership(provider, actorUserId);
 
     if (provider.googlePlaceId && provider.googlePlaceId !== placeId) {
       // A different listing: the old one's reviews must not linger.
@@ -201,6 +256,171 @@ export class GoogleReviewsService {
       );
     }
     return (await this.providerRepo.findOneBy({ id: providerId }))!;
+  }
+
+  // ── Owner self-connect ──────────────────────────────────────────────────
+
+  /**
+   * "Connect Google Business" for an owner. The listing is whichever one
+   * Google has under the business's numbers or the owner's login number —
+   * the owner never chooses. If it carries the owner's login number (already
+   * proven by their sign-in code) it links straight away; otherwise a code is
+   * sent to the number on the Google listing, and connectVerifyForOwner
+   * finishes once it is entered.
+   */
+  async connectForOwner(
+    providerId: string,
+    actor: { id: string; mobileNumber: string | null },
+  ): Promise<GoogleConnectResult> {
+    this.ensureApiKey();
+    const provider = await this.providerRepo.findOneBy({ id: providerId });
+    if (!provider) throw new NotFoundException('Provider not found');
+    this.assertOwnership(provider, actor.id);
+    if (
+      provider.deletedAt ||
+      ['suspended', 'disabled'].includes(provider.status)
+    ) {
+      throw new ForbiddenException('This business cannot be changed right now');
+    }
+    if (provider.googlePlaceId) return { status: 'already_linked' };
+
+    const loginNumber = tenDigits(actor.mobileNumber);
+    const numbers = [
+      ...new Set(
+        [
+          tenDigits(provider.contactNumber),
+          tenDigits(provider.whatsappNumber),
+          loginNumber,
+        ].filter((n): n is string => !!n),
+      ),
+    ];
+    if (!numbers.length) return { status: 'not_found', numbersChecked: [] };
+
+    // Which listings carry which of these numbers.
+    const phonesByPlace = new Map<string, Set<string>>();
+    for (const n of numbers) {
+      for (const id of await this.sync.placeIdsForPhone(n)) {
+        if (!phonesByPlace.has(id)) phonesByPlace.set(id, new Set());
+        phonesByPlace.get(id)!.add(n);
+      }
+    }
+    if (phonesByPlace.size === 0)
+      return { status: 'not_found', numbersChecked: numbers.map(mask) };
+    // Several listings share these numbers: a person has to decide, not us.
+    if (phonesByPlace.size > 1) return { status: 'ambiguous' };
+
+    const [[placeId, phones]] = [...phonesByPlace.entries()];
+    if (await this.providerRepo.exists({ where: { googlePlaceId: placeId } }))
+      return { status: 'taken' };
+
+    if (loginNumber && phones.has(loginNumber)) {
+      await this.linkVerified(provider, placeId, 'owner_login');
+      return { status: 'linked', via: 'login_number' };
+    }
+
+    // Prove control of the number on the listing, preferring the business number.
+    const phone =
+      [
+        tenDigits(provider.contactNumber),
+        tenDigits(provider.whatsappNumber),
+      ].find((n): n is string => !!n && phones.has(n)) ?? [...phones][0];
+    const sent = await this.otp.sendOtpWithKey(otpKey(providerId), phone);
+    const pending: PendingConnect = {
+      placeId,
+      phone,
+      userId: actor.id,
+      attempts: 0,
+    };
+    await this.cache.set(pendingKey(providerId), pending, PENDING_TTL_MS);
+    return {
+      status: 'otp_required',
+      maskedPhone: mask(phone),
+      expiresInSeconds: PENDING_TTL_MS / 1000,
+      ...(sent.otp ? { devCode: sent.otp } : {}),
+      place: await this.sync.placePreview(placeId),
+    };
+  }
+
+  /** Finish a code-verified connection started by connectForOwner. */
+  async connectVerifyForOwner(
+    providerId: string,
+    actor: { id: string },
+    code: string,
+  ): Promise<GoogleConnectResult> {
+    const provider = await this.providerRepo.findOneBy({ id: providerId });
+    if (!provider) throw new NotFoundException('Provider not found');
+    this.assertOwnership(provider, actor.id);
+
+    const key = pendingKey(providerId);
+    const pending = await this.cache.get<PendingConnect>(key);
+    if (!pending || pending.userId !== actor.id) {
+      throw new BadRequestException(
+        'That code has expired. Tap Connect Google Business to get a new one.',
+      );
+    }
+    if (pending.attempts >= MAX_CODE_ATTEMPTS) {
+      await this.cache.del(key);
+      throw new BadRequestException(
+        'Too many wrong codes. Tap Connect Google Business to get a new one.',
+      );
+    }
+
+    let check: { valid: boolean; message: string };
+    try {
+      check = await this.otp.verifyOtpWithKey(
+        otpKey(providerId),
+        pending.phone,
+        code,
+      );
+    } catch (e) {
+      check = {
+        valid: false,
+        message: e instanceof BadRequestException ? e.message : '',
+      };
+    }
+    if (!check.valid) {
+      await this.cache.set(
+        key,
+        { ...pending, attempts: pending.attempts + 1 },
+        PENDING_TTL_MS,
+      );
+      throw new BadRequestException(
+        check.message || 'That code is not right. Please check and try again.',
+      );
+    }
+
+    await this.cache.del(key);
+    if (
+      await this.providerRepo.exists({
+        where: { googlePlaceId: pending.placeId },
+      })
+    ) {
+      throw new ConflictException(
+        'This Google listing has just been connected to another business. Please contact support.',
+      );
+    }
+    await this.linkVerified(provider, pending.placeId, 'owner_code');
+    return { status: 'linked', via: 'code' };
+  }
+
+  /** Link a listing whose ownership has been shown, and pull its reviews. */
+  private async linkVerified(
+    provider: Provider,
+    placeId: string,
+    method: 'owner_login' | 'owner_code',
+  ) {
+    provider.googlePlaceId = placeId;
+    provider.googleMatchMethod = method;
+    provider.googleVerifiedAt = new Date();
+    provider.googleMatchCheckedAt = new Date();
+    provider.googleLastFetchedAt = null;
+    provider.googleSyncError = null;
+    await this.providerRepo.save(provider);
+    const r = await this.sync.syncProvider(provider.id);
+    if (r.status !== 'synced')
+      this.logger.warn(
+        `Linked ${provider.id}; first sync ${r.status}: ${r.error ?? ''}`,
+      );
   }
 
   /**
