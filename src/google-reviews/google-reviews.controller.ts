@@ -67,7 +67,7 @@ export class GoogleReviewsController {
 
   @Get('provider/:providerId')
   @Public()
-  @ApiOperation({ summary: 'Get Google reviews for a provider (fetched live from Google)' })
+  @ApiOperation({ summary: 'Get Google reviews for a provider (from the stored mirror, refreshed on a schedule)' })
   @ApiParam({ name: 'providerId', type: String })
   getGoogleReviews(@Param('providerId', ParseUUIDPipe) providerId: string) {
     return this.googleReviewsService.getGoogleReviews(providerId);

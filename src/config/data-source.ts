@@ -24,6 +24,7 @@ import { SearchLog } from '../entities/search-log.entity';
 import { SponsoredListing } from '../entities/sponsored-listing.entity';
 import { ProviderBadge } from '../entities/provider-badge.entity';
 import { ProviderOffer } from '../entities/provider-offer.entity';
+import { GoogleReview } from '../entities/google-review.entity';
 import { AdEvent } from '../entities/ad-event.entity';
 import { AppInvite } from '../entities/app-invite.entity';
 import { ProviderAnalyticsEvent } from '../entities/provider-analytics-event.entity';
@@ -78,6 +79,7 @@ export const ALL_ENTITIES = [
   SponsoredListing,
   ProviderBadge,
   ProviderOffer,
+  GoogleReview,
   AdEvent,
   AppInvite,
   ProviderAnalyticsEvent,

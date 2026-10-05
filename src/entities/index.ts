@@ -70,3 +70,4 @@ export {
   type WhatsAppMessageStatus,
   type WhatsAppSkipReason,
 } from './whatsapp-message.entity';
+export { GoogleReview } from './google-review.entity';
