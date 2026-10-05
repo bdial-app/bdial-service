@@ -26,6 +26,8 @@ import { AdminWhatsAppController } from './admin-whatsapp.controller';
  * Admin-driven WhatsApp marketing through Meta's Cloud API.
  * Loads without WHATSAPP_* env (endpoints answer configured=false).
  */
+import { WhatsAppMediaController } from './whatsapp-media.controller';
+import { WhatsAppMediaService } from './whatsapp-media.service';
 @Module({
   imports: [
     TypeOrmModule.forFeature([
@@ -40,9 +42,14 @@ import { AdminWhatsAppController } from './admin-whatsapp.controller';
       User,
     ]),
   ],
-  controllers: [WhatsAppWebhookController, AdminWhatsAppController],
+  controllers: [
+    WhatsAppWebhookController,
+    AdminWhatsAppController,
+    WhatsAppMediaController,
+  ],
   providers: [
     MetaCloudApiService,
+    WhatsAppMediaService,
     WhatsAppSettingsService,
     WhatsAppTemplateService,
     WhatsAppVariableService,
