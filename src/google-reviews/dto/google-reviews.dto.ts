@@ -1,8 +1,17 @@
-import { IsString, IsOptional, IsNotEmpty, MaxLength, Matches } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  IsNotEmpty,
+  MaxLength,
+  Matches,
+} from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class VerifyGooglePlaceDto {
-  @ApiPropertyOptional({ description: 'Override phone number to search (defaults to provider contactNumber)' })
+  @ApiPropertyOptional({
+    description:
+      'Override phone number to search (defaults to provider contactNumber)',
+  })
   @IsOptional()
   @IsString()
   @MaxLength(20)
@@ -61,4 +70,13 @@ export interface CombinedReviewsResponse {
     googleReviewCount: number | null;
     trustLevel: string;
   };
+}
+
+export class GoogleConnectCodeDto {
+  @ApiProperty({
+    description: 'The 6-digit code sent to the number on the Google listing',
+  })
+  @IsString()
+  @Matches(/^\d{6}$/, { message: 'Enter the 6-digit code' })
+  code: string;
 }

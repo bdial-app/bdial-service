@@ -6,10 +6,12 @@ import { GoogleReviewsService } from './google-reviews.service';
 import { GoogleReviewsSyncService } from './google-reviews-sync.service';
 import { GoogleReview, Provider, Review } from '../entities';
 import { AuthModule } from '../auth/auth.module';
+import { OtpModule } from '../otp/otp.module';
 
 @Module({
   imports: [
     AuthModule,
+    OtpModule,
     TypeOrmModule.forFeature([Provider, Review, GoogleReview]),
   ],
   controllers: [GoogleReviewsController, AdminGoogleReviewsController],

@@ -39,6 +39,8 @@ const DETAILS_FIELDS = 'id,rating,userRatingCount,businessStatus,reviews';
 export const SKU_REVIEWS = 'place_details_reviews';
 /** Free: Find Place by phone, place_id only. Counted for visibility. */
 export const SKU_PHONE_LOOKUP = 'find_place_phone_id_only';
+/** Billed (Enterprise): a listing's name, address and rating, shown to an owner before they verify. */
+export const SKU_PREVIEW = 'place_details_preview';
 
 /** Google's free monthly allowance for SKU_REVIEWS. */
 export const GOOGLE_FREE_REVIEW_CALLS = 1000;
@@ -76,7 +78,7 @@ export interface SyncResult {
   error?: string;
 }
 
-const tenDigits = (phone: string | null | undefined) => {
+export const tenDigits = (phone: string | null | undefined) => {
   const d = (phone ?? '').replace(/\D/g, '');
   return d.length >= 10 ? d.slice(-10) : null;
 };
@@ -442,6 +444,68 @@ export class GoogleReviewsSyncService {
     }
   }
 
+  // ── Lookups ──────────────────────────────────────────────────────────────
+
+  /**
+   * Google listings that list this 10-digit Indian number. The legacy Find
+   * Place lookup with only place_id requested, which Google does not charge
+   * for; Places API (New) text search cannot search by phone number. Throws on
+   * a network failure, which callers must not mistake for "no listing".
+   */
+  async placeIdsForPhone(digits: string): Promise<string[]> {
+    const key = this.ensureApiKey();
+    const url = `${FIND_PLACE}?${new URLSearchParams({
+      input: `+91${digits}`,
+      inputtype: 'phonenumber',
+      fields: 'place_id',
+      key,
+    }).toString()}`;
+    const data = (await (
+      await fetch(url, { signal: AbortSignal.timeout(15_000) })
+    ).json()) as {
+      status?: string;
+      candidates?: Array<{ place_id: string }>;
+    };
+    await this.countCall(SKU_PHONE_LOOKUP);
+    return [...new Set((data.candidates ?? []).map((c) => c.place_id))];
+  }
+
+  /** A listing's name, address and rating, so an owner can recognise it before verifying. */
+  async placePreview(placeId: string): Promise<{
+    name: string;
+    address: string;
+    rating: number | null;
+    userRatingCount: number | null;
+  } | null> {
+    const key = this.ensureApiKey();
+    try {
+      const res = await fetch(`${PLACES_V1}/${encodeURIComponent(placeId)}`, {
+        headers: {
+          'X-Goog-Api-Key': key,
+          'X-Goog-FieldMask':
+            'displayName,formattedAddress,rating,userRatingCount',
+        },
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!res.ok) return null;
+      await this.countCall(SKU_PREVIEW);
+      const d = (await res.json()) as {
+        displayName?: { text?: string };
+        formattedAddress?: string;
+        rating?: number;
+        userRatingCount?: number;
+      };
+      return {
+        name: d.displayName?.text ?? '',
+        address: d.formattedAddress ?? '',
+        rating: d.rating ?? null,
+        userRatingCount: d.userRatingCount ?? null,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   // ── Automatic linking by phone ──────────────────────────────────────────
 
   /**
@@ -456,7 +520,7 @@ export class GoogleReviewsSyncService {
     ambiguous: number;
     remaining: number;
   }> {
-    const key = this.ensureApiKey();
+    this.ensureApiKey();
     const batch = await this.providers.find({
       where: {
         googlePlaceId: IsNull(),
@@ -475,23 +539,8 @@ export class GoogleReviewsSyncService {
       const digits = tenDigits(p.contactNumber) ?? tenDigits(p.whatsappNumber);
       let placeId: string | null = null;
       if (digits) {
-        const url = `${FIND_PLACE}?${new URLSearchParams({
-          input: `+91${digits}`,
-          inputtype: 'phonenumber',
-          fields: 'place_id',
-          key,
-        }).toString()}`;
         try {
-          const data = (await (
-            await fetch(url, { signal: AbortSignal.timeout(15_000) })
-          ).json()) as {
-            status?: string;
-            candidates?: Array<{ place_id: string }>;
-          };
-          await this.countCall(SKU_PHONE_LOOKUP);
-          const ids = [
-            ...new Set((data.candidates ?? []).map((c) => c.place_id)),
-          ];
+          const ids = await this.placeIdsForPhone(digits);
           if (ids.length === 1) {
             // Never give two businesses the same Google listing.
             const taken = await this.providers.exists({
