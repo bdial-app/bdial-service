@@ -22,7 +22,12 @@ import {
   MetaTemplate,
   WhatsAppApiError,
 } from './meta-cloud-api.service';
+import sharp from 'sharp';
 import { STARTER_TEMPLATES } from './seeds/starter-templates';
+import {
+  DEFAULT_CARD_ID,
+  WhatsAppMediaService,
+} from './whatsapp-media.service';
 import { META_TEMPLATE_STATUS_MAP } from './whatsapp.constants';
 import { TemplateJson, toTemplateJson } from './whatsapp.mappers';
 import { RenderedTemplate } from './whatsapp.types';
@@ -44,6 +49,7 @@ export class WhatsAppTemplateService {
     @InjectRepository(WhatsAppCampaign)
     private readonly campaignRepo: Repository<WhatsAppCampaign>,
     private readonly meta: MetaCloudApiService,
+    private readonly media: WhatsAppMediaService,
   ) {}
 
   // ── Reads ────────────────────────────────────────────────────────────────
@@ -198,7 +204,9 @@ export class WhatsAppTemplateService {
       }
     }
     try {
-      const res = await this.meta.createTemplate(this.buildMetaCreateBody(t));
+      const res = await this.meta.createTemplate(
+        await this.withHeaderSample(this.buildMetaCreateBody(t)),
+      );
       t.metaTemplateId = res.id ?? t.metaTemplateId;
       t.status =
         (META_TEMPLATE_STATUS_MAP[res.status] as WhatsAppTemplateStatus) ||
@@ -632,6 +640,81 @@ export class WhatsAppTemplateService {
       allow_category_change: true,
       components,
     };
+  }
+
+  /**
+   * Meta reviews an image-header template against a sample image, given as an
+   * upload handle — a link is rejected ("Missing sample parameter"). Upload
+   * the sample link the admin entered, or the Tijarah card when there is none,
+   * and put the handle in its place. Handles are only sent, never stored.
+   */
+  private async withHeaderSample(
+    body: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const components = body.components as WhatsAppTemplateComponent[];
+    const i = components.findIndex(
+      (c) => c.type === 'HEADER' && c.format === 'IMAGE',
+    );
+    if (i < 0) return body;
+    const given = (
+      components[i].example as { header_handle?: unknown[] } | undefined
+    )?.header_handle?.[0];
+    const link = typeof given === 'string' ? given.trim() : '';
+    // Anything that is not a link is taken to be a handle already.
+    if (link && !/^https?:\/\//i.test(link)) return body;
+
+    const card = link ? null : await this.media.card(DEFAULT_CARD_ID);
+    const image = link
+      ? await this.sampleFromLink(link)
+      : card && { data: card, mimeType: 'image/jpeg' as const };
+    if (!image) {
+      throw new BadRequestException(
+        'Could not prepare a sample image for the image header',
+      );
+    }
+    const handle = await this.meta.uploadTemplateSample(
+      image.data,
+      image.mimeType,
+    );
+    const next = [...components];
+    next[i] = { ...components[i], example: { header_handle: [handle] } };
+    return { ...body, components: next };
+  }
+
+  /** The admin's sample link as JPEG/PNG bytes Meta accepts. */
+  private async sampleFromLink(
+    link: string,
+  ): Promise<{ data: Buffer; mimeType: 'image/jpeg' | 'image/png' }> {
+    const fail = (why: string) =>
+      new BadRequestException(
+        `The sample image link did not work (${why}). Use a public JPG or PNG link under 5 MB, or leave it empty to use the Tijarah card.`,
+      );
+    if (!/^https:\/\//i.test(link)) throw fail('it must start with https://');
+    let buf: Buffer;
+    try {
+      const res = await fetch(link, { signal: AbortSignal.timeout(15_000) });
+      if (!res.ok) throw fail(`the server answered ${res.status}`);
+      buf = Buffer.from(await res.arrayBuffer());
+    } catch (err) {
+      if (err instanceof BadRequestException) throw err;
+      throw fail('it could not be downloaded');
+    }
+    if (buf.length > 5 * 1024 * 1024) throw fail('it is over 5 MB');
+    try {
+      const meta = await sharp(buf).metadata();
+      if (meta.format === 'png') return { data: buf, mimeType: 'image/png' };
+      if (meta.format === 'jpeg') return { data: buf, mimeType: 'image/jpeg' };
+      // WebP, GIF and the rest: Meta wants JPEG or PNG.
+      return {
+        data: await sharp(buf)
+          .flatten({ background: '#ffffff' })
+          .jpeg({ quality: 88 })
+          .toBuffer(),
+        mimeType: 'image/jpeg',
+      };
+    } catch {
+      throw fail('it is not an image');
+    }
   }
 
   /** For templates that arrived via sync without local metadata. */

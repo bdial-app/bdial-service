@@ -258,6 +258,81 @@ export class MetaCloudApiService {
     );
   }
 
+  // ── Template sample media ────────────────────────────────────────────────
+
+  private appIdCache: string | null = null;
+
+  /** The Meta app the access token belongs to (uploads are made through it). */
+  private async appId(): Promise<string> {
+    const configured = (
+      this.config.get<string>('WHATSAPP_APP_ID') ?? ''
+    ).trim();
+    if (configured) return configured;
+    if (!this.appIdCache) {
+      const app = await this.request<{ id?: string }>('GET', '/app');
+      if (!app.id) {
+        throw new WhatsAppApiError(
+          null,
+          'Could not find the Meta app for this token; set WHATSAPP_APP_ID',
+          500,
+        );
+      }
+      this.appIdCache = app.id;
+    }
+    return this.appIdCache;
+  }
+
+  /**
+   * Upload a sample image for template review and return its handle. Meta
+   * wants an image-header template's example as an upload handle
+   * (`example.header_handle`), never as a link.
+   */
+  async uploadTemplateSample(
+    image: Buffer,
+    mimeType: 'image/jpeg' | 'image/png',
+  ): Promise<string> {
+    this.assertConfigured();
+    const appId = await this.appId();
+    const qs = new URLSearchParams({
+      file_name: mimeType === 'image/png' ? 'sample.png' : 'sample.jpg',
+      file_length: String(image.length),
+      file_type: mimeType,
+    });
+    const session = await this.request<{ id?: string }>(
+      'POST',
+      `/${appId}/uploads?${qs.toString()}`,
+    );
+    if (!session.id) {
+      throw new WhatsAppApiError(
+        null,
+        'Meta did not open an upload session',
+        502,
+      );
+    }
+    // The upload itself takes raw bytes and an OAuth-style header.
+    const path = `/${session.id}`;
+    let res: Response;
+    try {
+      res = await fetch(
+        `https://graph.facebook.com/${this.apiVersion}${path}`,
+        {
+          method: 'POST',
+          headers: { Authorization: `OAuth ${this.token}`, file_offset: '0' },
+          body: new Uint8Array(image),
+          signal: AbortSignal.timeout(30_000),
+        },
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'network error';
+      throw new WhatsAppApiError(null, `Meta upload failed: ${msg}`, 503);
+    }
+    const out = await this.parseResponse<{ h?: string }>(res, 'POST', path);
+    if (!out.h) {
+      throw new WhatsAppApiError(null, 'Meta returned no upload handle', 502);
+    }
+    return out.h;
+  }
+
   // ── Phone ────────────────────────────────────────────────────────────────
 
   async getPhoneMeta(): Promise<MetaPhoneMeta> {
@@ -295,7 +370,14 @@ export class MetaCloudApiService {
     } finally {
       clearTimeout(timer);
     }
+    return this.parseResponse<T>(res, method, path);
+  }
 
+  private async parseResponse<T>(
+    res: Response,
+    method: string,
+    path: string,
+  ): Promise<T> {
     const text = await res.text();
     let json: unknown = null;
     if (text) {
