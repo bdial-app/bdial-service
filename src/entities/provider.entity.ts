@@ -180,6 +180,18 @@ export class Provider {
   @Column({ name: 'google_last_fetched_at', type: 'timestamptz', nullable: true })
   googleLastFetchedAt: Date | null;
 
+  /** 'phone' when linked automatically by phone number, 'manual' when an admin or owner chose it. */
+  @Column({ name: 'google_match_method', type: 'varchar', length: 16, nullable: true })
+  googleMatchMethod: string | null;
+
+  /** When the automatic phone lookup last ran, so a business with no Google listing is not searched again. */
+  @Column({ name: 'google_match_checked_at', type: 'timestamptz', nullable: true })
+  googleMatchCheckedAt: Date | null;
+
+  /** Why the last Google sync failed, if it did. */
+  @Column({ name: 'google_sync_error', type: 'varchar', length: 300, nullable: true })
+  googleSyncError: string | null;
+
   @Column({ name: 'combined_rating', type: 'decimal', precision: 2, scale: 1, nullable: true, transformer: DecimalTransformer })
   combinedRating: number | null;
 

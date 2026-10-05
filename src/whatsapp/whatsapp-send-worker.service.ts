@@ -10,7 +10,7 @@ import {
   WhatsAppApiError,
 } from './meta-cloud-api.service';
 import { WhatsAppSettingsService } from './whatsapp-settings.service';
-import { returnedRows } from './whatsapp-db.util';
+import { returnedRows } from '../common/utils/returned-rows';
 import {
   backoffMs,
   describeMetaError,

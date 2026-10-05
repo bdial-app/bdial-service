@@ -20,7 +20,7 @@ import { WhatsAppAudienceService } from './whatsapp-audience.service';
 import { WhatsAppVariableService } from './whatsapp-variable.service';
 import { WhatsAppInboxService } from './whatsapp-inbox.service';
 import { toApiDigits, toE164 } from './whatsapp-phone.util';
-import { returnedRows } from './whatsapp-db.util';
+import { returnedRows } from '../common/utils/returned-rows';
 import { META_ERROR_MAP, WHATSAPP_INSERT_CHUNK } from './whatsapp.constants';
 import {
   CampaignSummary,
