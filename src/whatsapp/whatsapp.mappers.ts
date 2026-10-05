@@ -99,6 +99,7 @@ export function toCampaignDetail(
     audience: c.audience ?? {},
     variableMapping: c.variableMapping ?? {},
     headerMediaUrl: c.headerMediaUrl,
+    headerMediaSource: c.headerMediaSource ?? 'fixed',
     buttonUrlParams: c.buttonUrlParams,
     ratePerMinute: c.ratePerMinute,
     failureReason: c.failureReason,

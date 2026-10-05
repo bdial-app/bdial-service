@@ -38,6 +38,13 @@ export interface WhatsAppVariableMappingEntry {
 }
 
 /** Keyed by variable index as a string: { "1": { source: 'brand_name' } } */
+/** 'fixed': header_media_url for everyone. 'provider_logo': each business's logo card. */
+export type WhatsAppHeaderMediaSource = 'fixed' | 'provider_logo';
+export const WHATSAPP_HEADER_MEDIA_SOURCES: WhatsAppHeaderMediaSource[] = [
+  'fixed',
+  'provider_logo',
+];
+
 export type WhatsAppVariableMapping = Record<
   string,
   WhatsAppVariableMappingEntry
@@ -75,6 +82,14 @@ export class WhatsAppCampaign {
     nullable: true,
   })
   headerMediaUrl: string | null;
+
+  @Column({
+    name: 'header_media_source',
+    type: 'varchar',
+    length: 16,
+    default: 'fixed',
+  })
+  headerMediaSource: WhatsAppHeaderMediaSource;
 
   /** { "0": { source: 'profile_url' } } per URL button index */
   @Column({ name: 'button_url_params', type: 'jsonb', nullable: true })

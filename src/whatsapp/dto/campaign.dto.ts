@@ -1,6 +1,7 @@
 import {
   IsDateString,
   IsEnum,
+  IsIn,
   IsInt,
   IsObject,
   IsOptional,
@@ -14,7 +15,11 @@ import {
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { AudienceFiltersDto } from './audience.dto';
-import { WHATSAPP_CAMPAIGN_STATUS_VALUES } from '../../entities/whatsapp-campaign.entity';
+import {
+  WHATSAPP_CAMPAIGN_STATUS_VALUES,
+  WHATSAPP_HEADER_MEDIA_SOURCES,
+} from '../../entities/whatsapp-campaign.entity';
+import type { WhatsAppHeaderMediaSource } from '../../entities/whatsapp-campaign.entity';
 import type {
   WhatsAppCampaignStatus,
   WhatsAppVariableMapping,
@@ -52,6 +57,15 @@ export class CreateCampaignDto {
   @IsString()
   @MaxLength(600)
   headerMediaUrl?: string;
+
+  @ApiPropertyOptional({
+    enum: WHATSAPP_HEADER_MEDIA_SOURCES,
+    description:
+      "Image header: 'fixed' sends headerMediaUrl to everyone; 'provider_logo' sends each business its own logo card",
+  })
+  @IsOptional()
+  @IsIn(WHATSAPP_HEADER_MEDIA_SOURCES)
+  headerMediaSource?: WhatsAppHeaderMediaSource;
 
   @ApiPropertyOptional({ example: { '0': { source: 'profile_url' } } })
   @IsOptional()
@@ -94,6 +108,15 @@ export class UpdateCampaignDto {
   @IsString()
   @MaxLength(600)
   headerMediaUrl?: string | null;
+
+  @ApiPropertyOptional({
+    enum: WHATSAPP_HEADER_MEDIA_SOURCES,
+    description:
+      "Image header: 'fixed' sends headerMediaUrl to everyone; 'provider_logo' sends each business its own logo card",
+  })
+  @IsOptional()
+  @IsIn(WHATSAPP_HEADER_MEDIA_SOURCES)
+  headerMediaSource?: WhatsAppHeaderMediaSource;
 
   @ApiPropertyOptional()
   @IsOptional()

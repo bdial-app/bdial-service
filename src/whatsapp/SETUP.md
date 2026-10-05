@@ -33,6 +33,11 @@ into `.env`.
    - Verify token: the string from step 6 → **Verify and save**
    - **Manage** → subscribe to `messages`, `message_template_status_update`,
      `phone_number_quality_update`.
+   - **Link the app to the WhatsApp Business Account** — without this Meta sends
+     no events at all (no template approvals, delivery receipts or replies),
+     even with the fields above ticked. Once per account:
+     `curl -X POST -H "Authorization: Bearer $WHATSAPP_ACCESS_TOKEN" https://graph.facebook.com/v21.0/$WHATSAPP_BUSINESS_ACCOUNT_ID/subscribed_apps`
+     → `{"success":true}`. A `GET` on the same URL should list the app.
 9. In Settings click **Send a test message** with the pre-approved `hello_world`
    template to one of the numbers from step 4. Reply to it from your phone; it
    should appear in **Inbox** within a few seconds. That proves both directions.

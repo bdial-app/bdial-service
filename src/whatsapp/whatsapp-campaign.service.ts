@@ -52,6 +52,7 @@ const RETRYABLE_CODES = Object.entries(META_ERROR_MAP)
   .filter(([, d]) => d.retryable || d.capHit)
   .map(([code]) => Number(code));
 
+import { WhatsAppMediaService } from './whatsapp-media.service';
 @Injectable()
 export class WhatsAppCampaignService {
   private readonly logger = new Logger(WhatsAppCampaignService.name);
@@ -70,6 +71,7 @@ export class WhatsAppCampaignService {
     private readonly audience: WhatsAppAudienceService,
     private readonly variables: WhatsAppVariableService,
     private readonly inbox: WhatsAppInboxService,
+    private readonly media: WhatsAppMediaService,
   ) {}
 
   // ── CRUD ─────────────────────────────────────────────────────────────────
@@ -150,6 +152,7 @@ export class WhatsAppCampaignService {
       audience: { ...dto.audience },
       variableMapping: dto.variableMapping ?? {},
       headerMediaUrl: dto.headerMediaUrl ?? null,
+      headerMediaSource: dto.headerMediaSource ?? 'fixed',
       buttonUrlParams: dto.buttonUrlParams ?? null,
       ratePerMinute: dto.ratePerMinute ?? null,
       status: 'draft',
@@ -173,6 +176,8 @@ export class WhatsAppCampaignService {
     if (dto.variableMapping !== undefined)
       c.variableMapping = dto.variableMapping;
     if (dto.headerMediaUrl !== undefined) c.headerMediaUrl = dto.headerMediaUrl;
+    if (dto.headerMediaSource !== undefined)
+      c.headerMediaSource = dto.headerMediaSource;
     if (dto.buttonUrlParams !== undefined)
       c.buttonUrlParams = dto.buttonUrlParams;
     if (dto.ratePerMinute !== undefined) c.ratePerMinute = dto.ratePerMinute;
@@ -188,6 +193,7 @@ export class WhatsAppCampaignService {
       audience: { ...c.audience },
       variableMapping: { ...c.variableMapping },
       headerMediaUrl: c.headerMediaUrl,
+      headerMediaSource: c.headerMediaSource,
       buttonUrlParams: c.buttonUrlParams ? { ...c.buttonUrlParams } : null,
       ratePerMinute: c.ratePerMinute,
       status: 'draft',
@@ -225,6 +231,7 @@ export class WhatsAppCampaignService {
       );
     }
     this.meta.assertConfigured();
+    this.assertHeaderImage(c, template);
 
     const scheduledAt = dto.scheduledAt ? new Date(dto.scheduledAt) : null;
     if (scheduledAt && Number.isNaN(scheduledAt.getTime())) {
@@ -263,6 +270,10 @@ export class WhatsAppCampaignService {
       providerIds,
       sources,
     );
+    const logoCards =
+      c.headerMediaSource === 'provider_logo'
+        ? await this.media.logoCardUrls(providerIds)
+        : null;
 
     const rows: QueryDeepPartialEntity<WhatsAppMessage>[] = [];
     let queued = 0;
@@ -317,7 +328,7 @@ export class WhatsAppCampaignService {
       const components = this.templates.buildSendComponents(
         template,
         variables,
-        c.headerMediaUrl,
+        this.headerImageFor(c, r.providerId, logoCards),
         buttonValues,
       );
       rows.push({
@@ -491,6 +502,39 @@ export class WhatsAppCampaignService {
     return { requeued };
   }
 
+  /**
+   * The image header for one recipient: their business's logo card, the
+   * fixed image, or (no business / no fixed image) Tijarah's own card.
+   */
+  private headerImageFor(
+    c: WhatsAppCampaign,
+    providerId: string | null,
+    logoCards: Map<string, string> | null,
+  ): string | null {
+    if (c.headerMediaSource === 'provider_logo') {
+      return (
+        (providerId && logoCards?.get(providerId)) ||
+        c.headerMediaUrl ||
+        this.media.defaultCardUrl()
+      );
+    }
+    return c.headerMediaUrl;
+  }
+
+  /** An image-header template cannot go out without an image: Meta rejects it. */
+  private assertHeaderImage(c: WhatsAppCampaign, template: WhatsAppTemplate) {
+    const header = this.templates.headerComponent(template.components);
+    if (
+      header?.format === 'IMAGE' &&
+      c.headerMediaSource !== 'provider_logo' &&
+      !c.headerMediaUrl
+    ) {
+      throw new UnprocessableEntityException(
+        `Template "${template.name}" has an image header: add an image link or choose "Each business's logo"`,
+      );
+    }
+  }
+
   /** Send the campaign's template to one number, outside the campaign. */
   async testSend(
     id: string,
@@ -527,10 +571,21 @@ export class WhatsAppCampaignService {
       template,
     );
 
+    this.assertHeaderImage(c, template);
+    const logoCards =
+      c.headerMediaSource === 'provider_logo' && first?.providerId
+        ? await this.media.logoCardUrls([first.providerId])
+        : null;
+    const headerMediaUrl = this.headerImageFor(
+      c,
+      first?.providerId ?? null,
+      logoCards,
+    );
+
     const contact = await this.inbox.ensureContact(phone);
     const m = await this.inbox.sendDirect(
       contact,
-      { template, variables, headerMediaUrl: c.headerMediaUrl, buttonValues },
+      { template, variables, headerMediaUrl, buttonValues },
       first?.providerId ?? null,
     );
     return { waMessageId: m.waMessageId, messageId: m.id };
