@@ -2,6 +2,7 @@ import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import {
   S3Client,
   DeleteObjectCommand,
+  GetObjectCommand,
   PutObjectCommand,
 } from '@aws-sdk/client-s3';
 
@@ -58,6 +59,45 @@ export class StorageService {
     const baseUrl = this.endpoint.replace('/storage/v1/s3', '/storage/v1/object/public');
     const url = `${baseUrl}/${this.bucket}/${storageKey}`;
     return { url, storageKey };
+  }
+
+  /**
+   * Store bytes that are not a public upload (e.g. WhatsApp media). The key is
+   * random and never handed out: the API serves these to signed-in admins.
+   */
+  async putPrivate(
+    folder: string,
+    data: Buffer,
+    contentType: string,
+    ext: string,
+  ): Promise<string> {
+    const { v4: uuidv4 } = await import('uuid');
+    const storageKey = `${folder}/${uuidv4()}.${ext}`;
+    try {
+      await this.s3.send(
+        new PutObjectCommand({
+          Bucket: this.bucket,
+          Key: storageKey,
+          Body: data,
+          ContentType: contentType,
+          CacheControl: 'private, no-store',
+        }),
+      );
+    } catch (err) {
+      throw new InternalServerErrorException(
+        `S3 upload failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    return storageKey;
+  }
+
+  /** Read a stored object's bytes. */
+  async get(storageKey: string): Promise<Buffer> {
+    const res = await this.s3.send(
+      new GetObjectCommand({ Bucket: this.bucket, Key: storageKey }),
+    );
+    if (!res.Body) throw new InternalServerErrorException('Empty object');
+    return Buffer.from(await res.Body.transformToByteArray());
   }
 
   /**

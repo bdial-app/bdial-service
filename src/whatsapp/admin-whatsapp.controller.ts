@@ -30,6 +30,7 @@ import { WhatsAppTemplateService } from './whatsapp-template.service';
 import { WhatsAppAudienceService } from './whatsapp-audience.service';
 import { WhatsAppCampaignService } from './whatsapp-campaign.service';
 import { WhatsAppInboxService } from './whatsapp-inbox.service';
+import { WhatsAppInboxMediaService } from './whatsapp-inbox-media.service';
 import { toE164 } from './whatsapp-phone.util';
 import type { AdminRequest } from './whatsapp.types';
 import { SettingsTestSendDto, UpdateSettingsDto } from './dto/settings.dto';
@@ -40,6 +41,7 @@ import {
 } from './dto/template.dto';
 import {
   AudiencePreviewDto,
+  AudienceRecipientsDto,
   ContactsQueryDto,
   PatchContactDto,
   UpsertSegmentDto,
@@ -71,6 +73,7 @@ export class AdminWhatsAppController {
     private readonly audience: WhatsAppAudienceService,
     private readonly campaigns: WhatsAppCampaignService,
     private readonly inbox: WhatsAppInboxService,
+    private readonly inboxMedia: WhatsAppInboxMediaService,
   ) {}
 
   // ── Settings ─────────────────────────────────────────────────────────────
@@ -203,9 +206,34 @@ export class AdminWhatsAppController {
     );
   }
 
+  @Post('audience/recipients')
+  @ApiOperation({
+    summary:
+      'Every recipient the filters reach (paged; up to 10000 per page for export)',
+  })
+  audienceRecipients(@Body() dto: AudienceRecipientsDto) {
+    return this.audience.recipients(
+      dto.filters,
+      dto.templateCategory ?? 'marketing',
+      {
+        page: dto.page ?? 1,
+        limit: dto.limit ?? 50,
+        search: dto.search,
+        show: dto.show,
+      },
+    );
+  }
+
+  @Get('audience/customers')
+  @ApiOperation({ summary: 'Search app customers by name or phone (to pick)' })
+  searchCustomers(@Query('search') search = '') {
+    return this.audience.searchCustomers(String(search).slice(0, 100));
+  }
+
   @Get('audience/options')
   @ApiOperation({
-    summary: 'Distinct cities and active categories for filters',
+    summary:
+      'Cities, areas, categories, past campaigns and contact tags for filters',
   })
   audienceOptions() {
     return this.audience.options();
@@ -396,6 +424,29 @@ export class AdminWhatsAppController {
     @Body() dto: DirectSendDto,
   ) {
     return this.inbox.reply(contactId, dto);
+  }
+
+  @Get('inbox/messages/:messageId/media')
+  @ApiOperation({
+    summary:
+      'The photo/video/audio/document a customer sent (inline, or ?download=1)',
+  })
+  async messageMedia(
+    @Param('messageId', ParseUUIDPipe) messageId: string,
+    @Query('download') download: string | undefined,
+    @Res() res: Response,
+  ) {
+    const media = await this.inboxMedia.read(messageId);
+    const disposition = download === '1' ? 'attachment' : 'inline';
+    res
+      .status(200)
+      .type(media.mimeType)
+      .set('Cache-Control', 'private, max-age=3600')
+      .set(
+        'Content-Disposition',
+        `${disposition}; filename*=UTF-8''${encodeURIComponent(media.fileName)}`,
+      )
+      .send(media.data);
   }
 
   @Roles('admin')

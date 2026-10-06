@@ -153,6 +153,46 @@ export function toContactJson(c: WhatsAppContact, extras: ContactExtras = {}) {
 }
 export type ContactJson = ReturnType<typeof toContactJson>;
 
+const MEDIA_KINDS = ['image', 'video', 'audio', 'document', 'sticker'] as const;
+type MediaKind = (typeof MEDIA_KINDS)[number];
+
+/**
+ * The attachment on an inbound message, read from the webhook payload Meta
+ * sent (stored as-is), or null for text and outbound messages.
+ */
+export function inboundMedia(
+  kind: string,
+  payload: Record<string, unknown> | null,
+): {
+  type: MediaKind;
+  mediaId: string | null;
+  mimeType: string | null;
+  fileName: string | null;
+  caption: string | null;
+  voiceNote: boolean;
+} | null {
+  if (!payload || !(MEDIA_KINDS as readonly string[]).includes(kind))
+    return null;
+  const node = payload[kind] as
+    | {
+        id?: string;
+        mime_type?: string;
+        filename?: string;
+        caption?: string;
+        voice?: boolean;
+      }
+    | undefined;
+  if (!node) return null;
+  return {
+    type: kind as MediaKind,
+    mediaId: node.id ?? null,
+    mimeType: node.mime_type ?? null,
+    fileName: node.filename ?? null,
+    caption: node.caption ?? null,
+    voiceNote: node.voice === true,
+  };
+}
+
 /** Inbox / provider-page message shape. */
 export function toMessageJson(
   m: WhatsAppMessage,
@@ -164,6 +204,7 @@ export function toMessageJson(
     kind: m.kind,
     status: m.status,
     body: m.renderedBody,
+    media: mediaJson(m),
     templateName: m.templateName,
     errorMessage: m.errorMessage,
     errorCode: m.errorCode,
@@ -177,6 +218,21 @@ export function toMessageJson(
   };
 }
 export type MessageJson = ReturnType<typeof toMessageJson>;
+
+/** What the inbox needs to show an attachment; the bytes come from /media. */
+function mediaJson(m: WhatsAppMessage) {
+  if (m.direction !== 'inbound') return null;
+  const media = inboundMedia(m.kind, m.payload);
+  if (!media) return null;
+  return {
+    type: media.type,
+    mimeType: m.mediaMime ?? media.mimeType,
+    fileName: media.fileName,
+    caption: media.caption,
+    voiceNote: media.voiceNote,
+    size: m.mediaSize,
+  };
+}
 
 /** Campaign recipient row. */
 export function toMessageRow(

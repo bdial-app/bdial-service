@@ -19,6 +19,7 @@ import {
 } from './whatsapp.constants';
 
 // ── Webhook payload shapes (only the parts we read) ───────────────────────────
+import { WhatsAppInboxMediaService } from './whatsapp-inbox-media.service';
 
 interface WebhookStatus {
   id: string;
@@ -104,6 +105,7 @@ export class WhatsAppWebhookService {
     private readonly meta: MetaCloudApiService,
     private readonly settings: WhatsAppSettingsService,
     private readonly templates: WhatsAppTemplateService,
+    private readonly inboxMedia: WhatsAppInboxMediaService,
   ) {}
 
   /** HMAC-SHA256 of the raw body with the app secret vs `sha256=<hex>`. */
@@ -308,6 +310,10 @@ export class WhatsAppWebhookService {
       [contact.id, contact.providerId, kind, body, JSON.stringify(m), m.id, at],
     );
     if (!inserted.length) return; // duplicate delivery
+    // Meta lends customer media out only for a while: keep our own copy.
+    if (['image', 'video', 'audio', 'document', 'sticker'].includes(kind)) {
+      this.inboxMedia.persistInBackground(inserted[0].id);
+    }
 
     await this.dataSource.query(
       `UPDATE whatsapp_contacts
