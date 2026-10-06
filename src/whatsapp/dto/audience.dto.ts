@@ -4,6 +4,7 @@ import {
   IsBoolean,
   IsIn,
   IsInt,
+  IsNumber,
   IsOptional,
   IsString,
   IsUUID,
@@ -16,6 +17,9 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import type {
   AudienceFilters,
+  AudienceOrder,
+  AudienceType,
+  YesNo,
   ConsentFilter,
   ProviderStatusFilter,
   TrustLevelFilter,
@@ -44,6 +48,9 @@ const VERIFICATIONS: VerificationFilter[] = [
   'rejected',
 ];
 const CONSENTS: ConsentFilter[] = ['any', 'opted_in', 'not_opted_out'];
+const AUDIENCE_TYPES: AudienceType[] = ['businesses', 'customers', 'both'];
+const AUDIENCE_ORDERS: AudienceOrder[] = ['newest', 'oldest', 'random'];
+const YES_NO: YesNo[] = ['yes', 'no'];
 
 export class AudienceFiltersDto implements AudienceFilters {
   @ApiPropertyOptional({ type: [String] })
@@ -161,9 +168,147 @@ export class AudienceFiltersDto implements AudienceFilters {
   @IsOptional()
   @IsIn(['filters', 'manual'])
   mode?: 'filters' | 'manual';
+
+  @ApiPropertyOptional({ enum: AUDIENCE_TYPES, default: 'businesses' })
+  @IsOptional()
+  @IsIn(AUDIENCE_TYPES)
+  audienceType?: AudienceType;
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @ArrayMaxSize(300)
+  areas?: string[];
+
+  @ApiPropertyOptional({ enum: YES_NO })
+  @IsOptional()
+  @IsIn(YES_NO)
+  ownerSignedIn?: YesNo;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(3650)
+  activeWithinDays?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(100000)
+  minProducts?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(100000)
+  maxProducts?: number;
+
+  @ApiPropertyOptional({ enum: YES_NO })
+  @IsOptional()
+  @IsIn(YES_NO)
+  googleLinked?: YesNo;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(5)
+  minRating?: number;
+
+  @ApiPropertyOptional({ enum: YES_NO })
+  @IsOptional()
+  @IsIn(YES_NO)
+  paidPlan?: YesNo;
+
+  @ApiPropertyOptional({ enum: YES_NO })
+  @IsOptional()
+  @IsIn(YES_NO)
+  everContacted?: YesNo;
+
+  @ApiPropertyOptional({ enum: YES_NO })
+  @IsOptional()
+  @IsIn(YES_NO)
+  repliedEver?: YesNo;
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('all', { each: true })
+  @ArrayMaxSize(100)
+  receivedCampaignIds?: string[];
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('all', { each: true })
+  @ArrayMaxSize(100)
+  notReceivedCampaignIds?: string[];
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @MaxLength(60, { each: true })
+  @ArrayMaxSize(50)
+  contactTags?: string[];
+
+  @ApiPropertyOptional({ default: true })
+  @IsOptional()
+  @IsBoolean()
+  customerSignedInOnly?: boolean;
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('all', { each: true })
+  @ArrayMaxSize(5000)
+  customerIds?: string[];
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('all', { each: true })
+  @ArrayMaxSize(5000)
+  excludeProviderIds?: string[];
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('all', { each: true })
+  @ArrayMaxSize(5000)
+  excludeCustomerIds?: string[];
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @ArrayMaxSize(5000)
+  excludePhones?: string[];
+
+  @ApiPropertyOptional({ description: 'Send to at most this many' })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(100000)
+  maxRecipients?: number;
+
+  @ApiPropertyOptional({ enum: AUDIENCE_ORDERS, default: 'oldest' })
+  @IsOptional()
+  @IsIn(AUDIENCE_ORDERS)
+  order?: AudienceOrder;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  randomSeed?: string;
 }
 
-export class AudiencePreviewDto {
+export class AudiencePreviewDtoBase {
   @ApiProperty({ type: AudienceFiltersDto })
   @ValidateNested()
   @Type(() => AudienceFiltersDto)
@@ -173,6 +318,34 @@ export class AudiencePreviewDto {
   @IsOptional()
   @IsIn(['marketing', 'utility'])
   templateCategory?: 'marketing' | 'utility';
+}
+
+export class AudiencePreviewDto extends AudiencePreviewDtoBase {}
+
+export class AudienceRecipientsDto extends AudiencePreviewDtoBase {
+  @ApiPropertyOptional({ default: 1 })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  page?: number;
+
+  @ApiPropertyOptional({ default: 50, description: 'Up to 10000 for export' })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(10000)
+  limit?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  search?: string;
+
+  @ApiPropertyOptional({ enum: ['all', 'sendable', 'skipped'] })
+  @IsOptional()
+  @IsIn(['all', 'sendable', 'skipped'])
+  show?: 'all' | 'sendable' | 'skipped';
 }
 
 export class ContactsQueryDto {

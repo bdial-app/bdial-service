@@ -366,6 +366,58 @@ export class MetaCloudApiService {
     return out.h;
   }
 
+  // ── Inbound media ────────────────────────────────────────────────────────
+
+  /**
+   * Download media a customer sent. Meta gives a short-lived link for the
+   * media ID, which must itself be fetched with the access token.
+   */
+  async downloadMedia(
+    mediaId: string,
+    maxBytes = 100 * 1024 * 1024,
+  ): Promise<{ data: Buffer; mimeType: string }> {
+    this.assertConfigured();
+    const info = await this.request<{
+      url?: string;
+      mime_type?: string;
+      file_size?: number;
+    }>('GET', `/${encodeURIComponent(mediaId)}`);
+    if (!info.url) {
+      throw new WhatsAppApiError(null, 'Meta returned no media link', 502);
+    }
+    if (info.file_size && info.file_size > maxBytes) {
+      throw new WhatsAppApiError(null, 'Media is too large to fetch', 413);
+    }
+    let res: Response;
+    try {
+      res = await fetch(info.url, {
+        headers: { Authorization: `Bearer ${this.token}` },
+        signal: AbortSignal.timeout(60_000),
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'network error';
+      throw new WhatsAppApiError(null, `Media download failed: ${msg}`, 503);
+    }
+    if (!res.ok) {
+      throw new WhatsAppApiError(
+        null,
+        `Media download failed: HTTP ${res.status}`,
+        res.status,
+      );
+    }
+    const data = Buffer.from(await res.arrayBuffer());
+    if (data.length > maxBytes) {
+      throw new WhatsAppApiError(null, 'Media is too large to fetch', 413);
+    }
+    return {
+      data,
+      mimeType:
+        info.mime_type ||
+        res.headers.get('content-type') ||
+        'application/octet-stream',
+    };
+  }
+
   // ── Phone ────────────────────────────────────────────────────────────────
 
   async getPhoneMeta(): Promise<MetaPhoneMeta> {

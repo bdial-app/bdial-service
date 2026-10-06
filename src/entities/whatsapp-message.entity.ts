@@ -138,6 +138,21 @@ export class WhatsAppMessage {
   @Column({ type: 'jsonb', nullable: true })
   payload: Record<string, unknown> | null;
 
+  /** Our stored copy of an inbound photo/video/audio/document (Meta's expires). */
+  @Column({
+    name: 'media_storage_key',
+    type: 'varchar',
+    length: 300,
+    nullable: true,
+  })
+  mediaStorageKey: string | null;
+
+  @Column({ name: 'media_mime', type: 'varchar', length: 120, nullable: true })
+  mediaMime: string | null;
+
+  @Column({ name: 'media_size', type: 'int', nullable: true })
+  mediaSize: number | null;
+
   /** Resolved variables: { "1": "Pronttera" } */
   @Column({ type: 'jsonb', nullable: true })
   variables: Record<string, string> | null;

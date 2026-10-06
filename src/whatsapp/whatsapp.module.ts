@@ -28,6 +28,7 @@ import { AdminWhatsAppController } from './admin-whatsapp.controller';
  */
 import { WhatsAppMediaController } from './whatsapp-media.controller';
 import { WhatsAppMediaService } from './whatsapp-media.service';
+import { WhatsAppInboxMediaService } from './whatsapp-inbox-media.service';
 @Module({
   imports: [
     TypeOrmModule.forFeature([
@@ -50,6 +51,7 @@ import { WhatsAppMediaService } from './whatsapp-media.service';
   providers: [
     MetaCloudApiService,
     WhatsAppMediaService,
+    WhatsAppInboxMediaService,
     WhatsAppSettingsService,
     WhatsAppTemplateService,
     WhatsAppVariableService,

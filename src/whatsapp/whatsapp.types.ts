@@ -38,15 +38,64 @@ export interface AudienceFilters {
   notContactedDays?: number;
   consent?: ConsentFilter;
   reachableOnly?: boolean;
+  /** Always included, in both modes: picked businesses. */
   providerIds?: string[];
+  /** Always included, in both modes: pasted numbers. */
   phones?: string[];
+  /** 'filters': filter results plus the picks; 'manual': only the picks. */
   mode?: 'filters' | 'manual';
+
+  /** Who the filters find: business owners (default), app customers, or both. */
+  audienceType?: AudienceType;
+  /** Business area, or the customer's area; matched within the cities. */
+  areas?: string[];
+  /** Businesses: has the owner ever signed in to the app? */
+  ownerSignedIn?: YesNo;
+  /** Owner / customer used the app within this many days. */
+  activeWithinDays?: number;
+  minProducts?: number;
+  maxProducts?: number;
+  googleLinked?: YesNo;
+  /** Combined (Tijarah + Google) rating at least this. */
+  minRating?: number;
+  /** An active or trialing subscription. */
+  paidPlan?: YesNo;
+  /** Ever sent a WhatsApp by us (not failed). */
+  everContacted?: YesNo;
+  /** Ever written to us on WhatsApp. */
+  repliedEver?: YesNo;
+  /** Got a message from any of these campaigns. */
+  receivedCampaignIds?: string[];
+  /** Got nothing from any of these campaigns. */
+  notReceivedCampaignIds?: string[];
+  /** WhatsApp contact carries any of these tags. */
+  contactTags?: string[];
+  /** Customers: only accounts that signed in themselves (default true). */
+  customerSignedInOnly?: boolean;
+  /** Always included, in both modes: picked customers (user ids). */
+  customerIds?: string[];
+  excludeProviderIds?: string[];
+  excludeCustomerIds?: string[];
+  excludePhones?: string[];
+  /** Send to at most this many (after skips), taken in `order`. */
+  maxRecipients?: number;
+  order?: AudienceOrder;
+  /** Fixes the 'random' order so preview and send pick the same people. */
+  randomSeed?: string;
 }
+
+export type AudienceType = 'businesses' | 'customers' | 'both';
+export type AudienceOrder = 'newest' | 'oldest' | 'random';
+export type YesNo = 'yes' | 'no';
+export type RecipientKind = 'business' | 'customer' | 'number';
 
 /** A provider (or pasted phone) resolved from the audience. */
 export interface AudienceRecipient {
+  kind: RecipientKind;
   providerId: string | null;
   userId: string | null;
+  /** When the business or customer joined (for ordering). */
+  joinedAt: Date | null;
   /** Normalised E.164 or null when no candidate normalises. */
   phone: string | null;
   /** True when at least one raw candidate existed (so null phone = invalid). */

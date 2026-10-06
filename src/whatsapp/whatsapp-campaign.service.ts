@@ -245,12 +245,29 @@ export class WhatsAppCampaignService {
       .map((r) => r.phone)
       .filter((p): p is string => Boolean(p));
     const contacts = await this.audience.loadContactsByPhone(phones);
-    const classified = this.audience.classify(
-      recipients,
-      contacts,
-      template.category,
-      settingsRow,
+    const { list: classified } = this.audience.limitSendable(
+      this.audience.classify(
+        recipients,
+        contacts,
+        template.category,
+        settingsRow,
+      ),
+      filters.maxRecipients,
     );
+
+    // Customers have no business: refuse rather than send them the sample.
+    if (classified.some((r) => r.kind === 'customer' && !r.skipReason)) {
+      const uses = this.variables.businessOnlyUses(
+        c.variableMapping,
+        c.buttonUrlParams,
+        template,
+      );
+      if (uses.length) {
+        throw new UnprocessableEntityException(
+          `This audience includes customers, but ${uses.join(', ')} uses business details they don't have. Map it to Owner name (the customer's name), City, App download link or custom text — or send to businesses only.`,
+        );
+      }
+    }
 
     // Upsert contacts for every valid phone (so skipped rows still have a contact).
     await this.upsertContacts(classified, contacts);
@@ -270,6 +287,11 @@ export class WhatsAppCampaignService {
       providerIds,
       sources,
     );
+    const customerVars = await this.variables.resolveForCustomers(
+      classified
+        .filter((r) => r.kind === 'customer' && r.userId)
+        .map((r) => r.userId!),
+    );
     const logoCards =
       c.headerMediaSource === 'provider_logo'
         ? await this.media.logoCardUrls(providerIds)
@@ -279,7 +301,11 @@ export class WhatsAppCampaignService {
     let queued = 0;
     let skipped = 0;
     for (const r of classified) {
-      const vars = r.providerId ? resolved.get(r.providerId) : undefined;
+      const vars = r.providerId
+        ? resolved.get(r.providerId)
+        : r.kind === 'customer' && r.userId
+          ? customerVars.get(r.userId)
+          : undefined;
       const variables = this.variables.applyMapping(
         c.variableMapping,
         vars,

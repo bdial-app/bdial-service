@@ -16,6 +16,16 @@ interface ProviderBase {
   owner_name: string | null;
 }
 
+/** Sources a customer (no business) has no value for. */
+export const BUSINESS_ONLY_SOURCES = new Set<WhatsAppVariableSource>([
+  'brand_name',
+  'category',
+  'profile_url',
+  'products_count',
+  'visits_7d',
+  'enquiries_7d',
+]);
+
 /**
  * Resolves VariableSource values per provider in batches
  * (one query per source family for the whole campaign).
@@ -38,7 +48,7 @@ export class WhatsAppVariableService {
   appDownloadUrl(): string {
     return (
       this.config.get<string>('PLAY_STORE_URL') ??
-      'https://play.google.com/store/apps/details?id=com.tijarah.app'
+      'https://play.google.com/store/apps/details?id=com.pronttera.tijarah'
     );
   }
 
@@ -169,6 +179,63 @@ export class WhatsAppVariableService {
     }
 
     return out;
+  }
+
+  /**
+   * Variables for app customers (no business): their own name and city. The
+   * business-only sources stay unset — campaigns refuse to send those to
+   * customers (see BUSINESS_ONLY_SOURCES).
+   */
+  async resolveForCustomers(
+    userIds: string[],
+  ): Promise<Map<string, ResolvedProviderVariables>> {
+    const out = new Map<string, ResolvedProviderVariables>();
+    const ids = [...new Set(userIds.filter(Boolean))];
+    if (!ids.length) return out;
+    const rows = await this.dataSource.query<
+      Array<{ id: string; name: string | null; city: string | null }>
+    >(`SELECT id, name, city FROM users WHERE id = ANY($1::uuid[])`, [ids]);
+    for (const r of rows) {
+      out.set(r.id, {
+        owner_name: r.name?.trim() || 'there',
+        city: r.city ?? '',
+        app_download_url: this.appDownloadUrl(),
+      });
+    }
+    return out;
+  }
+
+  /**
+   * The business-only sources this campaign would fill (body/header variables
+   * and URL buttons), with the placeholder each one fills — e.g. "{{2}}".
+   */
+  businessOnlyUses(
+    mapping: WhatsAppVariableMapping | null | undefined,
+    buttonParams: WhatsAppVariableMapping | null | undefined,
+    template: WhatsAppTemplate,
+  ): string[] {
+    const uses: string[] = [];
+    const samples = this.templates.sampleVariables(template);
+    const keys = new Set([
+      ...Object.keys(samples),
+      ...Object.keys(mapping ?? {}),
+    ]);
+    for (const key of keys) {
+      const source =
+        mapping?.[key]?.source ??
+        template.variables?.find(
+          (v) => String(v.index) === key && v.location !== 'button',
+        )?.source;
+      if (source && BUSINESS_ONLY_SOURCES.has(source)) uses.push(`{{${key}}}`);
+    }
+    for (const { index, button } of this.templates.urlButtonsWithParam(
+      template.components,
+    )) {
+      const source = buttonParams?.[String(index)]?.source ?? 'profile_url';
+      if (BUSINESS_ONLY_SOURCES.has(source))
+        uses.push(`the "${button.text}" button`);
+    }
+    return uses;
   }
 
   /**
