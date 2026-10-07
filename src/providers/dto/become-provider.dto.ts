@@ -34,6 +34,14 @@ export class BecomeProviderDto extends CreateProviderDto {
   @IsString()
   ijamatDocUrl?: string;
 
+  @ApiPropertyOptional({
+    description:
+      'Identity document already uploaded via POST /provider-onboarding/media (kind=verification). Used instead of `file`.',
+  })
+  @IsOptional()
+  @IsString()
+  aadhaarDocUrl?: string;
+
   @ApiPropertyOptional({ description: 'Category IDs to associate with this provider', type: [String] })
   @IsOptional()
   @Transform(({ value }) => (Array.isArray(value) ? value : value ? [value] : []))
@@ -41,7 +49,10 @@ export class BecomeProviderDto extends CreateProviderDto {
   @IsUUID('4', { each: true })
   categoryIds?: string[];
 
-  @ApiPropertyOptional({ description: 'Products JSON array: [{name, description?, price?, currency?}]' })
+  @ApiPropertyOptional({
+    description:
+      'Products JSON array: [{name, description?, price?, currency?, productType?, photoUrls?: string[] (already uploaded) | imageCount?: number (files in productImages)}]',
+  })
   @IsOptional()
   @IsString()
   products?: string;

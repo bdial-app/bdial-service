@@ -29,6 +29,20 @@ export class ProductsService {
     return provider;
   }
 
+  /**
+   * Every product and service of the caller's business, hidden ones included,
+   * for the owner's catalogue. The public business page returns only visible
+   * items, so hidden ones vanished from the owner's list with no way back.
+   */
+  async findMine(userId: string) {
+    const provider = await this.providerRepo.findOneBy({ userId });
+    if (!provider) return [];
+    return this.productRepo.find({
+      where: { providerId: provider.id },
+      order: { displayOrder: 'ASC', name: 'ASC' },
+    });
+  }
+
   async uploadImage(userId: string, file: Express.Multer.File) {
     const compressed = await compressImage(file, 'full');
     return this.storageService.upload('products', compressed);

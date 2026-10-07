@@ -25,6 +25,7 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import { PhotosService } from './photos.service';
 import { memoryStorage } from 'multer';
+import { UPLOAD_LIMITS } from '../common/image-processor';
 
 @ApiTags('Photos')
 @ApiBearerAuth()
@@ -46,7 +47,7 @@ export class PhotosController {
       },
     },
   })
-  @UseInterceptors(FilesInterceptor('files', 5, { storage: memoryStorage() }))
+  @UseInterceptors(FilesInterceptor('files', 5, { storage: memoryStorage(), limits: UPLOAD_LIMITS }))
   uploadProviderPhotos(
     @Param('providerId') providerId: string,
     @Request() req,
@@ -97,7 +98,7 @@ export class PhotosController {
       },
     },
   })
-  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: UPLOAD_LIMITS }))
   uploadProviderProfileImage(
     @Param('providerId') providerId: string,
     @Request() req,
@@ -128,7 +129,7 @@ export class PhotosController {
       },
     },
   })
-  @UseInterceptors(FilesInterceptor('files', 3, { storage: memoryStorage() }))
+  @UseInterceptors(FilesInterceptor('files', 3, { storage: memoryStorage(), limits: UPLOAD_LIMITS }))
   uploadReviewPhotos(
     @Param('reviewId') reviewId: string,
     @Request() req,

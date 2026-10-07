@@ -31,6 +31,7 @@ import { CreateProductDto, UpdateProductDto } from './dto/product.dto';
 import { CatalogBrowseDto, CatalogShelvesDto, SimilarProductsDto } from './dto/catalog.dto';
 import { Public } from '../common/decorators/public.decorator';
 import { memoryStorage } from 'multer';
+import { UPLOAD_LIMITS } from '../common/image-processor';
 
 /** Lets guests through; signed-in callers get `req.user` for personalisation. */
 class OptionalJwtGuard extends AuthGuard('jwt') {
@@ -72,6 +73,18 @@ export class ProductsController {
     return this.catalogService.getSellerCatalogue(providerId);
   }
 
+  // Before ':id', which would otherwise take "mine" as a product id.
+  @Get('mine')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @ApiOperation({
+    summary:
+      "The signed-in owner's whole catalogue, hidden items included (the public page shows only visible ones)",
+  })
+  findMine(@Request() req: { user: { id: string } }) {
+    return this.productsService.findMine(req.user.id);
+  }
+
   @Get(':id/similar')
   @Public()
   @ApiOperation({ summary: 'Similar items of the same type from other businesses' })
@@ -99,7 +112,7 @@ export class ProductsController {
       },
     },
   })
-  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: UPLOAD_LIMITS }))
   uploadImage(
     @Request() req,
     @UploadedFile(

@@ -19,7 +19,7 @@ import { SupabaseRealtimeService } from '../supabase/supabase-realtime.service';
 import { StorageService } from '../storage/storage.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { ContentSanitizerService } from '../common/content-sanitizer';
-import { compressImage } from '../common/image-processor';
+import { compressImage, MAX_UPLOAD_BYTES } from '../common/image-processor';
 import {
   CreateConversationDto,
   GetConversationsQueryDto,
@@ -704,9 +704,8 @@ export class ChatService {
       );
     }
 
-    // 5MB limit
-    if (file.size > 5 * 1024 * 1024) {
-      throw new BadRequestException('File size exceeds 5MB limit');
+    if (file.size > MAX_UPLOAD_BYTES) {
+      throw new BadRequestException('This file is too large (max 25 MB)');
     }
 
     // Compress images before upload (skip PDFs and GIFs)

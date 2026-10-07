@@ -30,6 +30,7 @@ import {
   MarkReadDto,
   TypingDto,
 } from './dto/chat.dto';
+import { UPLOAD_LIMITS } from '../common/image-processor';
 
 @ApiTags('Chat')
 @Controller('chat')
@@ -140,7 +141,7 @@ export class ChatController {
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload an image or file to send in chat' })
   @ApiResponse({ status: 201, description: 'Upload URL returned' })
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', { limits: UPLOAD_LIMITS }))
   uploadMedia(
     @Request() req,
     @Param('id', ParseUUIDPipe) id: string,

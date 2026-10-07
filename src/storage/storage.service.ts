@@ -61,6 +61,23 @@ export class StorageService {
     return { url, storageKey };
   }
 
+  /** Base of this bucket's public URLs: `<endpoint>/object/public/<bucket>/`. */
+  private publicBase(): string {
+    return `${this.endpoint.replace('/storage/v1/s3', '/storage/v1/object/public')}/${this.bucket}/`;
+  }
+
+  /**
+   * The storage key of a public URL from this bucket, or null when the URL is
+   * not ours — so a client can only hand back files it uploaded through us.
+   */
+  keyFromPublicUrl(url: string | null | undefined): string | null {
+    if (!url || typeof url !== 'string') return null;
+    const base = this.publicBase();
+    if (!url.startsWith(base)) return null;
+    const key = url.slice(base.length);
+    return key && !key.includes('..') ? key : null;
+  }
+
   /**
    * Store bytes that are not a public upload (e.g. WhatsApp media). The key is
    * random and never handed out: the API serves these to signed-in admins.

@@ -1,8 +1,21 @@
 import { PartialType, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsArray, IsOptional, IsString, MaxLength } from 'class-validator';
+import {
+  IsArray,
+  IsBoolean,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
 import { CreateProviderDto } from './create-provider.dto';
 
 export class UpdateProviderDto extends PartialType(CreateProviderDto) {
+  @ApiPropertyOptional({
+    description: 'Open for business: false shows customers "Closed"',
+  })
+  @IsOptional()
+  @IsBoolean()
+  isAvailable?: boolean;
+
   @ApiPropertyOptional({ description: 'Search keywords for improved discoverability', example: ['glass', 'mirror'] })
   @IsOptional()
   @IsArray()
