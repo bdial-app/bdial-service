@@ -41,6 +41,7 @@ import { CreateSponsorshipDto, UpdateSponsorshipDto } from './dto/sponsorship.dt
 import { Public } from '../common/decorators/public.decorator';
 import { InstagramFeedService } from './instagram-feed.service';
 import { Throttle } from '@nestjs/throttler';
+import { UPLOAD_LIMITS } from '../common/image-processor';
 
 @ApiTags('Providers')
 @Controller('providers')
@@ -126,7 +127,7 @@ export class ProvidersController {
     { name: 'profileImage', maxCount: 1 },
     { name: 'productImages', maxCount: 20 },
   ], {
-    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB per file
+    limits: UPLOAD_LIMITS,
   }))
   @ApiOperation({ summary: 'Become a provider (creates provider, uploads photos, creates products, and verification records)' })
   @ApiResponse({ status: 201, description: 'Provider and verification created successfully' })
@@ -354,7 +355,7 @@ export class ProvidersController {
   @UseGuards(AuthGuard('jwt'))
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FileInterceptor('file', {
-    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+    limits: UPLOAD_LIMITS,
   }))
   @ApiOperation({ summary: 'Submit identity verification document for existing provider' })
   @ApiResponse({ status: 201, description: 'Verification submitted successfully' })

@@ -31,6 +31,7 @@ import { UpdateReviewStatusDto } from './dto/review.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Public } from '../common/decorators/public.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
+import { UPLOAD_LIMITS } from '../common/image-processor';
 
 @ApiTags('Reviews')
 @Controller('reviews')
@@ -108,7 +109,7 @@ export class ReviewsController {
 
   @Post('upload-photo')
   @UseGuards(AuthGuard('jwt'))
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', { limits: UPLOAD_LIMITS }))
   @ApiConsumes('multipart/form-data')
   @ApiBearerAuth()
   @ApiBody({

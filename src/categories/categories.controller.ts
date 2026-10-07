@@ -26,6 +26,7 @@ import { CategoriesService } from './categories.service';
 import { UpdateCategoryDto, CreateCategoryDto } from './dto/category.dto';
 import { PaginationDto } from './dto/pagination.dto';
 import { Public } from '../common/decorators/public.decorator';
+import { UPLOAD_LIMITS } from '../common/image-processor';
 
 @ApiTags('Categories')
 @Controller('categories')
@@ -158,7 +159,7 @@ export class CategoriesController {
   }
 
   @Post(':id/icon')
-  @UseInterceptors(FileInterceptor('icon'))
+  @UseInterceptors(FileInterceptor('icon', { limits: UPLOAD_LIMITS }))
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload or update category icon (PNG or SVG)' })
   @ApiParam({ name: 'id', description: 'Category ID' })
@@ -209,7 +210,7 @@ export class CategoriesController {
   }
 
   @Post(':id/image')
-  @UseInterceptors(FileInterceptor('image'))
+  @UseInterceptors(FileInterceptor('image', { limits: UPLOAD_LIMITS }))
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload or update category image (PNG only)' })
   @ApiParam({ name: 'id', description: 'Category ID' })

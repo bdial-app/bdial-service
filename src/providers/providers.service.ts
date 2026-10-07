@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, ILike } from 'typeorm';
-import { Provider, User, Verification, ProviderCategory, Review, Product, Photo, Message, ConversationParticipant, ProviderBadge, ProviderOffer, SponsoredListing, ProviderWarning, SystemSetting, Subscription } from '../entities';
+import { Provider, User, Verification, ProviderCategory, Review, Product, Photo, Message, ConversationParticipant, ProviderBadge, ProviderOffer, SponsoredListing, ProviderWarning, SystemSetting, Subscription, ProviderOnboardingDraft } from '../entities';
 import { StorageService } from '../storage/storage.service';
 import { GeocodeService } from '../geocode/geocode.service';
 import { OtpService } from '../otp/otp.service';
@@ -44,6 +44,7 @@ export class ProvidersService {
     @InjectRepository(ProviderWarning) private warningRepo: Repository<ProviderWarning>,
     @InjectRepository(SystemSetting) private settingRepo: Repository<SystemSetting>,
     @InjectRepository(Subscription) private subscriptionRepo: Repository<Subscription>,
+    @InjectRepository(ProviderOnboardingDraft) private draftRepo: Repository<ProviderOnboardingDraft>,
     private storage: StorageService,
     private dataSource: DataSource,
     private geocodeService: GeocodeService,
@@ -156,6 +157,16 @@ export class ProvidersService {
     return this.providerRepo.findOne({ where: { id: saved.id }, relations: ['user'] });
   }
 
+  /**
+   * Create the business from "List your business".
+   *
+   * Two ways in: the original all-in-one multipart upload (older app builds),
+   * or — from the save-as-you-go flow — a small request whose photos were
+   * already uploaded one by one (POST /provider-onboarding/media) and arrive
+   * here as URLs. Either way it is safe to send twice: if this user already
+   * has a business (say the first try succeeded but the reply never reached
+   * the phone), that business is returned instead of an error.
+   */
   async becomeProvider(
     becomeProviderDto: BecomeProviderDto,
     file?: Express.Multer.File,
@@ -163,27 +174,22 @@ export class ProvidersService {
     profileImage?: Express.Multer.File,
     productImages?: Express.Multer.File[],
   ) {
-    const { userId, ijamatNumber, ijamatExpiry, ijamatDocUrl, categoryIds, products: productsJson, ...providerData } = becomeProviderDto;
+    const { userId, ijamatNumber, ijamatExpiry, ijamatDocUrl, aadhaarDocUrl, categoryIds, products: productsJson, ...providerData } = becomeProviderDto;
 
     // Content moderation: check brand name and description
     this.checkProviderContent(providerData.brandName, providerData.description);
 
-    // Upload files in parallel (outside transaction) — compress images before storage
-    const [aadhaarUpload, bannerUpload, profileUpload] = await Promise.all([
-      file ? this.storage.upload('verifications', file) : Promise.resolve(null),
-      bannerImage ? compressImage(bannerImage, 'banner').then((c) => this.storage.upload('providers', c)) : Promise.resolve(null),
-      profileImage ? compressImage(profileImage, 'avatar').then((c) => this.storage.upload('providers', c)) : Promise.resolve(null),
-    ]);
-
-    // Upload product images in parallel — compress to standard preset
-    const productImageUploads = productImages?.length
-      ? await compressImages(productImages, 'full').then((compressed) =>
-          Promise.all(compressed.map((img) => this.storage.upload('products', img)))
-        )
-      : [];
-
-    // Parse products JSON (each product may have imageCount for multi-image)
-    let parsedProducts: Array<{ name: string; description?: string; price?: number; currency?: string; imageCount?: number; productType?: 'product' | 'service' }> = [];
+    // Parse products JSON before any upload work: bad input fails fast.
+    type IncomingProduct = {
+      name: string;
+      description?: string;
+      price?: number;
+      currency?: string;
+      imageCount?: number;
+      photoUrls?: string[];
+      productType?: 'product' | 'service';
+    };
+    let parsedProducts: IncomingProduct[] = [];
     if (productsJson) {
       try {
         parsedProducts = JSON.parse(productsJson);
@@ -196,12 +202,9 @@ export class ProvidersService {
     const user = await this.userRepo.findOneBy({ id: userId });
     if (!user) throw new NotFoundException(`User with ID '${userId}' not found`);
 
-    const existingProvider = await this.providerRepo
-      .createQueryBuilder('p')
-      .where('p.userId = :userId', { userId })
-      .andWhere('p.deletedAt IS NULL')
-      .getOne();
-    if (existingProvider) throw new ConflictException(`Provider already exists for user with ID '${userId}'`);
+    // Already listed (a retry, or a reply that never arrived): hand it back.
+    const existing = await this.existingListing(userId);
+    if (existing) return existing;
 
     // Check if this contact number is already used by another active provider
     if (providerData.contactNumber) {
@@ -219,95 +222,151 @@ export class ProvidersService {
       }
     }
 
-    this.logger.log(`becomeProvider files received: banner=${!!bannerImage}, profile=${!!profileImage}, aadhaar=${!!file}`);
-    this.logger.log(`becomeProvider uploads: banner=${bannerUpload?.url || 'none'}, profile=${profileUpload?.url || 'none'}`);
+    // Files sent with the request (older app builds); compress before storage.
+    const [aadhaarUpload, bannerUpload, profileUpload] = await Promise.all([
+      // Documents: compressed but kept readable; if that fails, the original is kept.
+      file ? compressImage(file, 'document').catch(() => file).then((c) => this.storage.upload('verifications', c)) : Promise.resolve(null),
+      bannerImage ? compressImage(bannerImage, 'banner').then((c) => this.storage.upload('providers', c)) : Promise.resolve(null),
+      profileImage ? compressImage(profileImage, 'avatar').then((c) => this.storage.upload('providers', c)) : Promise.resolve(null),
+    ]);
+    const productImageUploads = productImages?.length
+      ? await compressImages(productImages, 'full').then((compressed) =>
+          Promise.all(compressed.map((img) => this.storage.upload('products', img)))
+        )
+      : [];
 
-    const result = await this.dataSource.transaction(async (manager) => {
-      const { latitude, longitude, file: _file, bannerImage: _bi, profileImage: _pi, productImages: _pImgs, bannerImageUrl: _biu, profilePhotoUrl: _ppu, ...cleanData } = providerData as any;
-      const declaredWomenLed = providerData.isWomenLed != null ? providerData.isWomenLed : user.gender === 'female';
-      const provider = manager.create(Provider, {
-        ...cleanData,
-        userId,
-        status: 'unverified',
-        isWomenLed: declaredWomenLed,
-        womenLedStatus: declaredWomenLed ? 'pending' : 'none',
-        latitude: latitude ? parseFloat(latitude) : null,
-        longitude: longitude ? parseFloat(longitude) : null,
-        bannerImageUrl: bannerUpload?.url || (providerData as any).bannerImageUrl || null,
-        profilePhotoUrl: profileUpload?.url || (providerData as any).profilePhotoUrl || null,
-      });
-      const savedProvider = await manager.save(provider);
+    // Already-uploaded files (save-as-you-go flow): only URLs from our own storage.
+    const own = (url: string | null | undefined) =>
+      url && this.storage.keyFromPublicUrl(url) ? url : null;
+    const bannerUrl = bannerUpload?.url || own((providerData as any).bannerImageUrl);
+    const profileUrl = profileUpload?.url || own((providerData as any).profilePhotoUrl);
+    const verificationDocUrl = aadhaarUpload?.url || own(aadhaarDocUrl);
 
-      // Save category associations
-      if (categoryIds?.length) {
-        const cats = categoryIds.map((catId: string) =>
-          manager.create(ProviderCategory, { providerId: savedProvider.id, categoryId: catId }),
-        );
-        await manager.save(cats);
-      }
+    this.logger.log(
+      `becomeProvider ${userId}: banner=${!!bannerUrl} profile=${!!profileUrl} doc=${!!verificationDocUrl} products=${parsedProducts.length}`,
+    );
 
-      // Save products with multi-image support — batch saves
-      // Images are a flat array; each product's imageCount tells us how many belong to it
-      const productsToSave: Product[] = [];
-      const galleryPhotos: Photo[] = [];
-      let imgOffset = 0;
-      if (parsedProducts.length > 0) {
+    let result: { provider: Provider; verification: Verification | null; products: Product[] };
+    try {
+      result = await this.dataSource.transaction(async (manager) => {
+        const { latitude, longitude, file: _file, bannerImage: _bi, profileImage: _pi, productImages: _pImgs, bannerImageUrl: _biu, profilePhotoUrl: _ppu, ...cleanData } = providerData as any;
+        const declaredWomenLed = providerData.isWomenLed != null ? providerData.isWomenLed : user.gender === 'female';
+        const provider = manager.create(Provider, {
+          ...cleanData,
+          userId,
+          status: 'unverified',
+          isWomenLed: declaredWomenLed,
+          womenLedStatus: declaredWomenLed ? 'pending' : 'none',
+          latitude: latitude ? parseFloat(latitude) : null,
+          longitude: longitude ? parseFloat(longitude) : null,
+          bannerImageUrl: bannerUrl || null,
+          profilePhotoUrl: profileUrl || null,
+        });
+        const savedProvider = await manager.save(provider);
+
+        // Save category associations
+        if (categoryIds?.length) {
+          const cats = categoryIds.map((catId: string) =>
+            manager.create(ProviderCategory, { providerId: savedProvider.id, categoryId: catId }),
+          );
+          await manager.save(cats);
+        }
+
+        // Products: a product's photos are either URLs it already has, or its
+        // share (imageCount) of the uploaded productImages, in order.
+        const productsToSave: Product[] = [];
+        const galleryPhotos: Photo[] = [];
+        let imgOffset = 0;
         for (let i = 0; i < parsedProducts.length; i++) {
           const p = parsedProducts[i];
-          const count = p.imageCount ?? 0;
-          const productPhotos = productImageUploads.slice(imgOffset, imgOffset + count);
-          imgOffset += count;
-          const photoUrl = productPhotos[0]?.url || null;
-          const photoUrls = productPhotos.map((ph) => ph.url);
+          if (!p?.name || typeof p.name !== 'string') continue;
+          let photos: Array<{ url: string; storageKey: string }>;
+          if (Array.isArray(p.photoUrls) && p.photoUrls.length) {
+            photos = p.photoUrls
+              .slice(0, 5)
+              .map((url) => ({ url, storageKey: this.storage.keyFromPublicUrl(url) }))
+              .filter((ph): ph is { url: string; storageKey: string } => !!ph.storageKey);
+          } else {
+            const count = p.imageCount ?? 0;
+            photos = productImageUploads.slice(imgOffset, imgOffset + count);
+            imgOffset += count;
+          }
           productsToSave.push(manager.create(Product, {
             providerId: savedProvider.id,
             name: p.name,
             description: p.description || null,
             price: p.price != null ? p.price : null,
             currency: p.currency || 'INR',
-            photoUrl,
-            photoUrls,
+            photoUrl: photos[0]?.url || null,
+            photoUrls: photos.map((ph) => ph.url),
             productType: p.productType || 'product',
             isActive: true,
             displayOrder: i,
           }));
 
           // Collect additional product photos as provider gallery photos
-          for (let j = 1; j < productPhotos.length; j++) {
+          for (let j = 1; j < photos.length; j++) {
             galleryPhotos.push(manager.create(Photo, {
               providerId: savedProvider.id,
-              imageUrl: productPhotos[j].url,
-              storageKey: productPhotos[j].storageKey,
+              imageUrl: photos[j].url,
+              storageKey: photos[j].storageKey,
               displayOrder: j,
             }));
           }
         }
-      }
-      const savedProducts = productsToSave.length > 0 ? await manager.save(productsToSave) : [];
-      if (galleryPhotos.length > 0) {
-        await manager.save(galleryPhotos);
-      }
+        const savedProducts = productsToSave.length > 0 ? await manager.save(productsToSave) : [];
+        if (galleryPhotos.length > 0) {
+          await manager.save(galleryPhotos);
+        }
 
-      let savedVerification: Verification | null = null;
-      if (aadhaarUpload) {
-        const verification = manager.create(Verification, {
-          userId,
-          aadhaarDocUrl: aadhaarUpload.url,
-          ijamatNumber,
-          ijamatExpiry: ijamatExpiry ? new Date(ijamatExpiry) : null,
-          ijamatDocUrl,
-          status: 'in_review',
-        });
-        savedVerification = await manager.save(verification);
-      }
+        let savedVerification: Verification | null = null;
+        if (verificationDocUrl) {
+          const verification = manager.create(Verification, {
+            userId,
+            aadhaarDocUrl: verificationDocUrl,
+            ijamatNumber,
+            ijamatExpiry: ijamatExpiry ? new Date(ijamatExpiry) : null,
+            ijamatDocUrl,
+            status: 'in_review',
+          });
+          savedVerification = await manager.save(verification);
+        }
 
-      return { provider: savedProvider, verification: savedVerification, products: savedProducts };
-    });
+        return { provider: savedProvider, verification: savedVerification, products: savedProducts };
+      });
+    } catch (err) {
+      // Two submits at once (double tap, or a retry racing the first): the
+      // second hits the one-business-per-user constraint. Return the first.
+      if ((err as { code?: string })?.code === '23505') {
+        const raced = await this.existingListing(userId);
+        if (raced) return raced;
+      }
+      throw err;
+    }
+
+    // The draft has done its job.
+    await this.draftRepo.delete({ userId }).catch(() => undefined);
 
     // Trigger async website logo fetch after transaction
     this.scheduleWebsiteLogoFetch(result.provider.id, becomeProviderDto.websiteUrl);
 
     return result;
+  }
+
+  /** This user's business as become-provider returns it, or null. */
+  private async existingListing(userId: string) {
+    const provider = await this.providerRepo
+      .createQueryBuilder('p')
+      .where('p.userId = :userId', { userId })
+      .andWhere('p.deletedAt IS NULL')
+      .getOne();
+    if (!provider) return null;
+    const [verification, products] = await Promise.all([
+      this.verRepo.findOne({ where: { userId }, order: { createdAt: 'DESC' } }),
+      this.productRepo.find({ where: { providerId: provider.id }, order: { displayOrder: 'ASC' } }),
+    ]);
+    await this.draftRepo.delete({ userId }).catch(() => undefined);
+    return { provider, verification: verification ?? null, products, alreadyListed: true as const };
   }
 
   // Trigger async website logo fetch after becomeProvider if websiteUrl provided
@@ -336,7 +395,8 @@ export class ProvidersService {
       throw new ConflictException('Verification already approved.');
     }
 
-    const uploadResult = await this.storage.upload('verifications', file);
+    const doc = await compressImage(file, 'document').catch(() => file);
+    const uploadResult = await this.storage.upload('verifications', doc);
     const aadhaarDocUrl = uploadResult.url;
 
     if (existingVerification) {
@@ -541,6 +601,13 @@ export class ProvidersService {
     // Ownership check — only the provider owner can update their profile
     if (requestingUserId && existingProvider.userId !== requestingUserId) {
       throw new ForbiddenException('You can only update your own provider');
+    }
+
+    // An owner can't feature their own listing or hand it to another account:
+    // Featured is an admin decision, and the listing stays with its owner.
+    if (requestingUserId) {
+      delete updateProviderDto.isFeatured;
+      delete updateProviderDto.userId;
     }
 
     // Content moderation: check brand name and description

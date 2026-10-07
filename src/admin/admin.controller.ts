@@ -32,6 +32,7 @@ import {
   BulkSponsorshipDto,
   StopAllSponsorshipsDto,
 } from './dto/sponsorship-admin.dto';
+import { UPLOAD_LIMITS } from '../common/image-processor';
 
 /**
  * Bulk provider import fires hundreds of requests from one admin session
@@ -413,7 +414,7 @@ export class AdminController {
   @ApiOperation({ summary: 'Admin add gallery photos to a provider (10 per provider in total)' })
   @ApiParam({ name: 'id', description: 'Provider ID' })
   @ApiConsumes('multipart/form-data')
-  @UseInterceptors(FilesInterceptor('photos', 10, { storage: memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }))
+  @UseInterceptors(FilesInterceptor('photos', 10, { storage: memoryStorage(), limits: UPLOAD_LIMITS }))
   uploadProviderPhotos(
     @Param('id') id: string,
     @Request() req,
@@ -441,7 +442,7 @@ export class AdminController {
   @UseInterceptors(FileFieldsInterceptor([
     { name: 'logo', maxCount: 1 },
     { name: 'banner', maxCount: 1 },
-  ], { storage: memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }))
+  ], { storage: memoryStorage(), limits: UPLOAD_LIMITS }))
   updateProviderImages(
     @Param('id') id: string,
     @Request() req,
@@ -557,7 +558,7 @@ export class AdminController {
   @ApiOperation({ summary: 'Upload images for a product (max 5 files, 10MB each)' })
   @ApiParam({ name: 'id', description: 'Product ID' })
   @ApiConsumes('multipart/form-data')
-  @UseInterceptors(FilesInterceptor('images', 5, { storage: memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }))
+  @UseInterceptors(FilesInterceptor('images', 5, { storage: memoryStorage(), limits: UPLOAD_LIMITS }))
   uploadProductImages(
     @Param('id') id: string,
     @Request() req,
@@ -820,7 +821,7 @@ export class AdminController {
   @Post('banners')
   @ApiOperation({ summary: 'Create a new banner' })
   @ApiConsumes('multipart/form-data')
-  @UseInterceptors(FileInterceptor('image', { storage: memoryStorage() }))
+  @UseInterceptors(FileInterceptor('image', { storage: memoryStorage(), limits: UPLOAD_LIMITS }))
   createBanner(@Request() req, @Body() body: any, @UploadedFile() file?: Express.Multer.File) {
     // Parse JSON string fields that come through FormData
     const parsed = this.parseBannerBody(body);
@@ -831,7 +832,7 @@ export class AdminController {
   @ApiOperation({ summary: 'Update a banner' })
   @ApiParam({ name: 'id', description: 'Banner ID' })
   @ApiConsumes('multipart/form-data')
-  @UseInterceptors(FileInterceptor('image', { storage: memoryStorage() }))
+  @UseInterceptors(FileInterceptor('image', { storage: memoryStorage(), limits: UPLOAD_LIMITS }))
   updateBanner(@Param('id') id: string, @Request() req, @Body() body: any, @UploadedFile() file?: Express.Multer.File) {
     const parsed = this.parseBannerBody(body);
     return this.adminService.updateBanner(req.user, id, parsed, file);

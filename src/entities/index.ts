@@ -71,3 +71,4 @@ export {
   type WhatsAppSkipReason,
 } from './whatsapp-message.entity';
 export { GoogleReview } from './google-review.entity';
+export { ProviderOnboardingDraft } from './provider-onboarding-draft.entity';
