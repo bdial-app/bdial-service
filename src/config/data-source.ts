@@ -3,6 +3,7 @@ import { DataSource, DataSourceOptions } from 'typeorm';
 import { join } from 'path';
 import { User } from '../entities/user.entity';
 import { ProviderOnboardingDraft } from '../entities/provider-onboarding-draft.entity';
+import { HomeCollection } from '../entities/home-collection.entity';
 import { UserArchive } from '../entities/user-archive.entity';
 import { Category } from '../entities/category.entity';
 import { ProviderCategory } from '../entities/provider-category.entity';
@@ -110,6 +111,7 @@ export const ALL_ENTITIES = [
   WhatsAppCampaign,
   WhatsAppMessage,
   ProviderOnboardingDraft,
+  HomeCollection,
 ];
 
 export function buildTypeOrmOptions(url?: string): DataSourceOptions {

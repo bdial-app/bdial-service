@@ -19,6 +19,12 @@ export const WHATSAPP_SEND_CONCURRENCY = 5;
 export const WHATSAPP_STALE_LOCK_MINUTES = 5;
 export const WHATSAPP_TICK_MS = 10_000;
 export const WHATSAPP_INSERT_CHUNK = 500;
+/** Never faster than this, whatever the campaign rate (Meta's default is 80/s). */
+export const WHATSAPP_MAX_PER_SECOND = 10;
+/** Meta said "too many messages" (130429): hold that campaign this long. */
+export const WHATSAPP_THROTTLE_PAUSE_MS = 60_000;
+/** How long one backend keeps the right to send without renewing it. */
+export const WHATSAPP_LEASE_MS = 45_000;
 
 /** IST is UTC+5:30 with no DST. */
 export const IST_OFFSET_MINUTES = 330;

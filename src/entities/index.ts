@@ -72,3 +72,4 @@ export {
 } from './whatsapp-message.entity';
 export { GoogleReview } from './google-review.entity';
 export { ProviderOnboardingDraft } from './provider-onboarding-draft.entity';
+export { HomeCollection } from './home-collection.entity';

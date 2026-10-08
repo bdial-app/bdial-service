@@ -504,25 +504,37 @@ export class WhatsAppCampaignService {
     if (!['sending', 'paused', 'completed', 'failed'].includes(c.status)) {
       throw new ConflictException(`Cannot retry a ${c.status} campaign`);
     }
+    // Ones Meta accepted before failing were counted as sent; uncount them so
+    // the resend isn't counted twice.
     const res = await this.dataSource.query<unknown[]>(
-      `UPDATE whatsapp_messages
+      `WITH picked AS (
+         SELECT id, (wa_message_id IS NOT NULL) AS was_sent
+           FROM whatsapp_messages
+          WHERE campaign_id = $1 AND status = 'failed'
+            AND (error_code IS NULL OR error_code = ANY($2::int[]))
+          FOR UPDATE
+       )
+       UPDATE whatsapp_messages m
           SET status = 'queued', send_after = now(), locked_at = NULL, attempts = 0,
-              failed_at = NULL
-        WHERE campaign_id = $1 AND status = 'failed'
-          AND (error_code IS NULL OR error_code = ANY($2::int[]))
-        RETURNING id`,
+              failed_at = NULL, wa_message_id = NULL, sent_at = NULL
+         FROM picked
+        WHERE m.id = picked.id
+        RETURNING picked.was_sent`,
       [id, RETRYABLE_CODES],
     );
-    const requeued = returnedRows(res).length;
+    const rows = returnedRows<{ was_sent: boolean }>(res);
+    const requeued = rows.length;
+    const wereSent = rows.filter((r) => r.was_sent).length;
     if (requeued) {
       await this.dataSource.query(
         `UPDATE whatsapp_campaigns
             SET queued_count = queued_count + $2,
                 failed_count = GREATEST(failed_count - $2, 0),
+                sent_count = GREATEST(sent_count - $3, 0),
                 status = CASE WHEN status IN ('completed','failed') THEN 'sending' ELSE status END,
                 completed_at = CASE WHEN status IN ('completed','failed') THEN NULL ELSE completed_at END
           WHERE id = $1`,
-        [id, requeued],
+        [id, requeued, wereSent],
       );
     }
     return { requeued };

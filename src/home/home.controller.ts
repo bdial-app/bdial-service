@@ -1,6 +1,8 @@
 import {
   Controller,
   Get,
+  Param,
+  ParseUUIDPipe,
   Query,
   Request,
   UseGuards,
@@ -14,6 +16,7 @@ import {
 } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import { HomeService } from './home.service';
+import { HomeCollectionsService } from './home-collections.service';
 import { HomeFeedDto } from './dto/home-feed.dto';
 import { Public } from '../common/decorators/public.decorator';
 
@@ -30,7 +33,28 @@ class OptionalJwtGuard extends AuthGuard('jwt') {
 @Controller('home')
 @Public()
 export class HomeController {
-  constructor(private readonly homeService: HomeService) {}
+  constructor(
+    private readonly homeService: HomeService,
+    private readonly collections: HomeCollectionsService,
+  ) {}
+
+  @Get('collections')
+  @ApiOperation({
+    summary:
+      'Home-screen "needs": collections of products and services, with preview photos',
+  })
+  getCollections(@Query() dto: HomeFeedDto) {
+    return this.collections.list(dto);
+  }
+
+  @Get('collections/:id')
+  @ApiOperation({ summary: 'One home collection, with its categories' })
+  getCollection(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() dto: HomeFeedDto,
+  ) {
+    return this.collections.get(id, dto);
+  }
 
   @Get('feed')
   @UseGuards(OptionalJwtGuard)

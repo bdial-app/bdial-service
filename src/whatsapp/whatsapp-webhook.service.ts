@@ -12,10 +12,13 @@ import { WhatsAppSettingsService } from './whatsapp-settings.service';
 import { WhatsAppTemplateService } from './whatsapp-template.service';
 import { phoneDigitVariants, toApiDigits, toE164 } from './whatsapp-phone.util';
 import {
+  backoffMs,
   describeMetaError,
   MESSAGE_STATUS_RANK,
   OPT_IN_AUTO_REPLY,
   OPT_OUT_AUTO_REPLY,
+  WHATSAPP_MAX_ATTEMPTS,
+  WHATSAPP_THROTTLE_PAUSE_MS,
 } from './whatsapp.constants';
 
 // ── Webhook payload shapes (only the parts we read) ───────────────────────────
@@ -188,16 +191,68 @@ export class WhatsAppWebhookService {
         e?.title ?? e?.message,
       );
       const detail = e?.error_data?.details;
+      const errorText = detail ? `${desc.message}: ${detail}` : desc.message;
+
+      // A temporary refusal after Meta first accepted it (e.g. 130429 "too
+      // many messages"): put a campaign message back in the queue with
+      // backoff instead of failing it for good.
+      if (
+        desc.retryable &&
+        msg.campaignId &&
+        msg.payload &&
+        (msg.attempts ?? 0) < WHATSAPP_MAX_ATTEMPTS
+      ) {
+        const requeued: unknown = await this.dataSource.query(
+          `UPDATE whatsapp_messages
+              SET status = 'queued', wa_message_id = NULL, sent_at = NULL, locked_at = NULL,
+                  error_code = $2, error_message = $3,
+                  send_after = now() + ($4 || ' milliseconds')::interval
+            WHERE id = $1 AND status NOT IN ('failed', 'queued', 'sending')
+            RETURNING id`,
+          [
+            msg.id,
+            e?.code ?? null,
+            errorText,
+            String(
+              Math.max(
+                backoffMs(msg.attempts ?? 0),
+                WHATSAPP_THROTTLE_PAUSE_MS,
+              ),
+            ),
+          ],
+        );
+        if (Array.isArray(requeued) && requeued.length) {
+          // It was counted as sent; it's queued again. Reopen a finished campaign.
+          await this.dataSource.query(
+            `UPDATE whatsapp_campaigns
+                SET sent_count = GREATEST(sent_count - 1, 0),
+                    queued_count = queued_count + 1,
+                    status = CASE WHEN status = 'completed' THEN 'sending' ELSE status END,
+                    completed_at = CASE WHEN status = 'completed' THEN NULL ELSE completed_at END
+              WHERE id = $1`,
+            [msg.campaignId],
+          );
+          if (e?.code === 130429) {
+            // Slow the whole campaign down, not just this one message.
+            await this.dataSource.query(
+              `UPDATE whatsapp_messages
+                  SET send_after = GREATEST(COALESCE(send_after, now()), now() + ($2 || ' milliseconds')::interval)
+                WHERE campaign_id = $1 AND status = 'queued'`,
+              [msg.campaignId, String(WHATSAPP_THROTTLE_PAUSE_MS)],
+            );
+          }
+          this.logger.warn(
+            `Requeued campaign message ${msg.id} after Meta error ${e?.code ?? '?'}`,
+          );
+          return;
+        }
+      }
+
       await this.dataSource.query(
         `UPDATE whatsapp_messages
             SET status = 'failed', failed_at = $2, error_code = $3, error_message = $4
           WHERE id = $1 AND status <> 'failed'`,
-        [
-          msg.id,
-          at,
-          e?.code ?? null,
-          detail ? `${desc.message}: ${detail}` : desc.message,
-        ],
+        [msg.id, at, e?.code ?? null, errorText],
       );
       if (msg.campaignId) {
         await this.dataSource.query(

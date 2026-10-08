@@ -363,7 +363,11 @@ export class CatalogService {
       type,
       scope: this.scopeFor(dto.area ?? 'all', origin, dto.city),
       origin,
-      categoryIds: dto.categoryId ? [dto.categoryId] : undefined,
+      categoryIds: dto.categoryIds?.length
+        ? dto.categoryIds
+        : dto.categoryId
+          ? [dto.categoryId]
+          : undefined,
       sort,
       minPrice: dto.minPrice,
       maxPrice: dto.maxPrice,
