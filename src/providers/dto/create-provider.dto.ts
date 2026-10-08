@@ -13,7 +13,11 @@ const NormalizeTime = () =>
   });
 
 export class CreateProviderDto {
-  @ApiProperty({ example: 'uuid-of-user' })
+  // Always taken from the login token by the controller. Optional here
+  // because validation runs before the controller fills it in; older app
+  // builds still send it, so it stays accepted (and is then overwritten).
+  @ApiPropertyOptional({ example: 'uuid-of-user', description: 'Ignored: the signed-in user is used' })
+  @IsOptional()
   @IsUUID()
   userId: string;
 

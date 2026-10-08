@@ -147,9 +147,13 @@ export class ProvidersService {
     // Content moderation
     this.checkProviderContent(createProviderDto.brandName, createProviderDto.description);
 
-    const { latitude, longitude, ...rest } = createProviderDto;
+    // Featured is an admin decision, and women-led waits for review — same
+    // rules as becomeProvider.
+    const { latitude, longitude, isFeatured: _featured, ...rest } = createProviderDto;
     const provider = this.providerRepo.create({
       ...rest,
+      userId,
+      womenLedStatus: rest.isWomenLed ? 'pending' : 'none',
       latitude: latitude ? parseFloat(latitude) : null,
       longitude: longitude ? parseFloat(longitude) : null,
     });
@@ -249,7 +253,8 @@ export class ProvidersService {
     let result: { provider: Provider; verification: Verification | null; products: Product[] };
     try {
       result = await this.dataSource.transaction(async (manager) => {
-        const { latitude, longitude, file: _file, bannerImage: _bi, profileImage: _pi, productImages: _pImgs, bannerImageUrl: _biu, profilePhotoUrl: _ppu, ...cleanData } = providerData as any;
+        // isFeatured is dropped: Featured is an admin decision, never self-set.
+        const { latitude, longitude, isFeatured: _featured, file: _file, bannerImage: _bi, profileImage: _pi, productImages: _pImgs, bannerImageUrl: _biu, profilePhotoUrl: _ppu, ...cleanData } = providerData as any;
         const declaredWomenLed = providerData.isWomenLed != null ? providerData.isWomenLed : user.gender === 'female';
         const provider = manager.create(Provider, {
           ...cleanData,
