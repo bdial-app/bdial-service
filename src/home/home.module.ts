@@ -15,8 +15,12 @@ import {
   User,
   Product,
   SystemSetting,
+  HomeCollection,
 } from '../entities';
 import { CategoryPersonalizationService } from '../users/category-personalization.service';
+import { HomeCollectionsService } from './home-collections.service';
+import { AdminHomeCollectionsController } from './admin-home-collections.controller';
+import { ProductsModule } from '../products/products.module';
 
 @Module({
   imports: [
@@ -33,10 +37,16 @@ import { CategoryPersonalizationService } from '../users/category-personalizatio
       User,
       Product,
       SystemSetting,
+      HomeCollection,
     ]),
+    ProductsModule,
   ],
-  controllers: [HomeController],
-  providers: [HomeService, CategoryPersonalizationService],
-  exports: [HomeService],
+  controllers: [HomeController, AdminHomeCollectionsController],
+  providers: [
+    HomeService,
+    HomeCollectionsService,
+    CategoryPersonalizationService,
+  ],
+  exports: [HomeService, HomeCollectionsService],
 })
 export class HomeModule {}

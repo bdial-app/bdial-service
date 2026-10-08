@@ -15,6 +15,9 @@ import {
   backoffMs,
   describeMetaError,
   WHATSAPP_CLAIM_CAP_PER_TICK,
+  WHATSAPP_LEASE_MS,
+  WHATSAPP_MAX_PER_SECOND,
+  WHATSAPP_THROTTLE_PAUSE_MS,
   WHATSAPP_MAX_ATTEMPTS,
   WHATSAPP_SEND_CONCURRENCY,
   WHATSAPP_STALE_LOCK_MINUTES,
@@ -58,11 +61,17 @@ export class WhatsAppSendWorkerService {
     private readonly settings: WhatsAppSettingsService,
   ) {}
 
+  /** This process, for the send lease. */
+  private readonly instanceId = `${process.env.HOSTNAME ?? 'local'}:${process.pid}:${Math.random().toString(36).slice(2, 8)}`;
+
   @Interval(WHATSAPP_TICK_MS)
   async tick(): Promise<void> {
     if (this.ticking) return;
     this.ticking = true;
     try {
+      // Several backends share this database; only the lease holder sends,
+      // so their bursts can't add up past Meta's per-number limit.
+      if (!(await this.holdLease())) return;
       await this.releaseStaleLocks();
       const sending = await this.sendingCampaigns();
       if (sending.length) {
@@ -111,6 +120,36 @@ export class WhatsAppSendWorkerService {
   }
 
   // ── Steps ────────────────────────────────────────────────────────────────
+
+  /** Take or renew the send lease. False when another backend holds it. */
+  private async holdLease(): Promise<boolean> {
+    const res: unknown = await this.dataSource.query(
+      `UPDATE whatsapp_settings
+          SET worker_lease_owner = $1,
+              worker_lease_until = now() + ($2 || ' milliseconds')::interval
+        WHERE id = 1
+          AND (worker_lease_until IS NULL OR worker_lease_until < now() OR worker_lease_owner = $1)
+        RETURNING id`,
+      [this.instanceId, String(WHATSAPP_LEASE_MS)],
+    );
+    if (returnedRows(res).length) return true;
+    // No settings row yet: create it, then try again next tick.
+    await this.settings.getRow();
+    return false;
+  }
+
+  /** Hold every queued message of a campaign for a while (Meta asked us to slow down). */
+  private async throttleCampaign(campaignId: string): Promise<void> {
+    await this.dataSource.query(
+      `UPDATE whatsapp_messages
+          SET send_after = GREATEST(COALESCE(send_after, now()), now() + ($2 || ' milliseconds')::interval)
+        WHERE campaign_id = $1 AND status = 'queued'`,
+      [campaignId, String(WHATSAPP_THROTTLE_PAUSE_MS)],
+    );
+    this.logger.warn(
+      `Meta rate limit (130429): pausing campaign ${campaignId} for ${WHATSAPP_THROTTLE_PAUSE_MS / 1000}s`,
+    );
+  }
 
   private async releaseStaleLocks(): Promise<void> {
     await this.dataSource.query(
@@ -214,28 +253,58 @@ export class WhatsAppSendWorkerService {
       );
     }
 
-    // 4. Send with bounded concurrency.
+    // 4. Send, spread evenly over the tick (no bursts) and never faster than
+    // WHATSAPP_MAX_PER_SECOND. If Meta says "too many", stop this campaign's
+    // remaining sends and hand them back to the queue.
     const categoryByCampaign = new Map(sending.map((c) => [c.id, c.category]));
+    const gapMs = Math.max(
+      1000 / WHATSAPP_MAX_PER_SECOND,
+      (WHATSAPP_TICK_MS * 0.9) / Math.max(1, toSend.length),
+    );
+    const throttled = new Set<string>();
+    const handedBack: ClaimedRow[] = [];
     let cursor = 0;
+    let nextStart = Date.now();
     const workers = Array.from(
       { length: Math.min(WHATSAPP_SEND_CONCURRENCY, toSend.length) },
       async () => {
         while (cursor < toSend.length) {
           const row = toSend[cursor++];
-          await this.sendOne(
+          const wait = nextStart - Date.now();
+          nextStart = Math.max(nextStart, Date.now()) + gapMs;
+          if (wait > 0) await sleep(wait);
+          if (throttled.has(row.campaign_id)) {
+            handedBack.push(row);
+            continue;
+          }
+          const rateLimited = await this.sendOne(
             row,
             categoryByCampaign.get(row.campaign_id) ?? 'utility',
           );
+          if (rateLimited && !throttled.has(row.campaign_id)) {
+            throttled.add(row.campaign_id);
+            await this.throttleCampaign(row.campaign_id);
+          }
         }
       },
     );
     await Promise.all(workers);
+    if (handedBack.length) {
+      await this.dataSource.query(
+        `UPDATE whatsapp_messages
+            SET status = 'queued', locked_at = NULL, attempts = GREATEST(attempts - 1, 0),
+                send_after = now() + ($2 || ' milliseconds')::interval
+          WHERE id = ANY($1::uuid[]) AND status = 'sending'`,
+        [handedBack.map((r) => r.id), String(WHATSAPP_THROTTLE_PAUSE_MS)],
+      );
+    }
   }
 
-  private async sendOne(row: ClaimedRow, category: string): Promise<void> {
+  /** Send one message. True when Meta answered "too many messages" (130429). */
+  private async sendOne(row: ClaimedRow, category: string): Promise<boolean> {
     if (!row.payload) {
       await this.markFailed(row, null, 'Message has no payload', false);
-      return;
+      return false;
     }
     try {
       const res = await this.meta.sendPayload(row.payload);
@@ -258,8 +327,10 @@ export class WhatsAppSendWorkerService {
           : `UPDATE whatsapp_contacts SET last_outbound_at = now() WHERE id = $1`,
         [row.contact_id],
       );
+      return false;
     } catch (err) {
       await this.handleSendError(row, err);
+      return err instanceof WhatsAppApiError && err.code === 130429;
     }
   }
 
@@ -359,3 +430,5 @@ export class WhatsAppSendWorkerService {
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));

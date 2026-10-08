@@ -78,6 +78,18 @@ export class WhatsAppSettings {
   })
   webhookLastEventAt: Date | null;
 
+  /** Which backend instance may send right now (see the send worker). */
+  @Column({
+    name: 'worker_lease_owner',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
+  workerLeaseOwner: string | null;
+
+  @Column({ name: 'worker_lease_until', type: 'timestamptz', nullable: true })
+  workerLeaseUntil: Date | null;
+
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
 }

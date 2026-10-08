@@ -8,6 +8,7 @@ import {
   Min,
   Max,
   IsBoolean,
+  ArrayMaxSize,
 } from 'class-validator';
 import { Type, Transform } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
@@ -67,6 +68,26 @@ export class CatalogBrowseDto extends CatalogLocationDto {
   @IsOptional()
   @IsUUID()
   categoryId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Several categories (comma-separated, any level) — e.g. a home collection',
+    type: String,
+  })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    (Array.isArray(value)
+      ? value
+      : typeof value === 'string'
+        ? value.split(',')
+        : []
+    )
+      .map((v) => (typeof v === 'string' ? v.trim() : ''))
+      .filter(Boolean),
+  )
+  @IsUUID('all', { each: true })
+  @ArrayMaxSize(40)
+  categoryIds?: string[];
 
   @ApiPropertyOptional({ enum: CATALOG_SORTS, default: 'recommended' })
   @IsOptional()
