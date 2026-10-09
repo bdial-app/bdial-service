@@ -5155,13 +5155,52 @@ export class AdminService {
    * single-provider form (adminCreateProviderWithUser) in its own transaction,
    * so one bad row never rolls back its neighbours. Returns a per-row report.
    */
+  /** The business this phone already has, if it has this name (an earlier import of the same row). */
+  private async alreadyImportedRow(mobile: string, brandName: string) {
+    const name = brandName?.trim().toLowerCase();
+    if (!mobile || !name) return null;
+    const row = await this.providerRepo
+      .createQueryBuilder('p')
+      .innerJoin('p.user', 'u')
+      .select(['p.id AS "providerId"', 'u.id AS "userId"', 'p.brand_name AS "brandName"'])
+      .addSelect(
+        `(p.profile_photo_url IS NOT NULL AND p.profile_photo_url NOT LIKE '%/${BRAND_MARK_FOLDER}/%')
+          OR p.banner_image_url IS NOT NULL
+          OR EXISTS (SELECT 1 FROM photos ph WHERE ph.provider_id = p.id)`,
+        'hasImages',
+      )
+      .where('u.mobile_number = :mobile', { mobile })
+      .andWhere('p.deleted_at IS NULL')
+      .andWhere('LOWER(TRIM(p.brand_name)) = :name', { name })
+      .getRawOne<{ providerId: string; userId: string; brandName: string; hasImages: boolean }>();
+    return row ?? null;
+  }
+
   async bulkImportProviders(admin: any, dto: BulkImportProvidersDto) {
     this.assertAdmin(admin);
-    const results: { rowId: string; ok: boolean; providerId?: string; userId?: string; brandName?: string; error?: string }[] = [];
+    const results: {
+      rowId: string;
+      ok: boolean;
+      providerId?: string;
+      userId?: string;
+      brandName?: string;
+      error?: string;
+      /** Created by an earlier attempt (a retry after a timeout or a stopped import). */
+      alreadyImported?: boolean;
+      /** That earlier business already has a logo or photos — don't upload them again. */
+      hasImages?: boolean;
+    }[] = [];
 
     for (const row of dto.rows) {
       const { rowId, ...payload } = row;
       try {
+        // Safe to send twice: the same phone with the same business name is the
+        // row we already imported, not a clash.
+        const earlier = await this.alreadyImportedRow(payload.userMobileNumber, payload.brandName);
+        if (earlier) {
+          results.push({ rowId, ok: true, ...earlier, alreadyImported: true });
+          continue;
+        }
         const created = await this.adminCreateProviderWithUser(admin, payload);
         results.push({ rowId, ok: true, providerId: created.provider.id, userId: created.user.id, brandName: created.provider.brandName });
       } catch (err: any) {
