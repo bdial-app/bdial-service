@@ -6,13 +6,14 @@ import { ProviderOnboardingController } from './provider-onboarding.controller';
 import { ProviderOnboardingService } from './provider-onboarding.service';
 import { WebsiteMetaService } from './website-meta.service';
 import { InstagramFeedService } from './instagram-feed.service';
+import { BrandMarkService } from './brand-mark.service';
 import { Provider, User, Verification, ProviderCategory, Review, Product, Photo, Message, ConversationParticipant, ProviderBadge, ProviderOffer, SponsoredListing, ProviderWarning, SystemSetting, Subscription, ProviderOnboardingDraft } from '../entities';
 import { GeocodeModule } from '../geocode/geocode.module';
 
 @Module({
   imports: [TypeOrmModule.forFeature([Provider, User, Verification, ProviderCategory, Review, Product, Photo, Message, ConversationParticipant, ProviderBadge, ProviderOffer, SponsoredListing, ProviderWarning, SystemSetting, Subscription, ProviderOnboardingDraft]), GeocodeModule],
   controllers: [ProvidersController, ProviderOnboardingController],
-  providers: [ProvidersService, WebsiteMetaService, InstagramFeedService, ProviderOnboardingService],
-  exports: [ProvidersService],
+  providers: [ProvidersService, WebsiteMetaService, InstagramFeedService, ProviderOnboardingService, BrandMarkService],
+  exports: [ProvidersService, BrandMarkService],
 })
 export class ProvidersModule {}

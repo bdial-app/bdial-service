@@ -1,6 +1,6 @@
 import { Injectable, ForbiddenException, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, IsNull, Not, In, MoreThan, ILike, Between } from 'typeorm';
+import { Repository, DataSource, IsNull, Not, In, MoreThan, ILike, Between, Brackets } from 'typeorm';
 import { Provider, User, Verification, Review, ReviewReport, Report, ProviderWarning, Product, Category, ProviderCategory, Conversation, ConversationParticipant, Message, PromoBanner, SponsoredListing, ProviderOffer, ProviderBadge, ProviderAnalyticsEvent, ProviderLead, SearchLog, AdEvent, AppInvite, AuditLog, SystemSetting, Photo, ReviewPhoto, ServiceableCity, UserArchive, Payment } from '../entities';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { BugReport } from '../bug-reports/bug-report.entity';
@@ -15,6 +15,9 @@ import { AdminOfferListQueryDto } from './dto/admin-offer-list.dto';
 import { AdminCreateOfferDto } from './dto/admin-offer-create.dto';
 import { BulkValidateProvidersDto, BulkImportProvidersDto } from './dto/bulk-provider-import.dto';
 import { StorageService } from '../storage/storage.service';
+import { BrandMarkService } from '../providers/brand-mark.service';
+import { BRAND_MARK_FOLDER, isBrandMarkUrl } from '../providers/brand-mark';
+import { AdminProviderFiltersDto, AdminProviderListDto } from './dto/admin-provider-list.dto';
 import { OtpService } from '../otp/otp.service';
 import { compressImage, compressImages, validateImageMime } from '../common/image-processor';
 import { ROLE_HIERARCHY } from '../common/enums/admin-role.enum';
@@ -146,6 +149,7 @@ export class AdminService {
     private dataSource: DataSource,
     private notificationDispatch: NotificationDispatchService,
     private storageService: StorageService,
+    private brandMarks: BrandMarkService,
     private otpService: OtpService,
     private supabaseAuthService: SupabaseAuthService,
     private serviceableCitiesService: ServiceableCitiesService,
@@ -1399,52 +1403,136 @@ export class AdminService {
    * The one place the provider list's filters live, so the table, its count and
    * the CSV export can never answer differently for the same filters.
    */
-  private providerListQuery(filters: {
-    search?: string;
-    status?: string;
-    city?: string;
-    isFeatured?: string;
-    isWomenLed?: string;
-    categoryId?: string;
-  }) {
-    const VALID_STATUSES = ['active', 'suspended', 'unverified', 'disabled'];
-    const safeStatus =
-      filters.status && VALID_STATUSES.includes(filters.status)
-        ? filters.status
-        : undefined;
-
-    const qb = this.providerRepo
-      .createQueryBuilder('p')
-      .leftJoinAndSelect('p.user', 'user')
-      .leftJoinAndSelect('p.providerCategories', 'pc')
-      .leftJoinAndSelect('pc.category', 'cat');
-
-    if (filters.search) {
-      qb.andWhere(
-        '(p.brand_name ILIKE :search OR user.name ILIKE :search OR user.mobile_number ILIKE :search)',
-        { search: `%${filters.search}%` },
-      );
-    }
+  /**
+   * The admin provider filters (see AdminProviderFiltersDto) as a query over
+   * providers `p` and their owner `u`, with no one-to-many joins — so it can
+   * be counted, sorted and paged by id without duplicate rows.
+   */
+  private providerFilterQuery(f: AdminProviderFiltersDto) {
+    const qb = this.providerRepo.createQueryBuilder('p').leftJoin('p.user', 'u');
     // Soft-deleted providers are gone as far as the console is concerned.
-    qb.andWhere('p.deleted_at IS NULL');
-    if (safeStatus) qb.andWhere('p.status = :status', { status: safeStatus });
-    if (filters.city)
-      qb.andWhere('p.city ILIKE :city', { city: `%${filters.city}%` });
-    if (filters.isFeatured === 'true') qb.andWhere('p.is_featured = true');
-    if (filters.isWomenLed === 'true') qb.andWhere('p.is_women_led = true');
-    if (filters.isWomenLed === 'pending')
-      qb.andWhere("p.women_led_status = 'pending'");
-    if (filters.isWomenLed === 'approved')
-      qb.andWhere("p.women_led_status = 'approved'");
-    // EXISTS, not a join condition — the joined categories are also selected for
-    // display, and filtering there would hide a provider's other categories.
-    if (filters.categoryId) {
+    qb.where('p.deleted_at IS NULL');
+
+    if (f.search?.trim()) {
+      const term = f.search.trim();
+      const digits = term.replace(/\D/g, '');
       qb.andWhere(
-        'EXISTS (SELECT 1 FROM provider_categories pc_f WHERE pc_f.provider_id = p.id AND pc_f.category_id = :categoryId)',
-        { categoryId: filters.categoryId },
+        new Brackets((w) => {
+          w.where('p.brand_name ILIKE :q', { q: `%${term}%` })
+            .orWhere('u.name ILIKE :q')
+            .orWhere('p.area ILIKE :q')
+            .orWhere('p.pincode ILIKE :q')
+            .orWhere('p.instagram_handle ILIKE :q')
+            .orWhere('p.website_url ILIKE :q');
+          // Phone numbers are stored with and without +91; match on digits.
+          if (digits.length >= 4) {
+            w.orWhere('u.mobile_number LIKE :d', { d: `%${digits}%` }).orWhere(
+              "regexp_replace(p.contact_number, '\\D', '', 'g') LIKE :d",
+            );
+          }
+        }),
       );
     }
+    if (f.status) qb.andWhere('p.status = :status', { status: f.status });
+    if (f.city) qb.andWhere('p.city ILIKE :city', { city: `%${f.city}%` });
+    // Trimmed and case-folded, like the city list in providerFacets.
+    if (f.cities?.length) qb.andWhere('LOWER(TRIM(p.city)) IN (:...cities)', { cities: f.cities.map((c) => c.trim().toLowerCase()) });
+    if (f.area) qb.andWhere('p.area ILIKE :area', { area: `%${f.area}%` });
+
+    const categoryIds = [...(f.categoryIds ?? []), ...(f.categoryId ? [f.categoryId] : [])];
+    if (categoryIds.length) {
+      qb.andWhere(
+        'EXISTS (SELECT 1 FROM provider_categories pc_f WHERE pc_f.provider_id = p.id AND pc_f.category_id IN (:...categoryIds))',
+        { categoryIds },
+      );
+    }
+
+    if (f.isFeatured) qb.andWhere('p.is_featured = :featured', { featured: f.isFeatured === 'true' });
+    if (f.isWomenLed === 'true') qb.andWhere('p.is_women_led = true');
+    if (f.isWomenLed === 'false') qb.andWhere('p.is_women_led = false');
+    if (f.isWomenLed === 'pending') qb.andWhere("p.women_led_status = 'pending'");
+    if (f.isWomenLed === 'approved') qb.andWhere("p.women_led_status = 'approved'");
+    if (f.verified) qb.andWhere('p.community_verified = :verified', { verified: f.verified === 'true' });
+    if (f.available) qb.andWhere('p.is_available = :available', { available: f.available === 'true' });
+
+    const generated = `%/${BRAND_MARK_FOLDER}/%`;
+    if (f.logo === 'none') qb.andWhere('p.profile_photo_url IS NULL');
+    if (f.logo === 'generated') qb.andWhere('p.profile_photo_url LIKE :generated', { generated });
+    if (f.logo === 'real') qb.andWhere('p.profile_photo_url IS NOT NULL AND p.profile_photo_url NOT LIKE :generated', { generated });
+    if (f.logo === 'missing') qb.andWhere('(p.profile_photo_url IS NULL OR p.profile_photo_url LIKE :generated)', { generated });
+    if (f.banner === 'has') qb.andWhere('p.banner_image_url IS NOT NULL');
+    if (f.banner === 'none') qb.andWhere('p.banner_image_url IS NULL');
+
+    const hasProducts = 'EXISTS (SELECT 1 FROM products pr WHERE pr.provider_id = p.id)';
+    if (f.products === 'has') qb.andWhere(hasProducts);
+    if (f.products === 'none') qb.andWhere(`NOT ${hasProducts}`);
+    const hasPhotos = 'EXISTS (SELECT 1 FROM photos ph WHERE ph.provider_id = p.id)';
+    if (f.photos === 'has') qb.andWhere(hasPhotos);
+    if (f.photos === 'none') qb.andWhere(`NOT ${hasPhotos}`);
+
+    const filled = (col: string) => `(${col} IS NOT NULL AND ${col} <> '')`;
+    if (f.online === 'website') qb.andWhere(filled('p.website_url'));
+    if (f.online === 'instagram') qb.andWhere(filled('p.instagram_handle'));
+    if (f.online === 'whatsapp') qb.andWhere(filled('p.whatsapp_number'));
+    if (f.online === 'none') {
+      qb.andWhere(`NOT ${filled('p.website_url')} AND NOT ${filled('p.instagram_handle')} AND NOT ${filled('p.whatsapp_number')}`);
+    }
+
+    // Same buckets as the location health card.
+    if (f.location === 'missing') qb.andWhere('(p.latitude IS NULL OR p.longitude IS NULL)');
+    if (f.location === 'precise') qb.andWhere("p.latitude IS NOT NULL AND p.geocode_precision IN ('manual', 'rooftop', 'street')");
+    if (f.location === 'neighbourhood') qb.andWhere("p.latitude IS NOT NULL AND p.geocode_precision = 'locality'");
+    if (f.location === 'approximate') {
+      qb.andWhere("p.latitude IS NOT NULL AND (p.geocode_precision IS NULL OR p.geocode_precision NOT IN ('manual', 'rooftop', 'street', 'locality'))");
+    }
+
+    // Bulk imports create placeholder owners; a real sign-in leaves one of these.
+    const claimed = '(u.supabase_id IS NOT NULL OR u.google_id IS NOT NULL)';
+    if (f.claimed === 'true') qb.andWhere(claimed);
+    if (f.claimed === 'false') qb.andWhere(`NOT ${claimed}`);
+    if (f.activeWithinDays) {
+      qb.andWhere("u.last_seen_at >= NOW() - make_interval(days => :days)", { days: f.activeWithinDays });
+    }
+
+    if (f.minRating) {
+      qb.andWhere('EXISTS (SELECT 1 FROM provider_rating_stats rs_f WHERE rs_f.provider_id = p.id AND rs_f.avg_rating >= :minRating)', {
+        minRating: f.minRating,
+      });
+    }
+    const hasReviews = "EXISTS (SELECT 1 FROM reviews rv WHERE rv.provider_id = p.id AND rv.status = 'active')";
+    if (f.reviews === 'has') qb.andWhere(hasReviews);
+    if (f.reviews === 'none') qb.andWhere(`NOT ${hasReviews}`);
+
+    if (f.createdFrom) qb.andWhere('p.created_at >= :from', { from: `${f.createdFrom.slice(0, 10)}T00:00:00` });
+    if (f.createdTo) qb.andWhere('p.created_at < CAST(:to AS date) + 1', { to: f.createdTo.slice(0, 10) });
     return qb;
+  }
+
+  /** Provider ids matching the filters, in the requested order. */
+  private sortedProviderIds(f: AdminProviderFiltersDto, offset: number, limit: number) {
+    const qb = this.providerFilterQuery(f).select('p.id', 'id');
+    const sort = f.sort ?? 'newest';
+    if (sort === 'rating' || sort === 'reviews') {
+      qb.leftJoin('provider_rating_stats', 'rs', 'rs.provider_id = p.id');
+      if (sort === 'rating') qb.orderBy('rs.avg_rating', 'DESC', 'NULLS LAST').addOrderBy('rs.review_count', 'DESC', 'NULLS LAST');
+      else qb.orderBy('rs.review_count', 'DESC', 'NULLS LAST').addOrderBy('rs.avg_rating', 'DESC', 'NULLS LAST');
+    } else if (sort === 'oldest') qb.orderBy('p.created_at', 'ASC');
+    else if (sort === 'name') qb.orderBy('LOWER(p.brand_name)', 'ASC');
+    else if (sort === 'updated') qb.orderBy('p.updated_at', 'DESC');
+    else qb.orderBy('p.created_at', 'DESC');
+    qb.addOrderBy('p.id', 'ASC'); // stable paging
+    return qb.offset(offset).limit(limit).getRawMany<{ id: string }>().then((rows) => rows.map((r) => r.id));
+  }
+
+  /** Providers by id with what the console shows, in the given order. */
+  private async providersInOrder(ids: string[]) {
+    if (!ids.length) return [];
+    const rows = await this.providerRepo.find({
+      where: { id: In(ids) },
+      relations: ['user', 'providerCategories', 'providerCategories.category'],
+    });
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    return ids.map((id) => byId.get(id)).filter((p): p is Provider => !!p);
   }
 
   /**
@@ -1454,22 +1542,13 @@ export class AdminService {
    */
   async exportProviders(
     admin: any,
-    filters: {
-      search?: string;
-      status?: string;
-      city?: string;
-      isFeatured?: string;
-      isWomenLed?: string;
-      categoryId?: string;
-    },
+    filters: AdminProviderFiltersDto,
   ) {
     this.assertAdmin(admin);
     const MAX_ROWS = 20000;
 
-    const providers = await this.providerListQuery(filters)
-      .orderBy('p.createdAt', 'DESC')
-      .take(MAX_ROWS)
-      .getMany();
+    // Same filters and order as the list, so the file matches the screen.
+    const providers = await this.providersInOrder(await this.sortedProviderIds(filters, 0, MAX_ROWS));
 
     // Counts come from two grouped queries rather than joins, so a business
     // with 40 photos does not multiply its own row.
@@ -1570,35 +1649,16 @@ export class AdminService {
     };
   }
 
-  async getProvidersList(
-    admin: any,
-    page?: number,
-    limit?: number,
-    search?: string,
-    status?: string,
-    city?: string,
-    isFeatured?: string,
-    isWomenLed?: string,
-    categoryId?: string,
-  ) {
+  async getProvidersList(admin: any, q: AdminProviderListDto) {
     this.assertAdmin(admin);
-    const currentPage = Math.max(1, page || 1);
-    const pageSize = Math.min(100, Math.max(1, limit || 10));
-    const skip = (currentPage - 1) * pageSize;
-
-    const qb = this.providerListQuery({
-      search,
-      status,
-      city,
-      isFeatured,
-      isWomenLed,
-      categoryId,
-    });
-    qb.orderBy('p.createdAt', 'DESC').skip(skip).take(pageSize);
-
-    const [items, total] = await qb.getManyAndCount();
+    const currentPage = Math.max(1, q.page || 1);
+    const pageSize = Math.min(100, Math.max(1, q.limit || 10));
+    const [total, ids] = await Promise.all([
+      this.providerFilterQuery(q).getCount(),
+      this.sortedProviderIds(q, (currentPage - 1) * pageSize, pageSize),
+    ]);
     return {
-      items,
+      items: await this.providersInOrder(ids),
       meta: {
         total,
         page: currentPage,
@@ -1606,6 +1666,22 @@ export class AdminService {
         totalPages: Math.ceil(total / pageSize),
       },
     };
+  }
+
+  /** What the filter panel offers: every city with its business count. */
+  async providerFacets(admin: any) {
+    this.assertAdmin(admin);
+    const cities = await this.providerRepo
+      .createQueryBuilder('p')
+      .select('INITCAP(TRIM(p.city))', 'city')
+      .addSelect('COUNT(*)::int', 'count')
+      .where('p.deleted_at IS NULL')
+      .andWhere("TRIM(COALESCE(p.city, '')) <> ''")
+      .groupBy('INITCAP(TRIM(p.city))')
+      .orderBy('count', 'DESC')
+      .limit(300)
+      .getRawMany<{ city: string; count: number }>();
+    return { cities };
   }
 
   async getProviderDetail(admin: any, providerId: string) {
@@ -4829,7 +4905,7 @@ export class AdminService {
     }
 
     // ── Execute in a transaction ──────────────────────────
-    return this.dataSource.transaction(async (manager) => {
+    const created = await this.dataSource.transaction(async (manager) => {
       // Step 1: Create or reuse user
       let user: User;
       if (existingUser) {
@@ -4941,6 +5017,44 @@ export class AdminService {
         categories: dto.categoryIds || [],
       };
     });
+
+    // No logo yet (the usual case for imports): a generated brand mark until
+    // enrichment or the owner provides a real one.
+    if (!created.provider.profilePhotoUrl) this.brandMarks.enqueue([created.provider.id]);
+    return created;
+  }
+
+  // ============================================
+  // Brand marks (generated logos for businesses without one)
+  // ============================================
+
+  async generateBrandMark(admin: any, providerId: string, variant = 0, ai = false) {
+    this.assertAdmin(admin);
+    const provider = await this.providerRepo.findOneBy({ id: providerId });
+    if (!provider) throw new NotFoundException('Provider not found');
+    if (provider.profilePhotoUrl && !isBrandMarkUrl(provider.profilePhotoUrl)) {
+      throw new BadRequestException('This business already has its own logo');
+    }
+    const result = await this.brandMarks.generate(providerId, { variant, force: true, ai });
+    if (result.status !== 'generated') throw new ConflictException('The logo changed meanwhile — refresh and try again');
+    await this.createAuditLog(admin.id, ai ? 'generate_ai_logo' : 'generate_brand_mark', 'provider', providerId,
+      { profilePhotoUrl: provider.profilePhotoUrl }, { profilePhotoUrl: result.profilePhotoUrl, variant, ai });
+    return result;
+  }
+
+  async brandMarkSummary(admin: any) {
+    this.assertAdmin(admin);
+    return { missing: await this.brandMarks.missingCount(), aiEnabled: this.brandMarks.aiEnabled };
+  }
+
+  async backfillBrandMarks(admin: any, limit = 100) {
+    this.assertAdmin(admin);
+    const result = await this.brandMarks.backfill(limit);
+    if (result.generated) {
+      await this.createAuditLog(admin.id, 'backfill_brand_marks', 'provider', null, null, result,
+        `Generated ${result.generated} logos for businesses without one`);
+    }
+    return result;
   }
 
   // ============================================

@@ -7,6 +7,7 @@ import sharp from 'sharp';
 import { ROLE_HIERARCHY } from '../common/enums/admin-role.enum';
 import { Provider } from '../entities';
 import { StorageService } from '../storage/storage.service';
+import { isBrandMarkUrl } from '../providers/brand-mark';
 import { compressImage } from '../common/image-processor';
 import { fetchImageFromUrl, fetchPublicPage } from '../common/safe-image-fetch';
 import {
@@ -236,7 +237,8 @@ export class ProviderEnrichmentService {
       skipped: false,
       notes: [],
     };
-    const needsLogo = !provider.profilePhotoUrl;
+    // A generated brand mark is only a stand-in: a real logo replaces it.
+    const needsLogo = !provider.profilePhotoUrl || isBrandMarkUrl(provider.profilePhotoUrl);
     const needsBanner = !provider.bannerImageUrl;
     if (!needsLogo && !needsBanner) {
       result.skipped = true;
@@ -271,6 +273,10 @@ export class ProviderEnrichmentService {
 
     if (Object.keys(update).length > 0) {
       await this.providerRepo.update(provider.id, update);
+      if (update.profilePhotoUrl && isBrandMarkUrl(provider.profilePhotoUrl)) {
+        const key = this.storageService.keyFromPublicUrl(provider.profilePhotoUrl);
+        if (key) await this.storageService.delete(key).catch(() => undefined);
+      }
       this.logger.log(`Auto images for ${provider.id}: logo=${result.logo ?? '—'} banner=${result.banner ?? '—'}`);
     }
     return result;

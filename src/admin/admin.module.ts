@@ -14,6 +14,7 @@ import { StorageModule } from '../storage/storage.module';
 import { SupabaseModule } from '../supabase/supabase.module';
 import { ServiceableCitiesModule } from '../serviceable-cities/serviceable-cities.module';
 import { GoogleReviewsModule } from '../google-reviews/google-reviews.module';
+import { ProvidersModule } from '../providers/providers.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { GoogleReviewsModule } from '../google-reviews/google-reviews.module';
     ServiceableCitiesModule,
     GoogleReviewsModule,
     GeocodeModule,
+    ProvidersModule,
   ],
   controllers: [AdminController],
   providers: [ProductBulkService, AdminService, ProviderEnrichmentService, ProviderLocationService],
