@@ -10,7 +10,9 @@ import {
   Max,
   MaxLength,
   Min,
+  Matches,
 } from 'class-validator';
+import { IST_DATE_OR_MINUTE } from '../../common/ist-range';
 
 export const PRODUCT_TYPE_FILTERS = ['product', 'service'] as const;
 export const PRODUCT_PROVIDER_STATUS_FILTERS = [
@@ -25,6 +27,8 @@ export const PRODUCT_SORTS = [
   'price_asc',
   'price_desc',
   'display_order',
+  'newest',
+  'oldest',
 ] as const;
 const BOOL = ['true', 'false'] as const;
 
@@ -118,6 +122,16 @@ export class AdminProductListQueryDto {
   @IsOptional()
   @IsUUID()
   providerId?: string;
+
+  @ApiPropertyOptional({ description: "Added on or after: 'YYYY-MM-DD' or 'YYYY-MM-DDTHH:mm', India time" })
+  @IsOptional()
+  @Matches(IST_DATE_OR_MINUTE, { message: 'createdFrom must be YYYY-MM-DD or YYYY-MM-DDTHH:mm' })
+  createdFrom?: string;
+
+  @ApiPropertyOptional({ description: "Added on or before: 'YYYY-MM-DD' (whole day) or 'YYYY-MM-DDTHH:mm', India time" })
+  @IsOptional()
+  @Matches(IST_DATE_OR_MINUTE, { message: 'createdTo must be YYYY-MM-DD or YYYY-MM-DDTHH:mm' })
+  createdTo?: string;
 
   @ApiPropertyOptional({ enum: PRODUCT_SORTS, default: 'display_order' })
   @IsOptional()

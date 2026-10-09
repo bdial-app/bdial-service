@@ -1,3 +1,4 @@
+import { ROLE_HIERARCHY } from './enums/admin-role.enum';
 import {
   ExceptionFilter,
   Catch,
@@ -36,6 +37,25 @@ export class AllExceptionsFilter implements ExceptionFilter {
       );
     }
 
+    // Staff get the real reason for an unexpected failure (a database error,
+    // a bug) so it can be fixed; everyone else gets the generic message.
+    const role = (
+      ctx.getRequest<{ user?: { role?: string } }>()?.user?.role ?? ''
+    ).toLowerCase();
+    const staff = (ROLE_HIERARCHY[role] ?? 0) >= ROLE_HIERARCHY.associate;
+    if (
+      staff &&
+      status >= 500 &&
+      !(exception instanceof HttpException) &&
+      exception instanceof Error
+    ) {
+      response.status(status).json({
+        statusCode: status,
+        message: `Internal server error: ${exception.message}`,
+      });
+      return;
+    }
+
     // In production, strip stack traces and internal details from 500 errors
     const isProd = this.config.get('NODE_ENV') === 'production';
     if (isProd && status >= 500) {
@@ -46,8 +66,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
       return;
     }
 
-    response.status(status).json(
-      typeof message === 'object' ? message : { statusCode: status, message },
-    );
+    response
+      .status(status)
+      .json(
+        typeof message === 'object' ? message : { statusCode: status, message },
+      );
   }
 }
