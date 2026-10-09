@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards, Request, Query, Res, UseInterceptors, UploadedFile, UploadedFiles, ParseFilePipe, MaxFileSizeValidator, FileTypeValidator } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards, Request, Query, Res, UseInterceptors, UploadedFile, UploadedFiles, ParseFilePipe, MaxFileSizeValidator, FileTypeValidator, ParseUUIDPipe } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiBody, ApiQuery, ApiParam, ApiConsumes } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import { Throttle } from '@nestjs/throttler';
@@ -33,6 +33,8 @@ import {
   StopAllSponsorshipsDto,
 } from './dto/sponsorship-admin.dto';
 import { UPLOAD_LIMITS } from '../common/image-processor';
+import { BackfillBrandMarksDto, GenerateBrandMarkDto } from './dto/brand-mark.dto';
+import { AdminProviderFiltersDto, AdminProviderListDto } from './dto/admin-provider-list.dto';
 
 /**
  * Bulk provider import fires hundreds of requests from one admin session
@@ -318,26 +320,15 @@ export class AdminController {
 
   @Get('providers')
   @ApiOperation({ summary: 'Paginated provider list with filters (all statuses)' })
-  @ApiQuery({ name: 'page', required: false, type: Number })
-  @ApiQuery({ name: 'limit', required: false, type: Number })
-  @ApiQuery({ name: 'search', required: false, type: String })
-  @ApiQuery({ name: 'status', required: false, type: String })
-  @ApiQuery({ name: 'city', required: false, type: String })
-  @ApiQuery({ name: 'isFeatured', required: false, type: String })
-  @ApiQuery({ name: 'isWomenLed', required: false, type: String })
-  @ApiQuery({ name: 'categoryId', required: false, type: String, description: 'Only providers listed in this category' })
-  getProvidersList(
-    @Request() req,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
-    @Query('search') search?: string,
-    @Query('status') status?: string,
-    @Query('city') city?: string,
-    @Query('isFeatured') isFeatured?: string,
-    @Query('isWomenLed') isWomenLed?: string,
-    @Query('categoryId') categoryId?: string,
-  ) {
-    return this.adminService.getProvidersList(req.user, page, limit, search, status, city, isFeatured, isWomenLed, categoryId);
+  getProvidersList(@Request() req, @Query() q: AdminProviderListDto) {
+    return this.adminService.getProvidersList(req.user, q);
+  }
+
+  // Declared before providers/:id so "facets" is not read as an id.
+  @Get('providers/facets')
+  @ApiOperation({ summary: 'Values for the provider filter panel (cities with counts)' })
+  providerFacets(@Request() req) {
+    return this.adminService.providerFacets(req.user);
   }
 
   // Declared before providers/:id so "export" is not read as an id.
@@ -346,25 +337,8 @@ export class AdminController {
     summary: 'CSV of every provider the given filters match',
     description: 'Same filters as the provider list, so the file matches what is on screen.',
   })
-  @ApiQuery({ name: 'search', required: false, type: String })
-  @ApiQuery({ name: 'status', required: false, type: String })
-  @ApiQuery({ name: 'city', required: false, type: String })
-  @ApiQuery({ name: 'isFeatured', required: false, type: String })
-  @ApiQuery({ name: 'isWomenLed', required: false, type: String })
-  @ApiQuery({ name: 'categoryId', required: false, type: String })
-  async exportProviders(
-    @Request() req,
-    @Res() res: Response,
-    @Query('search') search?: string,
-    @Query('status') status?: string,
-    @Query('city') city?: string,
-    @Query('isFeatured') isFeatured?: string,
-    @Query('isWomenLed') isWomenLed?: string,
-    @Query('categoryId') categoryId?: string,
-  ) {
-    const { filename, csv, count, truncated } = await this.adminService.exportProviders(req.user, {
-      search, status, city, isFeatured, isWomenLed, categoryId,
-    });
+  async exportProviders(@Request() req, @Res() res: Response, @Query() filters: AdminProviderFiltersDto) {
+    const { filename, csv, count, truncated } = await this.adminService.exportProviders(req.user, filters);
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     // Read by the browser so it can report what it downloaded.
@@ -1486,6 +1460,30 @@ export class AdminController {
   // ============================================
   // Bulk Actions
   // ============================================
+
+  @Get('brand-marks/summary')
+  @ApiOperation({ summary: 'How many businesses have no logo yet' })
+  brandMarkSummary(@Request() req) {
+    return this.adminService.brandMarkSummary(req.user);
+  }
+
+  @Post('brand-marks/backfill')
+  @ApiOperation({ summary: 'Generate brand-mark logos for businesses that have none (free, no AI)' })
+  backfillBrandMarks(@Request() req, @Body() dto: BackfillBrandMarksDto) {
+    return this.adminService.backfillBrandMarks(req.user, dto.limit);
+  }
+
+  @Post('providers/:id/brand-mark')
+  @ApiOperation({ summary: 'Generate (or restyle) a business\'s brand-mark logo. Never replaces a real logo.' })
+  generateBrandMark(@Request() req, @Param('id', ParseUUIDPipe) id: string, @Body() dto: GenerateBrandMarkDto) {
+    return this.adminService.generateBrandMark(req.user, id, dto.variant);
+  }
+
+  @Post('providers/:id/ai-logo')
+  @ApiOperation({ summary: 'AI artwork (Cloudflare Workers AI) in the brand-mark frame. Never replaces a real logo.' })
+  generateAiLogo(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
+    return this.adminService.generateBrandMark(req.user, id, 0, true);
+  }
 
   @Post('providers/enrich')
   @Throttle(BULK_IMPORT_THROTTLE)

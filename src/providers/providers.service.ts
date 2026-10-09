@@ -10,6 +10,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, ILike } from 'typeorm';
 import { Provider, User, Verification, ProviderCategory, Review, Product, Photo, Message, ConversationParticipant, ProviderBadge, ProviderOffer, SponsoredListing, ProviderWarning, SystemSetting, Subscription, ProviderOnboardingDraft } from '../entities';
 import { StorageService } from '../storage/storage.service';
+import { BrandMarkService } from './brand-mark.service';
 import { GeocodeService } from '../geocode/geocode.service';
 import { OtpService } from '../otp/otp.service';
 import { CreateProviderDto } from './dto/create-provider.dto';
@@ -46,6 +47,7 @@ export class ProvidersService {
     @InjectRepository(Subscription) private subscriptionRepo: Repository<Subscription>,
     @InjectRepository(ProviderOnboardingDraft) private draftRepo: Repository<ProviderOnboardingDraft>,
     private storage: StorageService,
+    private brandMarks: BrandMarkService,
     private dataSource: DataSource,
     private geocodeService: GeocodeService,
     private contentSanitizer: ContentSanitizerService,
@@ -351,6 +353,9 @@ export class ProvidersService {
 
     // The draft has done its job.
     await this.draftRepo.delete({ userId }).catch(() => undefined);
+
+    // Listed without a logo: a generated brand mark until they upload one.
+    if (!result.provider.profilePhotoUrl) this.brandMarks.enqueue([result.provider.id]);
 
     // Trigger async website logo fetch after transaction
     this.scheduleWebsiteLogoFetch(result.provider.id, becomeProviderDto.websiteUrl);
