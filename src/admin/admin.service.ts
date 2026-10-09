@@ -1,4 +1,4 @@
-import { Injectable, ForbiddenException, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
+import { Injectable, ForbiddenException, NotFoundException, BadRequestException, ConflictException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, IsNull, Not, In, MoreThan, ILike, Between, Brackets } from 'typeorm';
 import { Provider, User, Verification, Review, ReviewReport, Report, ProviderWarning, Product, Category, ProviderCategory, Conversation, ConversationParticipant, Message, PromoBanner, SponsoredListing, ProviderOffer, ProviderBadge, ProviderAnalyticsEvent, ProviderLead, SearchLog, AdEvent, AppInvite, AuditLog, SystemSetting, Photo, ReviewPhoto, ServiceableCity, UserArchive, Payment } from '../entities';
@@ -4815,7 +4815,19 @@ export class AdminService {
     newState: Record<string, any> | null,
     description?: string,
   ) {
-    const log = this.auditLogRepo.create({ adminId, action, entityType, entityId, previousState, newState, description });
+    // Fit the columns (action/entity_type 50, entity_id/description 100): a
+    // long file name in a description must never fail the action it records.
+    const fit = (v: string | null | undefined, max: number) =>
+      v == null ? v : v.length > max ? `${v.slice(0, max - 1)}…` : v;
+    const log = this.auditLogRepo.create({
+      adminId,
+      action: fit(action, 50) as string,
+      entityType: fit(entityType, 50) as string,
+      entityId: fit(entityId, 100) ?? null,
+      previousState,
+      newState,
+      description: fit(description, 100) ?? undefined,
+    });
     return this.auditLogRepo.save(log);
   }
 
@@ -5346,6 +5358,8 @@ export class AdminService {
     }
 
     const created = results.filter((r) => r.ok).length;
+    // The businesses are saved by now: a failed audit entry must not report
+    // the batch as failed (the admin would see an error for saved rows).
     await this.createAuditLog(
       admin.id,
       'bulk_import_providers',
@@ -5354,7 +5368,7 @@ export class AdminService {
       null,
       { total: dto.rows.length, created, failed: results.length - created, source: dto.sourceLabel ?? null },
       `Bulk provider import: ${created}/${dto.rows.length} created${dto.sourceLabel ? ` from ${dto.sourceLabel}` : ''}`,
-    );
+    ).catch((err: Error) => new Logger(AdminService.name).warn(`Bulk import audit entry failed: ${err.message}`));
 
     return { total: dto.rows.length, created, failed: results.length - created, skipped: dto.rows.length - results.length, results };
   }
