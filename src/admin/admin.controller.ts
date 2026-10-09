@@ -451,6 +451,12 @@ export class AdminController {
   // Products Management
   // ============================================
 
+  @Get('products/analytics')
+  @ApiOperation({ summary: 'Catalogue growth and product engagement (views, time, saves, contact) over 7/30/90 days' })
+  getProductAnalytics(@Request() req, @Query('days') days?: string) {
+    return this.adminService.getProductAnalytics(req.user, Number(days) || 30);
+  }
+
   @Get('products/stats')
   @ApiOperation({ summary: 'Product statistics' })
   getProductStats(@Request() req) {

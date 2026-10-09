@@ -1,6 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
-import { IsDateString, IsIn, IsInt, IsNumber, IsOptional, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
+import { IsIn, IsInt, IsNumber, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min } from 'class-validator';
+import { IST_DATE_OR_MINUTE } from '../../common/ist-range';
 
 /** "a,b,c" (or a repeated query param) → ['a', 'b', 'c']. */
 const CommaList = () =>
@@ -136,14 +137,14 @@ export class AdminProviderFiltersDto {
   @IsIn(['has', 'none'])
   reviews?: string;
 
-  @ApiPropertyOptional({ description: 'Added on or after (YYYY-MM-DD)' })
+  @ApiPropertyOptional({ description: "Added on or after: 'YYYY-MM-DD' or 'YYYY-MM-DDTHH:mm', India time" })
   @IsOptional()
-  @IsDateString()
+  @Matches(IST_DATE_OR_MINUTE, { message: 'createdFrom must be YYYY-MM-DD or YYYY-MM-DDTHH:mm' })
   createdFrom?: string;
 
-  @ApiPropertyOptional({ description: 'Added on or before (YYYY-MM-DD)' })
+  @ApiPropertyOptional({ description: "Added on or before: 'YYYY-MM-DD' (whole day) or 'YYYY-MM-DDTHH:mm', India time" })
   @IsOptional()
-  @IsDateString()
+  @Matches(IST_DATE_OR_MINUTE, { message: 'createdTo must be YYYY-MM-DD or YYYY-MM-DDTHH:mm' })
   createdTo?: string;
 
   @ApiPropertyOptional({ enum: ['newest', 'oldest', 'name', 'rating', 'reviews', 'updated'] })

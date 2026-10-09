@@ -7,6 +7,7 @@ import { BugReport } from '../bug-reports/bug-report.entity';
 import { AdminCreateUserDto, AdminCreateProviderWithUserDto } from './dto/admin-create-user.dto';
 import { AdminUserListQueryDto } from './dto/admin-user-list.dto';
 import { AdminProductListQueryDto } from './dto/admin-product-list.dto';
+import { istRange } from '../common/ist-range';
 import { AdminVerificationListQueryDto } from './dto/admin-verification-list.dto';
 import { AdminConversationListQueryDto } from './dto/admin-conversation-list.dto';
 import { AdminPhotoListQueryDto } from './dto/admin-photo-list.dto';
@@ -1503,8 +1504,10 @@ export class AdminService {
     if (f.reviews === 'has') qb.andWhere(hasReviews);
     if (f.reviews === 'none') qb.andWhere(`NOT ${hasReviews}`);
 
-    if (f.createdFrom) qb.andWhere('p.created_at >= :from', { from: `${f.createdFrom.slice(0, 10)}T00:00:00` });
-    if (f.createdTo) qb.andWhere('p.created_at < CAST(:to AS date) + 1', { to: f.createdTo.slice(0, 10) });
+    // India-time day or minute; providers.created_at holds UTC wall-clock time without a zone.
+    const created = istRange(f.createdFrom, f.createdTo);
+    if (created.from) qb.andWhere("p.created_at >= (CAST(:createdFrom AS timestamptz) AT TIME ZONE 'UTC')", { createdFrom: created.from });
+    if (created.to) qb.andWhere("p.created_at < (CAST(:createdTo AS timestamptz) AT TIME ZONE 'UTC')", { createdTo: created.to });
     return qb;
   }
 
@@ -2062,9 +2065,15 @@ export class AdminService {
     if (providerStatus)
       qb.andWhere('provider.status = :providerStatus', { providerStatus });
 
+    const added = istRange(query.createdFrom, query.createdTo);
+    if (added.from) qb.andWhere('prod.created_at >= CAST(:addedFrom AS timestamptz)', { addedFrom: added.from });
+    if (added.to) qb.andWhere('prod.created_at < CAST(:addedTo AS timestamptz)', { addedTo: added.to });
+
     const sort =
       query.sort ?? this.legacyProductSort(query.sortBy, query.sortOrder);
-    if (sort === 'name_asc') qb.orderBy('prod.name', 'ASC');
+    if (sort === 'newest') qb.orderBy('prod.createdAt', 'DESC').addOrderBy('prod.name', 'ASC');
+    else if (sort === 'oldest') qb.orderBy('prod.createdAt', 'ASC').addOrderBy('prod.name', 'ASC');
+    else if (sort === 'name_asc') qb.orderBy('prod.name', 'ASC');
     else if (sort === 'name_desc') qb.orderBy('prod.name', 'DESC');
     else if (sort === 'price_asc')
       qb.orderBy('prod.price', 'ASC', 'NULLS LAST');
@@ -2130,6 +2139,132 @@ export class AdminService {
       ),
     ]);
     return { cities, categories, counts };
+  }
+
+  /**
+   * How the catalogue is growing and how customers engage with products, over
+   * the last `days` (compared with the `days` before that).
+   *
+   * Views are the "opened" events (the closing event of the same view only
+   * carries time spent). A view "led to contact" when the same visit
+   * (session) also called or chatted with that business. Event times are
+   * stored without a zone (UTC wall-clock); days are counted in India time.
+   */
+  async getProductAnalytics(admin: any, days = 30) {
+    this.assertAdmin(admin);
+    const d = [7, 30, 90].includes(days) ? days : 30;
+    const since = `(now() AT TIME ZONE 'UTC') - make_interval(days => $1)`;
+    const prev = `(now() AT TIME ZONE 'UTC') - make_interval(days => $1 * 2)`;
+    const VIEW = `e.event_type = 'product_view' AND e.duration IS NULL AND e.entity_id IS NOT NULL`;
+    // Postgres rejects a parameter the statement doesn't use, so pass it only where it is.
+    const q = <T = Record<string, unknown>>(sql: string) =>
+      this.dataSource.query(sql, sql.includes('$1') ? [d] : []) as Promise<T[]>;
+    const n = (v: unknown) => Number(v) || 0;
+
+    const [catalogue, engagement, time, dailyViews, dailyAdded, sources, top, unseen, categories, contact, saves] = await Promise.all([
+      q(`SELECT COUNT(*)::int AS total,
+                COUNT(*) FILTER (WHERE is_active)::int AS active,
+                COUNT(*) FILTER (WHERE product_type = 'service')::int AS services,
+                COUNT(*) FILTER (WHERE cardinality(photo_urls) > 0)::int AS "withPhotos",
+                COUNT(*) FILTER (WHERE price IS NOT NULL)::int AS "withPrice",
+                COUNT(*) FILTER (WHERE created_at >= now() - make_interval(days => $1))::int AS added,
+                COUNT(*) FILTER (WHERE created_at < now() - make_interval(days => $1)
+                                   AND created_at >= now() - make_interval(days => $1 * 2))::int AS "addedPrev"
+           FROM products`),
+      q(`SELECT COUNT(*) FILTER (WHERE e.created_at >= ${since})::int AS views,
+                COUNT(DISTINCT COALESCE(e.user_id::text, e.session_id)) FILTER (WHERE e.created_at >= ${since})::int AS viewers,
+                COUNT(DISTINCT e.entity_id) FILTER (WHERE e.created_at >= ${since})::int AS "productsViewed",
+                COUNT(*) FILTER (WHERE e.created_at < ${since})::int AS "viewsPrev"
+           FROM provider_analytics_events e WHERE ${VIEW} AND e.created_at >= ${prev}`),
+      q(`SELECT ROUND(AVG(e.duration))::int AS seconds FROM provider_analytics_events e
+          WHERE e.event_type = 'product_view' AND e.duration > 0 AND e.duration < 1800 AND e.created_at >= ${since}`),
+      q(`SELECT to_char((e.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS day, COUNT(*)::int AS count
+           FROM provider_analytics_events e WHERE ${VIEW} AND e.created_at >= ${since} GROUP BY 1`),
+      q(`SELECT to_char(created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS day, COUNT(*)::int AS count
+           FROM products WHERE created_at >= now() - make_interval(days => $1) GROUP BY 1`),
+      q(`SELECT COALESCE(e.source::text, 'direct') AS source, COUNT(*)::int AS count
+           FROM provider_analytics_events e WHERE ${VIEW} AND e.created_at >= ${since} GROUP BY 1 ORDER BY 2 DESC`),
+      q(`WITH v AS (
+             SELECT e.entity_id AS product_id, e.provider_id, e.session_id, e.user_id
+               FROM provider_analytics_events e WHERE ${VIEW} AND e.created_at >= ${since}),
+           c AS (
+             SELECT DISTINCT provider_id, session_id FROM provider_analytics_events
+              WHERE event_type IN ('call_clicked', 'chat_initiated') AND created_at >= ${since}),
+           t AS (
+             SELECT entity_id AS product_id, ROUND(AVG(duration))::int AS seconds FROM provider_analytics_events
+              WHERE event_type = 'product_view' AND duration > 0 AND duration < 1800 AND entity_id IS NOT NULL AND created_at >= ${since}
+              GROUP BY entity_id),
+           agg AS (
+             SELECT v.product_id, COUNT(*)::int AS views,
+                    COUNT(DISTINCT COALESCE(v.user_id::text, v.session_id))::int AS viewers,
+                    COUNT(DISTINCT v.session_id)::int AS visits,
+                    COUNT(DISTINCT v.session_id) FILTER (WHERE c.session_id IS NOT NULL)::int AS contacted
+               FROM v LEFT JOIN c ON c.provider_id = v.provider_id AND c.session_id = v.session_id
+              GROUP BY v.product_id)
+         SELECT p.id, p.name, p.product_type AS "productType", p.price, p.is_active AS "isActive",
+                COALESCE(p.photo_urls[1], p.photo_url) AS photo, pr.id AS "providerId", pr.brand_name AS "brandName",
+                agg.views, agg.viewers, agg.visits, agg.contacted, t.seconds,
+                (SELECT COUNT(*)::int FROM saved_items s
+                  WHERE s.item_type = 'product' AND s.item_id = p.id AND s.created_at >= ${since}) AS saves
+           FROM agg JOIN products p ON p.id = agg.product_id JOIN providers pr ON pr.id = p.provider_id
+           LEFT JOIN t ON t.product_id = agg.product_id
+          ORDER BY agg.views DESC, agg.viewers DESC LIMIT 10`),
+      q(`SELECT COUNT(*)::int AS count FROM products p
+          WHERE p.is_active AND p.created_at < now() - make_interval(days => 3)
+            AND NOT EXISTS (SELECT 1 FROM provider_analytics_events e
+                             WHERE e.event_type = 'product_view' AND e.entity_id = p.id AND e.created_at >= ${since})`),
+      q(`SELECT COALESCE(c.name, 'No category') AS name, COUNT(*)::int AS total,
+                COUNT(*) FILTER (WHERE cardinality(p.photo_urls) > 0)::int AS "withPhotos",
+                COUNT(*) FILTER (WHERE p.price IS NOT NULL)::int AS "withPrice"
+           FROM products p LEFT JOIN categories c ON c.id = p.category_id
+          WHERE p.is_active GROUP BY 1 ORDER BY 2 DESC LIMIT 8`),
+      q(`WITH v AS (SELECT DISTINCT e.provider_id, e.session_id FROM provider_analytics_events e
+                     WHERE ${VIEW} AND e.created_at >= ${since}),
+              c AS (SELECT DISTINCT provider_id, session_id FROM provider_analytics_events
+                     WHERE event_type IN ('call_clicked', 'chat_initiated') AND created_at >= ${since})
+         SELECT COUNT(*)::int AS visits, COUNT(c.session_id)::int AS contacted
+           FROM v LEFT JOIN c ON c.provider_id = v.provider_id AND c.session_id = v.session_id`),
+      q(`SELECT COUNT(*) FILTER (WHERE created_at >= ${since})::int AS saves,
+                COUNT(*) FILTER (WHERE created_at < ${since})::int AS "savesPrev"
+           FROM saved_items WHERE item_type = 'product' AND created_at >= ${prev}`),
+    ]);
+
+    // Every day of the period, India time, so charts have no gaps.
+    const series: { day: string; views: number; added: number }[] = [];
+    const viewsBy = new Map(dailyViews.map((r) => [String(r.day), n(r.count)]));
+    const addedBy = new Map(dailyAdded.map((r) => [String(r.day), n(r.count)]));
+    for (let i = d - 1; i >= 0; i--) {
+      const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date(Date.now() - i * 86_400_000));
+      series.push({ day, views: viewsBy.get(day) ?? 0, added: addedBy.get(day) ?? 0 });
+    }
+
+    const cat = catalogue[0] ?? {};
+    const eng = engagement[0] ?? {};
+    const con = contact[0] ?? {};
+    return {
+      days: d,
+      catalogue: {
+        total: n(cat.total), active: n(cat.active), services: n(cat.services),
+        withPhotos: n(cat.withPhotos), withPrice: n(cat.withPrice),
+        added: n(cat.added), addedPrev: n(cat.addedPrev),
+      },
+      engagement: {
+        views: n(eng.views), viewsPrev: n(eng.viewsPrev), viewers: n(eng.viewers),
+        productsViewed: n(eng.productsViewed), avgSeconds: n(time[0]?.seconds),
+        saves: n(saves[0]?.saves), savesPrev: n(saves[0]?.savesPrev),
+        visits: n(con.visits), contacted: n(con.contacted),
+      },
+      series,
+      sources: sources.map((r) => ({ source: String(r.source), count: n(r.count) })),
+      topProducts: top.map((r) => ({
+        id: String(r.id), name: String(r.name), productType: r.productType, price: r.price == null ? null : Number(r.price),
+        isActive: !!r.isActive, photo: (r.photo as string) ?? null, providerId: String(r.providerId), brandName: String(r.brandName),
+        views: n(r.views), viewers: n(r.viewers), visits: n(r.visits), contacted: n(r.contacted),
+        avgSeconds: r.seconds == null ? null : n(r.seconds), saves: n(r.saves),
+      })),
+      unseenActive: n(unseen[0]?.count),
+      categories: categories.map((r) => ({ name: String(r.name), total: n(r.total), withPhotos: n(r.withPhotos), withPrice: n(r.withPrice) })),
+    };
   }
 
   async getProductStats(admin: any) {
@@ -4829,7 +4964,7 @@ export class AdminService {
   // Admin Create Provider with User (End-to-End)
   // ============================================
 
-  async adminCreateProviderWithUser(admin: any, dto: AdminCreateProviderWithUserDto) {
+  async adminCreateProviderWithUser(admin: any, dto: AdminCreateProviderWithUserDto, opts: { brandMark?: boolean } = {}) {
     this.assertAdmin(admin);
 
     // Content moderation on text fields
@@ -5018,9 +5153,9 @@ export class AdminService {
       };
     });
 
-    // No logo yet (the usual case for imports): a generated brand mark until
-    // enrichment or the owner provides a real one.
-    if (!created.provider.profilePhotoUrl) this.brandMarks.enqueue([created.provider.id]);
+    // No logo yet: a generated brand mark until enrichment or the owner provides
+    // a real one. Not for bulk imports — those use "Make logos" on Providers.
+    if (opts.brandMark !== false && !created.provider.profilePhotoUrl) this.brandMarks.enqueue([created.provider.id]);
     return created;
   }
 
@@ -5201,7 +5336,7 @@ export class AdminService {
           results.push({ rowId, ok: true, ...earlier, alreadyImported: true });
           continue;
         }
-        const created = await this.adminCreateProviderWithUser(admin, payload);
+        const created = await this.adminCreateProviderWithUser(admin, payload, { brandMark: false });
         results.push({ rowId, ok: true, providerId: created.provider.id, userId: created.user.id, brandName: created.provider.brandName });
       } catch (err: any) {
         const message = err?.response?.message ?? err?.message ?? 'Failed';

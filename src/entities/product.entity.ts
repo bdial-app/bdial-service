@@ -1,4 +1,5 @@
 import {
+  CreateDateColumn,
   Entity,
   PrimaryGeneratedColumn,
   Column,
@@ -58,6 +59,9 @@ export class Product {
 
   @Column({ name: 'subcategory_id', type: 'uuid', nullable: true })
   subcategoryId: string | null;
+
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
+  createdAt: Date;
 
   @ManyToOne(() => Provider, (p) => p.products)
   @JoinColumn({ name: 'provider_id' })
