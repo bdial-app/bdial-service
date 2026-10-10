@@ -3,6 +3,7 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagg
 import { AuthGuard } from '@nestjs/passport';
 import { ConfigService } from '@nestjs/config';
 import { AuthService } from './auth.service';
+import { SystemLogsService } from '../system-logs/system-logs.service';
 import { Public } from '../common/decorators/public.decorator';
 import { Throttle } from '@nestjs/throttler';
 import {
@@ -23,15 +24,37 @@ export class AuthController {
   constructor(
     private readonly authService: AuthService,
     private readonly config: ConfigService,
+    private readonly logs: SystemLogsService,
   ) {}
+
+  /**
+   * Sign-in attempts into the admin Logs — sent, signed in, or why it failed
+   * — with the phone or email, so "I can't log in" can be looked up even when
+   * no account exists yet.
+   */
+  private async track<T>(event: string, label: string, who: { mobile?: string; email?: string }, req: unknown, run: () => Promise<T>): Promise<T> {
+    const base = { ...this.logs.fromRequest(req as never), source: 'server' as const, category: 'auth', details: { mobile: who.mobile, email: who.email } };
+    const id = who.mobile ?? who.email ?? 'unknown';
+    try {
+      const result = await run();
+      const user = (result as { user?: { id?: string } } | undefined)?.user;
+      this.logs.record({ ...base, level: 'info', event: `${event}_ok`, message: `${label} — ${id}`, userId: user?.id ?? null });
+      return result;
+    } catch (err) {
+      const e = err as { message?: string; getStatus?: () => number; response?: { message?: unknown } };
+      const reason = Array.isArray(e.response?.message) ? (e.response?.message as string[]).join('; ') : String(e.response?.message ?? e.message ?? 'failed');
+      this.logs.record({ ...base, level: 'warn', event: `${event}_failed`, message: `${label} failed — ${id}: ${reason}`, statusCode: e.getStatus?.() ?? 500 });
+      throw err;
+    }
+  }
 
   @Post('send-otp')
   @Throttle({ default: { ttl: 60000, limit: 5 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Send OTP to mobile number' })
   @ApiResponse({ status: 200, description: 'OTP sent successfully' })
-  sendOtp(@Body() dto: SendOtpDto) {
-    return this.authService.sendOtp(dto);
+  sendOtp(@Body() dto: SendOtpDto, @Request() req) {
+    return this.track('otp_send', 'Sign-in OTP sent', { mobile: dto.mobileNumber }, req, () => this.authService.sendOtp(dto));
   }
 
   @Post('admin/send-otp')
@@ -39,8 +62,8 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Send OTP to admin mobile number' })
   @ApiResponse({ status: 200, description: 'OTP sent successfully' })
-  sendAdminOtp(@Body() dto: SendOtpDto) {
-    return this.authService.sendAdminOtp(dto);
+  sendAdminOtp(@Body() dto: SendOtpDto, @Request() req) {
+    return this.track('admin_otp_send', 'Admin OTP sent', { mobile: dto.mobileNumber }, req, () => this.authService.sendAdminOtp(dto));
   }
 
   @Post('verify-otp')
@@ -48,8 +71,8 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Verify OTP and get JWT token' })
   @ApiResponse({ status: 200, description: 'Returns JWT access token and user' })
-  verifyOtp(@Body() dto: VerifyOtpDto) {
-    return this.authService.verifyOtp(dto);
+  verifyOtp(@Body() dto: VerifyOtpDto, @Request() req) {
+    return this.track('otp_verify', 'Signed in with OTP', { mobile: dto.mobileNumber }, req, () => this.authService.verifyOtp(dto));
   }
 
   // ─────────────────────── REGISTRATION FLOW ────────────────────────
@@ -58,8 +81,8 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Send OTP to a mobile number for new-user registration' })
   @ApiResponse({ status: 200, description: 'OTP sent successfully' })
-  sendRegistrationOtp(@Body() dto: SendOtpDto) {
-    return this.authService.sendRegistrationOtp(dto);
+  sendRegistrationOtp(@Body() dto: SendOtpDto, @Request() req) {
+    return this.track('register_otp_send', 'Sign-up OTP sent', { mobile: dto.mobileNumber }, req, () => this.authService.sendRegistrationOtp(dto));
   }
 
   @Post('register/check-availability')
@@ -142,11 +165,13 @@ export class AuthController {
     status: 200,
     description: 'Returns JWT token and user data after Google authentication',
   })
-  async googleSignIn(@Body() dto: GoogleSignInDto) {
-    if (!dto.email) {
-      throw new BadRequestException('email is required');
-    }
-    return this.authService.googleSignIn(dto);
+  async googleSignIn(@Body() dto: GoogleSignInDto, @Request() req) {
+    return this.track('google_signin', 'Signed in with Google', { email: dto.email }, req, async () => {
+      if (!dto.email) {
+        throw new BadRequestException('email is required');
+      }
+      return this.authService.googleSignIn(dto);
+    });
   }
 
   // ─────────────────────── SUPABASE OAUTH ────────────────────────

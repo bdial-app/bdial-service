@@ -8,13 +8,17 @@ import {
   Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { SystemLogsService } from '../system-logs/system-logs.service';
 import { Response } from 'express';
 
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
   private readonly logger = new Logger(AllExceptionsFilter.name);
 
-  constructor(private readonly config: ConfigService) {}
+  constructor(
+    private readonly config: ConfigService,
+    private readonly logs?: SystemLogsService,
+  ) {}
 
   catch(exception: unknown, host: ArgumentsHost) {
     const ctx = host.switchToHttp();
@@ -27,6 +31,44 @@ export class AllExceptionsFilter implements ExceptionFilter {
       status = exception.getStatus();
       const res = exception.getResponse();
       message = typeof res === 'string' ? res : res;
+    }
+
+    // Into the admin Logs: every server failure, and the rejections worth
+    // chasing (bad input, forbidden, conflict, too large, rate-limited).
+    // Not 401 (expired sessions) or 404 (bots and typos).
+    const req = ctx.getRequest<import('express').Request>();
+    // Sign-in rejections are recorded by the auth controller, with the phone.
+    const authRoute = (req?.originalUrl ?? '').startsWith('/api/auth/');
+    if (
+      this.logs &&
+      (status >= 500 ||
+        ([400, 403, 409, 413, 422, 429].includes(status) && !authRoute))
+    ) {
+      const text =
+        typeof message === 'string'
+          ? message
+          : Array.isArray((message as { message?: unknown }).message)
+            ? (message as { message: string[] }).message.join('; ')
+            : String(
+                (message as { message?: unknown }).message ??
+                  JSON.stringify(message),
+              );
+      this.logs.record({
+        ...this.logs.fromRequest(req),
+        source: 'server',
+        level: status >= 500 ? 'error' : 'warn',
+        category: 'http',
+        event: `http_${status}`,
+        message:
+          status >= 500 && exception instanceof Error
+            ? exception.message
+            : text,
+        stack:
+          status >= 500 && exception instanceof Error
+            ? (exception.stack ?? null)
+            : null,
+        statusCode: status,
+      });
     }
 
     // Log full error details server-side

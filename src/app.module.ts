@@ -32,6 +32,7 @@ import { ExploreModule } from './explore/explore.module';
 import { InviteModule } from './invite/invite.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { HealthModule } from './health/health.module';
+import { SystemLogsModule } from './system-logs/system-logs.module';
 import { ReportsModule } from './reports/reports.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
@@ -93,6 +94,7 @@ import { SystemSetting } from './entities';
     InviteModule,
     AnalyticsModule,
     HealthModule,
+    SystemLogsModule,
     ReportsModule,
     NotificationsModule,
     ContentSanitizerModule,

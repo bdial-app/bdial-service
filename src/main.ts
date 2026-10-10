@@ -8,6 +8,8 @@ import helmet from 'helmet';
 import compression from 'compression';
 import { json, urlencoded } from 'express';
 import { AllExceptionsFilter } from './common/all-exceptions.filter';
+import { SystemLogsService } from './system-logs/system-logs.service';
+import { randomUUID } from 'crypto';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
@@ -51,8 +53,13 @@ async function bootstrap() {
       'X-Requested-With',
       'Cache-Control',
       'Pragma',
+      // Who's calling, for the admin Logs (app errors and server errors).
+      'X-Platform',
+      'X-App-Version',
+      'X-Session-Id',
+      'X-Request-Id',
     ],
-    exposedHeaders: ['Content-Disposition'],
+    exposedHeaders: ['Content-Disposition', 'X-Request-Id', 'X-Export-Count', 'X-Export-Truncated'],
     maxAge: 86400, // Cache preflight for 24h — reduces OPTIONS calls on mobile
   });
 
@@ -65,6 +72,15 @@ async function bootstrap() {
 
   // Response compression
   app.use(compression());
+
+  // Every request gets an id (kept if the app sent one), returned as
+  // X-Request-Id so an app's error report can be matched to the server's.
+  app.use((req: any, res: any, next: () => void) => {
+    const incoming = req.headers['x-request-id'];
+    req.requestId = typeof incoming === 'string' && /^[\w-]{8,64}$/.test(incoming) ? incoming : randomUUID();
+    res.setHeader('X-Request-Id', req.requestId);
+    next();
+  });
 
   // Body parsers — only for JSON/urlencoded; multipart is handled by Multer
   // The verify callback stores rawBody for Razorpay webhook signature verification
@@ -87,7 +103,7 @@ async function bootstrap() {
   app.useGlobalInterceptors(new ClassSerializerInterceptor(app.get(Reflector)));
 
   // Global exception filter — sanitizes error responses in production
-  app.useGlobalFilters(new AllExceptionsFilter(configService));
+  app.useGlobalFilters(new AllExceptionsFilter(configService, app.get(SystemLogsService)));
 
   // Graceful shutdown
   app.enableShutdownHooks();
