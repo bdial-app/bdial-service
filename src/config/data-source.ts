@@ -4,6 +4,7 @@ import { join } from 'path';
 import { User } from '../entities/user.entity';
 import { ProviderOnboardingDraft } from '../entities/provider-onboarding-draft.entity';
 import { HomeCollection } from '../entities/home-collection.entity';
+import { SystemLog } from '../entities/system-log.entity';
 import { UserArchive } from '../entities/user-archive.entity';
 import { Category } from '../entities/category.entity';
 import { ProviderCategory } from '../entities/provider-category.entity';
@@ -112,6 +113,7 @@ export const ALL_ENTITIES = [
   WhatsAppMessage,
   ProviderOnboardingDraft,
   HomeCollection,
+  SystemLog,
 ];
 
 export function buildTypeOrmOptions(url?: string): DataSourceOptions {
