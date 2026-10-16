@@ -33,6 +33,7 @@ import { InviteModule } from './invite/invite.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { HealthModule } from './health/health.module';
 import { SystemLogsModule } from './system-logs/system-logs.module';
+import { AdminAttentionModule } from './admin-attention/admin-attention.module';
 import { ReportsModule } from './reports/reports.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
@@ -95,6 +96,7 @@ import { SystemSetting } from './entities';
     AnalyticsModule,
     HealthModule,
     SystemLogsModule,
+    AdminAttentionModule,
     ReportsModule,
     NotificationsModule,
     ContentSanitizerModule,

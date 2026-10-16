@@ -74,3 +74,4 @@ export { GoogleReview } from './google-review.entity';
 export { ProviderOnboardingDraft } from './provider-onboarding-draft.entity';
 export { HomeCollection } from './home-collection.entity';
 export { SystemLog } from './system-log.entity';
+export { AdminSeenMark } from './admin-seen-mark.entity';
