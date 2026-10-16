@@ -6,6 +6,11 @@ import { ProviderOnboardingDraft } from '../entities/provider-onboarding-draft.e
 import { HomeCollection } from '../entities/home-collection.entity';
 import { SystemLog } from '../entities/system-log.entity';
 import { AdminSeenMark } from '../entities/admin-seen-mark.entity';
+import { WhatsAppConsentEvent } from '../entities/whatsapp-consent-event.entity';
+import { MessagingAutomation } from '../entities/messaging-automation.entity';
+import { AutomationJob } from '../entities/automation-job.entity';
+import { GoLink } from '../entities/go-link.entity';
+import { ReviewIntent } from '../entities/review-intent.entity';
 import { UserArchive } from '../entities/user-archive.entity';
 import { Category } from '../entities/category.entity';
 import { ProviderCategory } from '../entities/provider-category.entity';
@@ -116,6 +121,11 @@ export const ALL_ENTITIES = [
   HomeCollection,
   SystemLog,
   AdminSeenMark,
+  WhatsAppConsentEvent,
+  MessagingAutomation,
+  AutomationJob,
+  GoLink,
+  ReviewIntent,
 ];
 
 export function buildTypeOrmOptions(url?: string): DataSourceOptions {

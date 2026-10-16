@@ -109,17 +109,79 @@ export class NotificationTemplateService {
   // Seed default templates — called on module init
   // ─────────────────────────────────────────────────────────────
 
+  /**
+   * Adds any default template that doesn't exist yet. Existing ones (which
+   * admins may have edited or switched off) are never touched. New engagement
+   * pushes arrive switched off, for an admin to turn on.
+   */
   async seedDefaults(): Promise<void> {
-    const existing = await this.templateRepo.count();
-    if (existing > 0) {
-      this.logger.log(`${existing} notification templates already exist — skipping seed`);
-      return;
-    }
-
-    const defaults = this.getDefaultTemplates();
-    await this.templateRepo.save(defaults.map((d) => this.templateRepo.create(d)));
+    const existing = new Set((await this.templateRepo.find({ select: ['slug'] })).map((t) => t.slug));
+    const fresh = existing.size === 0;
+    const missing = [
+      ...this.getDefaultTemplates(),
+      ...this.getEngagementTemplates(),
+    ].filter((d) => d.slug && !existing.has(d.slug));
+    if (!missing.length) return;
+    await this.templateRepo.save(missing.map((d) => this.templateRepo.create(d)));
     this.invalidateCache();
-    this.logger.log(`Seeded ${defaults.length} default notification templates`);
+    this.logger.log(
+      fresh
+        ? `Seeded ${missing.length} default notification templates`
+        : `Added ${missing.length} new notification templates: ${missing.map((m) => m.slug).join(', ')}`,
+    );
+  }
+
+  /** Pushes that bring owners and customers back; all start switched off. */
+  private getEngagementTemplates(): Partial<NotificationTemplate>[] {
+    const t = (
+      slug: string,
+      name: string,
+      description: string,
+      type: NotificationTemplate['type'],
+      titleTemplate: string,
+      bodyTemplate: string,
+      defaultRoute: string,
+      category: NotificationTemplate['category'] = 'engagement',
+    ): Partial<NotificationTemplate> => ({
+      slug,
+      name,
+      description,
+      type,
+      titleTemplate,
+      bodyTemplate,
+      variables: [...new Set([...`${titleTemplate} ${bodyTemplate} ${defaultRoute}`.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]))],
+      category,
+      isActive: false,
+      defaultRoute,
+    });
+    return [
+      t('review_replied', 'Owner replied to your review', 'Customer: the business answered their review', 'review_received',
+        '{{brandName}} replied to your review', '{{reply}}', '/provider-details', 'transactional'),
+      t('review_link_joined', 'Review link is working', 'Owner: someone reviewed through their review link', 'provider_status',
+        'Your review link is working', '{{count}} customers have reviewed {{brandName}} through your link. Each one joined Tijarah to do it.', '/?tab=listings&subTab=reviews'),
+      t('free_leads_back', 'Free leads are back', 'Owner, 1st of the month', 'provider_status',
+        'Your {{quota}} free lead unlocks are back', '{{waiting}} people showed interest in {{brandName}} recently. See who they are.', '/?tab=analytics'),
+      t('free_leads_ending', 'Free leads ending', 'Owner, 25th, if unused and leads are waiting', 'provider_status',
+        '{{left}} free lead unlocks left this month', 'They reset on {{resetDate}}. {{waiting}} people are waiting to be seen.', '/?tab=analytics'),
+      t('weekly_report', 'Weekly report', 'Owner, Monday, with activity', 'provider_status',
+        'Your week on Tijarah', '{{brandName}}: {{views}} views, {{searches}} times in search and {{enquiries}} enquiries this week.', '/?tab=analytics'),
+      t('search_demand', 'What Mumineen are searching for', 'Owner, Thursday: a popular search in their city they don\'t list', 'promotional',
+        'Mumineen in {{city}} are searching for "{{term}}"', '{{count}} searches this week. Add it to {{brandName}} so they find you.', '/?tab=listings&subTab=products'),
+      t('shop_step', 'Wake-up step', 'Owner, weekly for quiet shops: one thing to add next', 'promotional',
+        '{{title}}', '{{body}}', '{{route}}'),
+      t('boost_ready', 'Boost: shop is ready', 'Owner: listing strong enough to boost, never boosted', 'promotional',
+        '{{brandName}} is ready to be seen', 'Boost it to the top of {{city}} on Tijarah, from ₹{{price}} for 7 days.', '/?tab=listings&subTab=boost', 'marketing'),
+      t('boost_good_week', 'Boost: after a good week', 'Owner: views up 30%+ this week', 'promotional',
+        '{{views}} views this week, up {{pct}}%', 'Boost {{brandName}} now to keep it going.', '/?tab=listings&subTab=boost', 'marketing'),
+      t('boost_results', 'Boost results', 'Owner: a boost just ended', 'provider_status',
+        'Your boost brought {{impressions}} views', '{{clicks}} people visited {{brandName}} from it. Run it again?', '/?tab=listings&subTab=boost'),
+      t('weekend_deals', 'Weekend deals', 'Customers, Thursday 7 PM, if 3+ deals in their city', 'promotional',
+        '{{count}} community businesses in {{city}} have deals this weekend', 'Take a look before they end.', '/deals'),
+      t('saved_by_families', 'Families saved you', 'Owner, monthly', 'provider_status',
+        '{{count}} families saved {{brandName}} this month', "They'll see your new products and deals first.", '/?tab=analytics'),
+      t('shop_anniversary', 'Anniversary', 'Owner, yearly', 'provider_status',
+        '{{years}} on Tijarah', 'Since joining, {{views}} people have found {{brandName}}. Thank you for being part of the community.', '/?tab=analytics'),
+    ];
   }
 
   // ─────────────────────────────────────────────────────────────

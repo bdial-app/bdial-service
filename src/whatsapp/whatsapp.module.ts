@@ -9,6 +9,9 @@ import { WhatsAppTemplate } from '../entities/whatsapp-template.entity';
 import { WhatsAppSegment } from '../entities/whatsapp-segment.entity';
 import { WhatsAppCampaign } from '../entities/whatsapp-campaign.entity';
 import { WhatsAppMessage } from '../entities/whatsapp-message.entity';
+import { WhatsAppConsentEvent } from '../entities/whatsapp-consent-event.entity';
+import { WhatsAppConsentService } from './whatsapp-consent.service';
+import { WhatsAppConsentController } from './whatsapp-consent.controller';
 import { MetaCloudApiService } from './meta-cloud-api.service';
 import { WhatsAppSettingsService } from './whatsapp-settings.service';
 import { WhatsAppTemplateService } from './whatsapp-template.service';
@@ -38,6 +41,7 @@ import { WhatsAppInboxMediaService } from './whatsapp-inbox-media.service';
       WhatsAppSegment,
       WhatsAppCampaign,
       WhatsAppMessage,
+      WhatsAppConsentEvent,
       Provider,
       Category,
       User,
@@ -47,6 +51,7 @@ import { WhatsAppInboxMediaService } from './whatsapp-inbox-media.service';
     WhatsAppWebhookController,
     AdminWhatsAppController,
     WhatsAppMediaController,
+    WhatsAppConsentController,
   ],
   providers: [
     MetaCloudApiService,
@@ -61,7 +66,14 @@ import { WhatsAppInboxMediaService } from './whatsapp-inbox-media.service';
     WhatsAppSendWorkerService,
     WhatsAppWebhookService,
     WhatsAppOverviewService,
+    WhatsAppConsentService,
   ],
-  exports: [WhatsAppInboxService, WhatsAppTemplateService, MetaCloudApiService],
+  exports: [
+    WhatsAppInboxService,
+    WhatsAppTemplateService,
+    MetaCloudApiService,
+    WhatsAppConsentService,
+    WhatsAppSettingsService,
+  ],
 })
 export class WhatsAppModule {}

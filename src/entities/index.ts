@@ -75,3 +75,8 @@ export { ProviderOnboardingDraft } from './provider-onboarding-draft.entity';
 export { HomeCollection } from './home-collection.entity';
 export { SystemLog } from './system-log.entity';
 export { AdminSeenMark } from './admin-seen-mark.entity';
+export { WhatsAppConsentEvent } from './whatsapp-consent-event.entity';
+export { MessagingAutomation } from './messaging-automation.entity';
+export { AutomationJob } from './automation-job.entity';
+export { GoLink } from './go-link.entity';
+export { ReviewIntent } from './review-intent.entity';

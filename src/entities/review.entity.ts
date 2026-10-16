@@ -66,6 +66,10 @@ export class Review {
   @OneToMany(() => ReviewReport, (r: ReviewReport) => r.review)
   reports: ReviewReport[];
 
+  /** Where it came from: 'link' when written from the owner's review link. */
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  source: string | null;
+
   @Column({ name: 'reply_text', type: 'text', nullable: true })
   replyText: string | null;
 

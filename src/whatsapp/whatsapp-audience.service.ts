@@ -15,6 +15,7 @@ import { WhatsAppSettings } from '../entities/whatsapp-settings.entity';
 import { WhatsAppTemplateCategory } from '../entities/whatsapp-template.entity';
 import { createHash } from 'node:crypto';
 import { toE164 } from './whatsapp-phone.util';
+import { WhatsAppConsentService } from './whatsapp-consent.service';
 import { hasSignedIn, notInternal } from '../audience/audience.sql';
 import { WhatsAppSettingsService } from './whatsapp-settings.service';
 import {
@@ -121,6 +122,7 @@ export class WhatsAppAudienceService {
     @InjectRepository(WhatsAppSegment)
     private readonly segmentRepo: Repository<WhatsAppSegment>,
     private readonly settings: WhatsAppSettingsService,
+    private readonly consent: WhatsAppConsentService,
   ) {}
 
   // ── Resolve ──────────────────────────────────────────────────────────────
@@ -574,9 +576,10 @@ export class WhatsAppAudienceService {
         if (contact && contact.reachable === false) {
           skip = 'unreachable';
         } else if (
-          isMarketing &&
-          (consent === 'opted_out' ||
-            (settings.requireOptInForMarketing && consent !== 'opted_in'))
+          consent === 'opted_out' ||
+          (isMarketing &&
+            settings.requireOptInForMarketing &&
+            consent !== 'opted_in')
         ) {
           skip = 'opted_out';
         } else if (
@@ -850,17 +853,25 @@ export class WhatsAppAudienceService {
     return c;
   }
 
-  async patchContact(id: string, dto: PatchContactDto): Promise<ContactJson> {
+  async patchContact(
+    id: string,
+    dto: PatchContactDto,
+    adminId: string | null = null,
+  ): Promise<ContactJson> {
     const c = await this.getContact(id);
-    if (dto.consent && dto.consent !== c.consent) {
+    const consentChanged = !!dto.consent && dto.consent !== c.consent;
+    if (dto.consent && consentChanged) {
       c.consent = dto.consent;
       c.consentChangedAt = new Date();
       c.consentSource = 'admin';
+      c.consentMethod = null;
     }
     if (dto.tags)
       c.tags = [...new Set(dto.tags.map((t) => t.trim()).filter(Boolean))];
     if (dto.notes !== undefined) c.notes = dto.notes || null;
     await this.contactRepo.save(c);
+    if (consentChanged)
+      await this.consent.recordAdminEdit(c, c.consent, adminId);
     const extras = await this.contactExtras([id]);
     return toContactJson(c, extras.get(id) ?? {});
   }

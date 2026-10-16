@@ -17,6 +17,8 @@ import { AdminCreateOfferDto } from './dto/admin-offer-create.dto';
 import { BulkValidateProvidersDto, BulkImportProvidersDto } from './dto/bulk-provider-import.dto';
 import { StorageService } from '../storage/storage.service';
 import { BrandMarkService } from '../providers/brand-mark.service';
+import { WhatsAppConsentService } from '../whatsapp/whatsapp-consent.service';
+import { AutomationsService } from '../automations/automations.service';
 import { BRAND_MARK_FOLDER, isBrandMarkUrl } from '../providers/brand-mark';
 import { AdminProviderFiltersDto, AdminProviderListDto } from './dto/admin-provider-list.dto';
 import { OtpService } from '../otp/otp.service';
@@ -151,6 +153,8 @@ export class AdminService {
     private notificationDispatch: NotificationDispatchService,
     private storageService: StorageService,
     private brandMarks: BrandMarkService,
+    private whatsappConsent: WhatsAppConsentService,
+    private automations: AutomationsService,
     private otpService: OtpService,
     private supabaseAuthService: SupabaseAuthService,
     private serviceableCitiesService: ServiceableCitiesService,
@@ -289,9 +293,25 @@ export class AdminService {
         undefined,
         'provider',
       ).catch(() => {});
+      void this.scheduleShopLive(provider);
     }
 
     return provider;
+  }
+
+  /** WhatsApp "your shop is live" with its views so far (when switched on). */
+  private async scheduleShopLive(provider: Provider): Promise<void> {
+    const [row] = await this.dataSource
+      .query<{ n: string }[]>(
+        `SELECT count(*) AS n FROM provider_analytics_events WHERE provider_id = $1 AND event_type = 'profile_view'`,
+        [provider.id],
+      )
+      .catch(() => [{ n: '0' }]);
+    await this.automations.schedule('shop_live', {
+      dedupeKey: `shop_live:${provider.id}`,
+      providerId: provider.id,
+      context: { views: Number(row?.n ?? 0) },
+    });
   }
 
   async suspendProvider(admin: any, providerId: string) {
@@ -573,6 +593,18 @@ export class AdminService {
         undefined,
         'provider',
       ).catch(() => {});
+
+      const owned = await this.providerRepo.findOneBy({ userId: verification.userId });
+      if (owned) {
+        void this.automations.schedule(
+          aadhaarStatus === 'approved' ? 'verification_approved' : 'verification_not_approved',
+          {
+            dedupeKey: `verification:${verificationId}:${aadhaarStatus}:${Date.now()}`,
+            providerId: owned.id,
+            context: { reason: adminNotes?.trim() || 'please check your documents in the app and send them again.' },
+          },
+        );
+      }
     }
 
     return verification;
@@ -4976,7 +5008,7 @@ export class AdminService {
   // Admin Create Provider with User (End-to-End)
   // ============================================
 
-  async adminCreateProviderWithUser(admin: any, dto: AdminCreateProviderWithUserDto, opts: { brandMark?: boolean } = {}) {
+  async adminCreateProviderWithUser(admin: any, dto: AdminCreateProviderWithUserDto, opts: { brandMark?: boolean; bulk?: boolean } = {}) {
     this.assertAdmin(admin);
 
     // Content moderation on text fields
@@ -5168,6 +5200,19 @@ export class AdminService {
     // No logo yet: a generated brand mark until enrichment or the owner provides
     // a real one. Not for bulk imports — those use "Make logos" on Providers.
     if (opts.brandMark !== false && !created.provider.profilePhotoUrl) this.brandMarks.enqueue([created.provider.id]);
+
+    // The owner agreed to WhatsApp alerts (told the admin, or ticked in the
+    // sheet). Recorded as admin-given; the owner confirms in the app later.
+    if (dto.whatsappConsentMethod) {
+      await this.whatsappConsent
+        .recordForBusiness({
+          providerId: created.provider.id,
+          adminId: admin.id,
+          method: dto.whatsappConsentMethod,
+          source: opts.bulk ? 'bulk_import' : 'admin_recorded',
+        })
+        .catch((err: Error) => new Logger(AdminService.name).warn(`WhatsApp consent not recorded for ${created.provider.id}: ${err.message}`));
+    }
     return created;
   }
 
@@ -5348,7 +5393,7 @@ export class AdminService {
           results.push({ rowId, ok: true, ...earlier, alreadyImported: true });
           continue;
         }
-        const created = await this.adminCreateProviderWithUser(admin, payload, { brandMark: false });
+        const created = await this.adminCreateProviderWithUser(admin, payload, { brandMark: false, bulk: true });
         results.push({ rowId, ok: true, providerId: created.provider.id, userId: created.user.id, brandName: created.provider.brandName });
       } catch (err: any) {
         const message = err?.response?.message ?? err?.message ?? 'Failed';
@@ -5564,6 +5609,30 @@ export class AdminService {
       { womenLedStatus: oldStatus },
       { womenLedStatus: decision },
     );
+
+    // Tell the owner (there was no notification for this before).
+    this.notificationDispatch.sendToUser(
+      provider.userId,
+      'provider_status',
+      decision === 'approved' ? 'Women-led badge approved' : 'Women-led request not approved',
+      decision === 'approved'
+        ? `${provider.brandName} now shows the women-led badge and gets more free lead unlocks every month.`
+        : `${provider.brandName}'s women-led request wasn't approved. Contact us if you think this is a mistake.`,
+      { route: '/provider-details', params: { id: providerId } },
+      undefined,
+      undefined,
+      'provider',
+    ).catch(() => {});
+    if (decision === 'approved') {
+      const [q] = await this.dataSource
+        .query<{ value: string }[]>(`SELECT value FROM system_settings WHERE key = 'women_led_free_leads_per_month'`)
+        .catch(() => [] as { value: string }[]);
+      void this.automations.schedule('women_led_approved', {
+        dedupeKey: `women_led_approved:${providerId}`,
+        providerId,
+        context: { freeLeads: parseInt(q?.value ?? '', 10) || 8 },
+      });
+    }
 
     return { id: providerId, womenLedStatus: decision, isWomenLed: decision === 'approved' };
   }
@@ -6157,6 +6226,14 @@ export class AdminService {
 
     if (offer.provider) {
       this.notificationDispatch.sendTemplated(offer.provider.userId, 'offer_approved', {}).catch(() => {});
+      void this.automations.schedule('deal_approved', {
+        dedupeKey: `deal_approved:${id}`,
+        providerId: offer.provider.id,
+        context: {
+          dealTitle: offer.title,
+          endDate: new Date(offer.endsAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' }),
+        },
+      });
     }
 
     return { ...offer, approvalStatus: 'approved' };
@@ -6172,6 +6249,11 @@ export class AdminService {
 
     if (offer.provider) {
       this.notificationDispatch.sendToUser(offer.provider.userId, 'provider_status', 'Offer Not Approved', adminNotes || `Your offer "${offer.title}" was not approved.`, { route: '/' }, undefined, undefined, 'provider').catch(() => {});
+      void this.automations.schedule('deal_not_approved', {
+        dedupeKey: `deal_not_approved:${id}:${Date.now()}`,
+        providerId: offer.provider.id,
+        context: { dealTitle: offer.title, reason: adminNotes?.trim() || 'please check the details in the app and send it again.' },
+      });
     }
 
     return { ...offer, approvalStatus: 'rejected', isActive: false };

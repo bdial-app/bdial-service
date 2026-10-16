@@ -23,6 +23,14 @@ import {
 
 // ── Webhook payload shapes (only the parts we read) ───────────────────────────
 import { WhatsAppInboxMediaService } from './whatsapp-inbox-media.service';
+import { WhatsAppConsentService } from './whatsapp-consent.service';
+import { ModuleRef } from '@nestjs/core';
+import { GoLinksService } from '../go-links/go-links.service';
+import {
+  CONSENT_NO_REPLIES,
+  CONSENT_YES_REPLIES,
+} from '../automations/automation-catalog';
+import { AutomationsService } from '../automations/automations.service';
 
 interface WebhookStatus {
   id: string;
@@ -109,6 +117,9 @@ export class WhatsAppWebhookService {
     private readonly settings: WhatsAppSettingsService,
     private readonly templates: WhatsAppTemplateService,
     private readonly inboxMedia: WhatsAppInboxMediaService,
+    private readonly consent: WhatsAppConsentService,
+    private readonly links: GoLinksService,
+    private readonly moduleRef: ModuleRef,
   ) {}
 
   /** HMAC-SHA256 of the raw body with the app secret vs `sha256=<hex>`. */
@@ -511,26 +522,77 @@ export class WhatsAppWebhookService {
     const optOut = (settings.optOutKeywords ?? []).map((k) => k.toUpperCase());
     const optIn = (settings.optInKeywords ?? []).map((k) => k.toUpperCase());
 
-    if (optOut.includes(word)) {
-      await this.contactRepo.update(
-        { id: contact.id },
-        {
-          consent: 'opted_out',
-          consentChangedAt: new Date(),
-          consentSource: 'keyword',
-        },
+    // Taps on "Yes, alert me" / "Not interested" (welcome and other templates).
+    if (
+      CONSENT_YES_REPLIES.includes(word) ||
+      CONSENT_NO_REPLIES.includes(word)
+    ) {
+      await this.handleConsentButton(
+        contact,
+        CONSENT_YES_REPLIES.includes(word),
       );
+      return;
+    }
+
+    if (optOut.includes(word)) {
+      await this.consent.recordKeyword(contact, 'opted_out');
       await this.autoReply(contact, OPT_OUT_AUTO_REPLY);
     } else if (optIn.includes(word)) {
-      await this.contactRepo.update(
-        { id: contact.id },
-        {
-          consent: 'opted_in',
-          consentChangedAt: new Date(),
-          consentSource: 'keyword',
-        },
-      );
+      await this.consent.recordKeyword(contact, 'opted_in');
       await this.autoReply(contact, OPT_IN_AUTO_REPLY);
+    }
+  }
+
+  /**
+   * Yes: record their consent, thank them with a link to the app (free, the
+   * window is open), and if they don't sign in, "your shop is live" in 3 days.
+   * No: opt them out and confirm.
+   */
+  private async handleConsentButton(
+    contact: WhatsAppContact,
+    yes: boolean,
+  ): Promise<void> {
+    await this.consent.recordButton(contact, yes ? 'opted_in' : 'opted_out');
+    if (!yes) {
+      await this.autoReply(
+        contact,
+        "Understood, we won't message you about Tijarah again. If you change your mind, reply START.",
+      );
+      return;
+    }
+    const link = await this.links.create({
+      target: contact.providerId
+        ? `/provider-details?id=${contact.providerId}&mode=provider`
+        : '/?mode=provider',
+      userId: contact.userId,
+      providerId: contact.providerId,
+      automationKey: 'welcome_yes',
+    });
+    await this.autoReply(
+      contact,
+      `Shukran! We'll message you here whenever a customer enquires about your business on Tijarah.\n\nTo reply to customers and see who's interested, sign in to the Tijarah app with this number. Your shop is already set up: https://tijarahapp.in/go?c=${link.code}`,
+    );
+    if (contact.providerId) {
+      try {
+        // Resolved at run time: the automations module depends on this one.
+        const automations = this.moduleRef.get(AutomationsService, {
+          strict: false,
+        });
+        const [row] = await this.dataSource.query<{ n: string }[]>(
+          `SELECT count(*) AS n FROM provider_analytics_events WHERE provider_id = $1 AND event_type = 'profile_view'`,
+          [contact.providerId],
+        );
+        await automations.schedule('shop_live', {
+          dedupeKey: `shop_live:${contact.providerId}`,
+          providerId: contact.providerId,
+          delayMinutes: 3 * 24 * 60,
+          context: { onlyIfNotSignedIn: true, views: Number(row?.n ?? 0) },
+        });
+      } catch (err) {
+        this.logger.warn(
+          `Shop-live follow-up not scheduled: ${(err as Error).message}`,
+        );
+      }
     }
   }
 

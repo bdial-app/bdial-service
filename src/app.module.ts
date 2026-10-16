@@ -4,7 +4,11 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { CacheModule } from '@nestjs/cache-manager';
 import { ScheduleModule } from '@nestjs/schedule';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+import { LastActiveInterceptor } from './common/interceptors/last-active.interceptor';
+import { GoLinksModule } from './go-links/go-links.module';
+import { ReviewLinksModule } from './review-links/review-links.module';
+import { AutomationsModule } from './automations/automations.module';
 import { buildTypeOrmOptions } from './config/data-source';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -97,6 +101,9 @@ import { SystemSetting } from './entities';
     HealthModule,
     SystemLogsModule,
     AdminAttentionModule,
+    GoLinksModule,
+    ReviewLinksModule,
+    AutomationsModule,
     ReportsModule,
     NotificationsModule,
     ContentSanitizerModule,
@@ -120,6 +127,8 @@ import { SystemSetting } from './entities';
     { provide: APP_GUARD, useClass: RolesGuard },
     // Global rate limiter guard
     { provide: APP_GUARD, useClass: ThrottlerGuard },
+    // Keeps users.last_seen_at as "last used the app"
+    { provide: APP_INTERCEPTOR, useClass: LastActiveInterceptor },
   ],
 })
 export class AppModule {}
