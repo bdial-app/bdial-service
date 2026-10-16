@@ -1,3 +1,4 @@
+import { AutomationsService } from '../automations/automations.service';
 import {
   Injectable,
   Inject,
@@ -67,6 +68,7 @@ export class PaymentService {
     private readonly notificationDispatch: NotificationDispatchService,
     private readonly appleVerify: AppleVerifyService,
     private readonly dataSource: DataSource,
+    private readonly automations: AutomationsService,
   ) {}
 
   // ──────────────────────────────────────────
@@ -1287,6 +1289,25 @@ export class PaymentService {
           amount: `₹${payment.amount}`,
         })
         .catch(() => {});
+
+      // WhatsApp too, for plan payments (when switched on in admin).
+      if (payment.type === 'subscription') {
+        const [plan] = await this.dataSource
+          .query<{ name: string }[]>(
+            `SELECT sp.name FROM subscriptions s JOIN subscription_plans sp ON sp.id = s.plan_id
+              WHERE s.provider_id = $1 ORDER BY s.updated_at DESC LIMIT 1`,
+            [provider.id],
+          )
+          .catch(() => [] as { name: string }[]);
+        void this.automations.schedule('payment_failed', {
+          dedupeKey: `payment_failed:${payment.id}`,
+          providerId: provider.id,
+          context: {
+            amount: Math.round(Number(payment.amount)).toLocaleString('en-IN'),
+            planName: plan?.name ?? 'Tijarah',
+          },
+        });
+      }
     }
   }
 

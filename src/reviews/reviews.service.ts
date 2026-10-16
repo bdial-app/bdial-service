@@ -7,7 +7,8 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, ILike } from 'typeorm';
-import { Review, ReviewPhoto, ReviewReport, Provider } from '../entities';
+import { Review, ReviewPhoto, ReviewReport, Provider, User } from '../entities';
+import { AutomationsService } from '../automations/automations.service';
 import { CreateReviewDto, ReportReviewDto } from './dto/review.dto';
 import { StorageService } from '../storage/storage.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
@@ -26,9 +27,22 @@ export class ReviewsService {
     private notificationDispatch: NotificationDispatchService,
     private contentSanitizer: ContentSanitizerService,
     private googleReviewsService: GoogleReviewsService,
+    private automations: AutomationsService,
+    @InjectRepository(User) private userRepo: Repository<User>,
   ) {}
 
   async create(userId: string, dto: CreateReviewDto) {
+    // Owners can't rate their own business (the app hides the button, the
+    // API must refuse too — review links make this easy to try).
+    const reviewed = await this.providerRepo.findOne({
+      where: { id: dto.providerId },
+      select: ['id', 'userId'],
+    });
+    if (!reviewed) throw new NotFoundException('Business not found');
+    if (reviewed.userId === userId) {
+      throw new ForbiddenException("You can't review your own business");
+    }
+
     const existing = await this.reviewRepo.findOneBy({
       providerId: dto.providerId!,
       reviewerId: userId,
@@ -57,6 +71,7 @@ export class ReviewsService {
       reviewerId: userId,
       starRating: dto.starRating!,
       reviewText: dto.reviewText,
+      source: dto.source ?? null,
     });
     const saved = await this.reviewRepo.save(review);
 
@@ -76,6 +91,23 @@ export class ReviewsService {
         undefined,
         'provider',
       ).catch(() => {}); // Fire-and-forget
+
+      // Automated WhatsApp (when switched on): if the owner hasn't seen it in 2 hours.
+      const reviewer = await this.userRepo.findOne({ where: { id: userId }, select: ['id', 'name'] });
+      void this.automations.onReview({
+        providerId: provider.id,
+        reviewerName: reviewer?.name ?? '',
+        stars: dto.starRating,
+        text: dto.reviewText,
+      });
+
+      // Written from the owner's review link: tell them it's working.
+      if (dto.source === 'link') {
+        const viaLink = await this.reviewRepo.count({ where: { providerId: provider.id, source: 'link' } });
+        this.notificationDispatch
+          .sendTemplated(provider.userId, 'review_link_joined', { count: String(viaLink), brandName: provider.brandName }, undefined, 'provider')
+          .catch(() => {});
+      }
     }
 
     return saved;
@@ -181,8 +213,23 @@ export class ReviewsService {
       );
     }
 
+    const firstReply = !review.replyText;
     review.replyText = replyText;
     review.repliedAt = new Date();
-    return this.reviewRepo.save(review);
+    const saved = await this.reviewRepo.save(review);
+
+    // Let the customer know the owner answered them (first reply only).
+    if (firstReply && review.reviewerId) {
+      this.notificationDispatch
+        .sendTemplated(
+          review.reviewerId,
+          'review_replied',
+          { brandName: provider.brandName, reply: replyText.slice(0, 120) },
+          { params: { id: provider.id } },
+          'customer',
+        )
+        .catch(() => {});
+    }
+    return saved;
   }
 }

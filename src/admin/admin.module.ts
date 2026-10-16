@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { WhatsAppModule } from '../whatsapp/whatsapp.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
@@ -26,6 +27,7 @@ import { ProvidersModule } from '../providers/providers.module';
     GoogleReviewsModule,
     GeocodeModule,
     ProvidersModule,
+    WhatsAppModule,
   ],
   controllers: [AdminController],
   providers: [ProductBulkService, AdminService, ProviderEnrichmentService, ProviderLocationService],

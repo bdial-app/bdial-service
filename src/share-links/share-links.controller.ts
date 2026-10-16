@@ -94,7 +94,18 @@ export class ShareLinksController {
         details: [
           {
             appID,
-            paths: ['/b/*', '/p/*', '/c/*', '/shop*', '/provider-details*', '/product-details*'],
+            paths: [
+              '/b/*',
+              '/p/*',
+              '/c/*',
+              '/shop*',
+              '/provider-details*',
+              '/product-details*',
+              // Message links (/go?c=…) and review links (/r?b=…)
+              '/go*',
+              '/r',
+              '/r/*',
+            ],
           },
         ],
       },

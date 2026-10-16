@@ -35,6 +35,11 @@ export class CreateReviewDto {
   @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @MaxLength(2000)
   reviewText?: string;
+
+  @ApiPropertyOptional({ description: "'link' when written from the owner's review link" })
+  @IsOptional()
+  @IsIn(['link'])
+  source?: 'link';
 }
 
 export class ReportReviewDto {

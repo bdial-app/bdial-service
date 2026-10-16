@@ -10,6 +10,9 @@ import { SponsoredListing } from '../entities/sponsored-listing.entity';
 import { NotificationDispatchService } from './notification-dispatch.service';
 import { NotificationTemplateService } from './notification-template.service';
 
+/** Times below are India time, whatever the server's clock is set to. */
+const IST = { timeZone: 'Asia/Kolkata' } as const;
+
 /**
  * Cron-based automated notification triggers.
  * Each job checks its corresponding template isActive before dispatching,
@@ -37,7 +40,7 @@ export class NotificationCronService {
   // ─────────────────────────────────────────────────────────────
   // Daily 9 AM — Profile Completion Reminder (24h after signup)
   // ─────────────────────────────────────────────────────────────
-  @Cron('0 9 * * *') // Daily at 09:00
+  @Cron('0 9 * * *', IST) // Daily at 09:00
   async profileCompletionReminder(): Promise<void> {
     if (!(await this.templateService.isEnabled('complete_profile'))) return;
 
@@ -67,7 +70,7 @@ export class NotificationCronService {
   // ─────────────────────────────────────────────────────────────
   // Daily 10 AM — Become a Provider CTA (7 days after signup)
   // ─────────────────────────────────────────────────────────────
-  @Cron('0 10 * * *')
+  @Cron('0 10 * * *', IST)
   async becomeProviderCta(): Promise<void> {
     if (!(await this.templateService.isEnabled('become_provider'))) return;
 
@@ -97,7 +100,7 @@ export class NotificationCronService {
   // ─────────────────────────────────────────────────────────────
   // Daily 8 AM — Subscription Expiring Soon (7 days before end)
   // ─────────────────────────────────────────────────────────────
-  @Cron('0 8 * * *')
+  @Cron('0 8 * * *', IST)
   async subscriptionExpiringSoon(): Promise<void> {
     if (!(await this.templateService.isEnabled('subscription_expiring'))) return;
 
@@ -109,6 +112,7 @@ export class NotificationCronService {
     const subscriptions = await this.subscriptionRepo
       .createQueryBuilder('s')
       .leftJoinAndSelect('s.plan', 'plan')
+      .innerJoinAndSelect('s.provider', 'provider')
       .where('s.status = :status', { status: 'active' })
       .andWhere('s.cancelAtPeriodEnd = :cancel', { cancel: true })
       .andWhere('s.currentPeriodEnd BETWEEN :start AND :end', {
@@ -119,17 +123,21 @@ export class NotificationCronService {
 
     this.logger.log(`Subscription expiring: ${subscriptions.length} subscriptions`);
     for (const sub of subscriptions) {
-      await this.dispatchService.sendTemplated(sub.providerId, 'subscription_expiring', {
-        planName: sub.plan?.name || 'Premium',
-        daysLeft: '7',
-      });
+      // Notifications go to the owner's user account, not the business id.
+      await this.dispatchService.sendTemplated(
+        sub.provider.userId,
+        'subscription_expiring',
+        { planName: sub.plan?.name || 'Premium', daysLeft: '7' },
+        undefined,
+        'provider',
+      );
     }
   }
 
   // ─────────────────────────────────────────────────────────────
   // Daily 8 AM — Voucher Expiring Soon (48h before expiry)
   // ─────────────────────────────────────────────────────────────
-  @Cron('0 8 * * *')
+  @Cron('0 8 * * *', IST)
   async voucherExpiringSoon(): Promise<void> {
     if (!(await this.templateService.isEnabled('voucher_expiring'))) return;
 
@@ -169,7 +177,7 @@ export class NotificationCronService {
   // ─────────────────────────────────────────────────────────────
   // Daily 8 AM — Sponsorship Expiring Soon (3 days before end)
   // ─────────────────────────────────────────────────────────────
-  @Cron('0 8 * * *')
+  @Cron('0 8 * * *', IST)
   async sponsorshipExpiringSoon(): Promise<void> {
     if (!(await this.templateService.isEnabled('sponsorship_expiring'))) return;
 
@@ -180,6 +188,7 @@ export class NotificationCronService {
 
     const listings = await this.sponsoredRepo
       .createQueryBuilder('s')
+      .innerJoinAndSelect('s.provider', 'provider')
       .where('s.isActive = :active', { active: true })
       .andWhere('s.approvalStatus = :status', { status: 'approved' })
       .andWhere('s.endsAt BETWEEN :start AND :end', {
@@ -190,9 +199,13 @@ export class NotificationCronService {
 
     this.logger.log(`Sponsorship expiring: ${listings.length} listings`);
     for (const listing of listings) {
-      await this.dispatchService.sendTemplated(listing.providerId, 'sponsorship_expiring', {
-        daysLeft: '3',
-      });
+      await this.dispatchService.sendTemplated(
+        listing.provider.userId,
+        'sponsorship_expiring',
+        { daysLeft: '3' },
+        undefined,
+        'provider',
+      );
     }
   }
 
@@ -209,17 +222,40 @@ export class NotificationCronService {
       .where('is_active = true')
       // Complimentary placements have no budget to exhaust — only the end date stops them.
       .andWhere("(ends_at <= NOW() OR (billing_mode = 'paid' AND spent_amount >= budget_amount))")
+      .returning(['id', 'providerId', 'impressions', 'clicks'])
       .execute();
 
     if (result.affected && result.affected > 0) {
       this.logger.log(`Auto-deactivated ${result.affected} sponsorships (expired/exhausted)`);
+    }
+
+    // Tell each owner what their boost brought (when "Boost results" is switched on).
+    const ended = (result.raw ?? []) as { id: string; provider_id: string; impressions: number; clicks: number }[];
+    if (ended.length && (await this.templateService.isEnabled('boost_results'))) {
+      for (const b of ended) {
+        const provider = await this.providerRepo.findOne({ where: { id: b.provider_id }, select: ['id', 'userId', 'brandName'] });
+        if (!provider) continue;
+        await this.dispatchService
+          .sendTemplated(
+            provider.userId,
+            'boost_results',
+            {
+              impressions: Number(b.impressions ?? 0).toLocaleString('en-IN'),
+              clicks: Number(b.clicks ?? 0).toLocaleString('en-IN'),
+              brandName: provider.brandName,
+            },
+            { slug: 'boost_results' },
+            'provider',
+          )
+          .catch(() => false);
+      }
     }
   }
 
   // ─────────────────────────────────────────────────────────────
   // Daily 11 AM — Inactive User Re-engagement (14 days no activity)
   // ─────────────────────────────────────────────────────────────
-  @Cron('0 11 * * *')
+  @Cron('0 11 * * *', IST)
   async inactiveUserReminder(): Promise<void> {
     if (!(await this.templateService.isEnabled('inactive_reminder'))) return;
 
@@ -251,7 +287,7 @@ export class NotificationCronService {
   // ─────────────────────────────────────────────────────────────
   // Weekly Monday 10 AM — New Providers in Your Area
   // ─────────────────────────────────────────────────────────────
-  @Cron('0 10 * * 1') // Monday at 10:00
+  @Cron('0 10 * * 1', IST) // Monday at 10:00
   async newProvidersWeeklyDigest(): Promise<void> {
     if (!(await this.templateService.isEnabled('new_providers_nearby'))) return;
 

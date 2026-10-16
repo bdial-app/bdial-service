@@ -1,3 +1,4 @@
+import { AutomationsService } from '../automations/automations.service';
 import {
   Injectable,
   ForbiddenException,
@@ -48,6 +49,7 @@ export class ChatService {
     private storage: StorageService,
     private notificationDispatch: NotificationDispatchService,
     private contentSanitizer: ContentSanitizerService,
+    private automations: AutomationsService,
   ) {}
 
   // ─────────────────────────────────────────────
@@ -493,6 +495,14 @@ export class ChatService {
           undefined,
           op.role as 'customer' | 'provider',
         ).catch((err) => this.logger.warn(`Push notification failed for user ${op.userId}: ${err.message}`));
+
+        // Automated WhatsApp (only when switched on in admin): alert the
+        // owner of a customer's message, or the customer of a reply.
+        if (participant.role === 'customer' && op.role === 'provider') {
+          void this.automations.onCustomerMessage({ conversationId, ownerUserId: op.userId, customerName: sender.name, excerpt: preview });
+        } else if (participant.role === 'provider' && op.role === 'customer') {
+          void this.automations.onBusinessReply({ conversationId, customerUserId: op.userId, ownerUserId: userId, excerpt: preview });
+        }
       }
     }
 

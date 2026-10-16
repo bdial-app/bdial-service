@@ -3,6 +3,10 @@ import {
   WhatsAppTemplateComponent,
   WhatsAppTemplateVariable,
 } from '../../entities/whatsapp-template.entity';
+import {
+  AUTOMATIONS,
+  templateComponents,
+} from '../../automations/automation-catalog';
 
 export interface StarterTemplate {
   name: string;
@@ -68,7 +72,7 @@ function body(text: string, ...samples: string[]): WhatsAppTemplateComponent {
   };
 }
 
-export const STARTER_TEMPLATES: StarterTemplate[] = [
+const BASE_TEMPLATES: StarterTemplate[] = [
   {
     name: 'tijarah_new_enquiry',
     language: 'en',
@@ -284,4 +288,154 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
     ],
     variables: [brandVar, cityVar],
   },
+];
+
+// ── Automations and the onboarding campaigns (all seeded as drafts) ─────────
+
+function v(
+  index: number,
+  label: string,
+  source: WhatsAppTemplateVariable['source'],
+  sample: string,
+): WhatsAppTemplateVariable {
+  return { index, location: 'body', label, source, sample };
+}
+
+/** Quick replies the webhook understands: "Yes" records consent, "Not interested" opts out. */
+function welcomeButtons(): WhatsAppTemplateComponent {
+  return {
+    type: 'BUTTONS',
+    buttons: [
+      {
+        type: 'URL',
+        text: 'Open my shop',
+        url: `${PROFILE_URL_BASE}{{1}}`,
+        example: [PROFILE_URL_EXAMPLE],
+      },
+      { type: 'QUICK_REPLY', text: 'Yes, send me customer alerts' },
+      { type: 'QUICK_REPLY', text: 'Not interested' },
+    ],
+  };
+}
+const MARKETING_FOOTER: WhatsAppTemplateComponent = {
+  type: 'FOOTER',
+  text: 'Tijarah · tap "Not interested" to stop',
+};
+
+/** For Campaigns: owners we onboarded, before they've agreed to alerts. */
+const ONBOARDING_CAMPAIGN_TEMPLATES: StarterTemplate[] = [
+  {
+    name: 'tijarah_welcome',
+    language: 'en',
+    category: 'marketing',
+    description:
+      'Welcome for owners we onboarded. "Yes" turns on WhatsApp alerts; "Not interested" stops messages.',
+    components: [
+      {
+        type: 'BODY',
+        text: 'Salaam {{1}},\n{{2}} is now on Tijarah, the business app made for our Dawoodi Bohra community. Mumineen in {{3}} can now find your shop, see your products and message you directly. {{4}} people viewed your listing this week.',
+      },
+      MARKETING_FOOTER,
+      welcomeButtons(),
+    ],
+    variables: [
+      v(1, 'Owner name', 'owner_name', 'Huzefa'),
+      v(2, 'Business name', 'brand_name', 'Burhani Sweets'),
+      v(3, 'City', 'city', 'Pune'),
+      v(4, 'Views (7 days)', 'visits_7d', '23'),
+    ],
+  },
+  {
+    name: 'tijarah_welcome_new',
+    language: 'en',
+    category: 'marketing',
+    description: 'The welcome for shops with no views yet.',
+    components: [
+      {
+        type: 'BODY',
+        text: 'Salaam {{1}},\n{{2}} is now on Tijarah, the business app made for our Dawoodi Bohra community. Mumineen in {{3}} can now find your shop, see your products and message you directly.',
+      },
+      MARKETING_FOOTER,
+      welcomeButtons(),
+    ],
+    variables: [
+      v(1, 'Owner name', 'owner_name', 'Huzefa'),
+      v(2, 'Business name', 'brand_name', 'Burhani Sweets'),
+      v(3, 'City', 'city', 'Pune'),
+    ],
+  },
+  {
+    name: 'tijarah_listing_reminder',
+    language: 'en',
+    category: 'marketing',
+    description:
+      "Day 7 / day 30 reminder for owners who didn't answer the welcome. Only for shops with views.",
+    components: [
+      {
+        type: 'BODY',
+        text: '{{1}} Mumineen viewed {{2}} on Tijarah this week. Your shop is ready whenever you are.',
+      },
+      MARKETING_FOOTER,
+      welcomeButtons(),
+    ],
+    variables: [
+      v(1, 'Views (7 days)', 'visits_7d', '12'),
+      v(2, 'Business name', 'brand_name', 'Burhani Sweets'),
+    ],
+  },
+  {
+    name: 'tijarah_occasion',
+    language: 'en',
+    category: 'marketing',
+    description:
+      'Community occasions (about 4 a year). Fill the occasion as a custom value.',
+    components: [
+      {
+        type: 'BODY',
+        text: '{{1}} Mubarak from Tijarah. Mumineen are searching for {{2}} this week. Add a deal so they find {{3}} first.',
+      },
+      MARKETING_FOOTER,
+      profileButton('Add a deal'),
+    ],
+    variables: [
+      v(1, 'Occasion', 'custom', 'Eid'),
+      v(2, 'Category', 'category', 'sweets'),
+      v(3, 'Business name', 'brand_name', 'Burhani Sweets'),
+    ],
+  },
+  {
+    name: 'tijarah_win_back',
+    language: 'en',
+    category: 'marketing',
+    description:
+      "Owners who haven't opened the app in 30 days, with real activity. At most every 60 days.",
+    components: [
+      {
+        type: 'BODY',
+        text: 'In the last 7 days, {{1}} got {{2}} views and {{3}} enquiries on Tijarah.',
+      },
+      MARKETING_FOOTER,
+      profileButton('Open my shop'),
+    ],
+    variables: [
+      v(1, 'Business name', 'brand_name', 'Burhani Sweets'),
+      v(2, 'Views (7 days)', 'visits_7d', '34'),
+      v(3, 'Enquiries (7 days)', 'enquiries_7d', '2'),
+    ],
+  },
+];
+
+/** The automated messages' templates (admin → WhatsApp → Automations sends them). */
+const AUTOMATION_TEMPLATES: StarterTemplate[] = AUTOMATIONS.map((a) => ({
+  name: a.template.name,
+  language: 'en',
+  category: a.template.category,
+  description: `Automation: ${a.name}. ${a.when}`,
+  ...templateComponents(a.template),
+}));
+
+export const STARTER_TEMPLATES: StarterTemplate[] = [
+  ...BASE_TEMPLATES,
+  ...AUTOMATION_TEMPLATES,
+  ...ONBOARDING_CAMPAIGN_TEMPLATES,
 ];

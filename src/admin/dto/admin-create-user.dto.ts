@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsOptional, IsEnum, MaxLength, Matches, IsEmail, IsBoolean } from 'class-validator';
+import { IsString, IsOptional, IsEnum, MaxLength, Matches, IsEmail, IsBoolean, IsIn } from 'class-validator';
+import { ADMIN_CONSENT_METHODS, type AdminConsentMethod } from '../../whatsapp/whatsapp-consent.service';
 
 export class AdminCreateUserDto {
   @ApiProperty({ example: '9876543210', description: '10-digit mobile number' })
@@ -200,6 +201,16 @@ export class AdminCreateProviderWithUserDto {
   @ApiPropertyOptional({ description: 'Apply location (lat/lng/city/area/pincode) to both user and provider', default: true })
   @IsOptional()
   syncLocation?: boolean;
+
+  // ── WhatsApp consent ────────────────────────────────────
+  @ApiPropertyOptional({
+    description:
+      'Set only when the owner agreed to WhatsApp alerts from Tijarah, and how they agreed. They are asked to confirm in the app when they sign in.',
+    enum: ADMIN_CONSENT_METHODS,
+  })
+  @IsOptional()
+  @IsIn(ADMIN_CONSENT_METHODS)
+  whatsappConsentMethod?: AdminConsentMethod;
 
   // ── OTP bypass ──────────────────────────────────────────
   @ApiPropertyOptional({ description: 'Skip OTP for user mobile', default: true })

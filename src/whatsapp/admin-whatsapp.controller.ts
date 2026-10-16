@@ -251,8 +251,9 @@ export class AdminWhatsAppController {
   patchContact(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: PatchContactDto,
+    @Request() req: { user?: { id?: string } },
   ) {
-    return this.audience.patchContact(id, dto);
+    return this.audience.patchContact(id, dto, req.user?.id ?? null);
   }
 
   @Get('audience/segments')

@@ -62,6 +62,26 @@ export class WhatsAppContact {
   })
   consentSource: string | null;
 
+  /** How an admin got consent (in_person, phone_call…); null when the person gave it. */
+  @Column({
+    name: 'consent_method',
+    type: 'varchar',
+    length: 30,
+    nullable: true,
+  })
+  consentMethod: string | null;
+
+  /** When the business owner confirmed WhatsApp alerts themselves in the app. */
+  @Column({ name: 'owner_confirmed_at', type: 'timestamptz', nullable: true })
+  ownerConfirmedAt: Date | null;
+
+  /** The app last asked about WhatsApp alerts (and how often it has). */
+  @Column({ name: 'consent_prompted_at', type: 'timestamptz', nullable: true })
+  consentPromptedAt: Date | null;
+
+  @Column({ name: 'consent_prompt_count', type: 'int', default: 0 })
+  consentPromptCount: number;
+
   @Column({ type: 'boolean', default: true })
   reachable: boolean;
 
