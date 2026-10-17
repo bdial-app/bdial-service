@@ -15,6 +15,8 @@ export type ConsentSource =
   | 'app_onboarding'
   | 'app_prompt'
   | 'app_settings'
+  | 'app_home_card'
+  | 'app_dashboard_card'
   | 'admin_recorded'
   | 'bulk_import'
   | 'admin'
@@ -35,6 +37,8 @@ const OWNER_SOURCES: ConsentSource[] = [
   'app_onboarding',
   'app_prompt',
   'app_settings',
+  'app_home_card',
+  'app_dashboard_card',
   'whatsapp_button',
 ];
 
@@ -47,6 +51,21 @@ export const OWNER_CONSENT_WORDING = 'owner_alerts_v1';
  * from Tijarah on WhatsApp…". Submitting is their yes.
  */
 export const SIGNUP_NOTICE_WORDING = 'signup_notice_v1';
+/**
+ * The customer home card: "Get replies from businesses, and the best deals
+ * from Bohra businesses near you, on WhatsApp. Stop anytime."
+ */
+export const CUSTOMER_UPDATES_WORDING = 'customer_updates_v1';
+
+/** Where in the app someone chose. */
+export const APP_CONSENT_SOURCES = [
+  'app_onboarding',
+  'app_prompt',
+  'app_settings',
+  'app_home_card',
+  'app_dashboard_card',
+] as const;
+export type AppConsentSource = (typeof APP_CONSENT_SOURCES)[number];
 
 /** Ask again after "Not now", at most this often and this many times. */
 const REASK_AFTER_DAYS = 30;
@@ -208,7 +227,7 @@ export class WhatsAppConsentService {
   async setByOwner(
     userId: string,
     consent: 'opted_in' | 'opted_out',
-    source: 'app_onboarding' | 'app_prompt' | 'app_settings',
+    source: AppConsentSource,
   ): Promise<OwnerConsentStatus> {
     const owned = await this.ownedBusiness(userId);
     let phone = owned
@@ -228,7 +247,9 @@ export class WhatsAppConsentService {
       wording:
         source === 'app_onboarding'
           ? SIGNUP_NOTICE_WORDING
-          : OWNER_CONSENT_WORDING,
+          : !owned && source === 'app_home_card'
+            ? CUSTOMER_UPDATES_WORDING
+            : OWNER_CONSENT_WORDING,
       ownerConfirmed: true,
     });
     return this.ownerStatus(userId);

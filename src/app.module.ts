@@ -8,6 +8,7 @@ import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { LastActiveInterceptor } from './common/interceptors/last-active.interceptor';
 import { GoLinksModule } from './go-links/go-links.module';
 import { ReviewLinksModule } from './review-links/review-links.module';
+import { LegalModule } from './legal/legal.module';
 import { AutomationsModule } from './automations/automations.module';
 import { buildTypeOrmOptions } from './config/data-source';
 import { AppController } from './app.controller';
@@ -103,6 +104,7 @@ import { SystemSetting } from './entities';
     AdminAttentionModule,
     GoLinksModule,
     ReviewLinksModule,
+    LegalModule,
     AutomationsModule,
     ReportsModule,
     NotificationsModule,

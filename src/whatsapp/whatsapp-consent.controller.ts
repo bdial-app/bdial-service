@@ -9,7 +9,11 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { IsIn } from 'class-validator';
-import { WhatsAppConsentService } from './whatsapp-consent.service';
+import {
+  APP_CONSENT_SOURCES,
+  type AppConsentSource,
+  WhatsAppConsentService,
+} from './whatsapp-consent.service';
 
 type AuthedRequest = { user: { id: string } };
 
@@ -18,8 +22,8 @@ export class SetOwnerConsentDto {
   consent: 'opted_in' | 'opted_out';
 
   /** Where in the app the owner decided. */
-  @IsIn(['app_onboarding', 'app_prompt', 'app_settings'])
-  source: 'app_onboarding' | 'app_prompt' | 'app_settings';
+  @IsIn(APP_CONSENT_SOURCES)
+  source: AppConsentSource;
 }
 
 /** A signed-in business owner's own WhatsApp alerts choice. */
