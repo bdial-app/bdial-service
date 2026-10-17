@@ -24,6 +24,7 @@ import {
 } from './meta-cloud-api.service';
 import sharp from 'sharp';
 import { STARTER_TEMPLATES } from './seeds/starter-templates';
+import { appLinkOrigin, withLinkOrigin } from '../common/app-links';
 import {
   DEFAULT_CARD_ID,
   WhatsAppMediaService,
@@ -320,9 +321,12 @@ export class WhatsAppTemplateService {
     return { synced: remote.length, created, updated };
   }
 
-  async seed(userId: string | null): Promise<{ created: number }> {
+  async seed(
+    userId: string | null,
+  ): Promise<{ created: number; linksFixed: number }> {
     let created = 0;
-    for (const s of STARTER_TEMPLATES) {
+    for (const raw of STARTER_TEMPLATES) {
+      const s = withLinkOrigin(raw);
       const exists = await this.templateRepo.findOne({
         where: { name: s.name, language: s.language },
       });
@@ -342,7 +346,37 @@ export class WhatsAppTemplateService {
       );
       created++;
     }
-    return { created };
+    return { created, linksFixed: await this.fixDraftLinks() };
+  }
+
+  /**
+   * Drafts (not yet sent to Meta) whose buttons point at the old web pages:
+   * tijarahapp.in isn't live, and /provider-details opens the web app. Point
+   * them at /b/ and /go on the live link domain, which open the app or the
+   * store. Submitted templates are left alone (Meta holds those).
+   */
+  private async fixDraftLinks(): Promise<number> {
+    const origin = appLinkOrigin();
+    const OLD: Array<[RegExp, string]> = [
+      [
+        /https:\/\/(?:www\.)?tijarahapp\.in\/provider-details\?id=/g,
+        `${origin}/b/`,
+      ],
+      [/https:\/\/(?:www\.)?tijarahapp\.in\/go\?c=/g, `${origin}/go?c=`],
+      [/https:\/\/tijarah\.app\/provider-details\?id=/g, `${origin}/b/`],
+    ];
+    const drafts = await this.templateRepo.find({ where: { status: 'draft' } });
+    let fixed = 0;
+    for (const t of drafts) {
+      const before = JSON.stringify(t.components);
+      let after = before;
+      for (const [re, to] of OLD) after = after.replace(re, to);
+      if (after === before) continue;
+      t.components = JSON.parse(after) as typeof t.components;
+      await this.templateRepo.save(t);
+      fixed++;
+    }
+    return fixed;
   }
 
   /** Apply a Meta template-status webhook. */

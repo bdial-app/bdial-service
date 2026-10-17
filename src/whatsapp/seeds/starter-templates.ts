@@ -1,3 +1,4 @@
+import { LINK_ORIGIN_TOKEN } from '../../common/app-links';
 import {
   WhatsAppTemplateCategory,
   WhatsAppTemplateComponent,
@@ -22,7 +23,8 @@ const FOOTER: WhatsAppTemplateComponent = {
   text: 'Tijarah Connect',
 };
 
-const PROFILE_URL_BASE = 'https://tijarahapp.in/provider-details?id=';
+/** /b/<business>: opens the app on that business, or the right app store. */
+const PROFILE_URL_BASE = `${LINK_ORIGIN_TOKEN}/b/`;
 const PROFILE_URL_EXAMPLE = `${PROFILE_URL_BASE}3f9c2e1a-0000-4000-8000-000000000000`;
 const APP_URL =
   'https://play.google.com/store/apps/details?id=com.pronttera.tijarah';
