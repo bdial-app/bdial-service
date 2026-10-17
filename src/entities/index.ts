@@ -80,3 +80,6 @@ export { MessagingAutomation } from './messaging-automation.entity';
 export { AutomationJob } from './automation-job.entity';
 export { GoLink } from './go-link.entity';
 export { ReviewIntent } from './review-intent.entity';
+export { LegalDocument } from './legal-document.entity';
+export { LegalDocumentVersion } from './legal-document-version.entity';
+export { LegalAcceptance } from './legal-acceptance.entity';

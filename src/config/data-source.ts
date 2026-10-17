@@ -11,6 +11,9 @@ import { MessagingAutomation } from '../entities/messaging-automation.entity';
 import { AutomationJob } from '../entities/automation-job.entity';
 import { GoLink } from '../entities/go-link.entity';
 import { ReviewIntent } from '../entities/review-intent.entity';
+import { LegalDocument } from '../entities/legal-document.entity';
+import { LegalDocumentVersion } from '../entities/legal-document-version.entity';
+import { LegalAcceptance } from '../entities/legal-acceptance.entity';
 import { UserArchive } from '../entities/user-archive.entity';
 import { Category } from '../entities/category.entity';
 import { ProviderCategory } from '../entities/provider-category.entity';
@@ -126,6 +129,9 @@ export const ALL_ENTITIES = [
   AutomationJob,
   GoLink,
   ReviewIntent,
+  LegalDocument,
+  LegalDocumentVersion,
+  LegalAcceptance,
 ];
 
 export function buildTypeOrmOptions(url?: string): DataSourceOptions {
@@ -137,14 +143,14 @@ export function buildTypeOrmOptions(url?: string): DataSourceOptions {
     migrations: [migrationsPath],
     migrationsTableName: 'typeorm_migrations',
     migrationsRun: true, // auto-run pending migrations on app start
-    synchronize: false,  // never use synchronize — migrations handle schema
+    synchronize: false, // never use synchronize — migrations handle schema
     extra: {
       // Pool size per instance — Supabase Pro allows 200 total connections.
       // Keep this moderate so multiple instances can coexist:
       //   3 instances × 15 = 45 connections (leaves room for Studio, migrations, etc.)
       max: 15,
-      min: 2,                      // keep 2 warm connections for fast cold starts
-      idleTimeoutMillis: 30000,    // release idle connections after 30s
+      min: 2, // keep 2 warm connections for fast cold starts
+      idleTimeoutMillis: 30000, // release idle connections after 30s
       connectionTimeoutMillis: 5000, // fail fast if pool is exhausted
     },
   };

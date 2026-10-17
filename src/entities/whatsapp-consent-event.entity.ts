@@ -37,7 +37,7 @@ export class WhatsAppConsentEvent {
   @Column({ type: 'varchar', length: 20 })
   consent: string;
 
-  /** app_onboarding · app_prompt · app_settings · admin_recorded · bulk_import · admin · keyword */
+  /** app_onboarding · app_prompt · app_settings · app_home_card · app_dashboard_card · admin_recorded · bulk_import · admin · keyword */
   @Column({ type: 'varchar', length: 40 })
   source: string;
 
