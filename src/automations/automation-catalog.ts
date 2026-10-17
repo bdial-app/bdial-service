@@ -1,3 +1,4 @@
+import { LINK_ORIGIN_TOKEN } from '../common/app-links';
 import type {
   WhatsAppTemplateCategory,
   WhatsAppTemplateComponent,
@@ -11,7 +12,7 @@ import type {
  */
 
 /** Button links: the app opens the screen, or the right store sends them to install. */
-export const GO_URL_BASE = 'https://tijarahapp.in/go?c=';
+export const GO_URL_BASE = `${LINK_ORIGIN_TOKEN}/go?c=`;
 const GO_URL_EXAMPLE = `${GO_URL_BASE}k3m9q2xw7a`;
 
 export type AutomationKey =

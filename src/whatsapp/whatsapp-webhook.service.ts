@@ -1,3 +1,4 @@
+import { appLinkOrigin } from '../common/app-links';
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
@@ -570,7 +571,7 @@ export class WhatsAppWebhookService {
     });
     await this.autoReply(
       contact,
-      `Shukran! We'll message you here whenever a customer enquires about your business on Tijarah.\n\nTo reply to customers and see who's interested, sign in to the Tijarah app with this number. Your shop is already set up: https://tijarahapp.in/go?c=${link.code}`,
+      `Shukran! We'll message you here whenever a customer enquires about your business on Tijarah.\n\nTo reply to customers and see who's interested, sign in to the Tijarah app with this number. Your shop is already set up: ${appLinkOrigin()}/go?c=${link.code}`,
     );
     if (contact.providerId) {
       try {

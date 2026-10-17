@@ -1,3 +1,4 @@
+import { businessAppLink } from '../common/app-links';
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
@@ -38,11 +39,9 @@ export class WhatsAppVariableService {
     private readonly templates: WhatsAppTemplateService,
   ) {}
 
+  /** Opens the business in the app, or sends them to the right store. */
   profileUrl(providerId: string): string {
-    const base = (this.config.get<string>('APP_URL') ?? 'http://localhost:3001')
-      .trim()
-      .replace(/\/+$/, '');
-    return `${base}/provider-details?id=${providerId}`;
+    return businessAppLink(providerId);
   }
 
   appDownloadUrl(): string {
