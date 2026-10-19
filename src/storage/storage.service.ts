@@ -1,18 +1,36 @@
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+  Optional,
+} from '@nestjs/common';
 import {
   S3Client,
   DeleteObjectCommand,
   GetObjectCommand,
   PutObjectCommand,
 } from '@aws-sdk/client-s3';
+import { StorageBackupService } from '../storage-backup/storage-backup.service';
+
+/**
+ * Folders the app never deletes from: identity documents and private
+ * conversations. Removing one of these is a manual, deliberate job.
+ */
+export const PROTECTED_PREFIXES = [
+  'verifications/',
+  'chat-media/',
+  'whatsapp-media/',
+];
 
 @Injectable()
 export class StorageService {
+  private readonly logger = new Logger(StorageService.name);
   private readonly s3: S3Client;
   private readonly bucket: string;
   private readonly endpoint: string;
 
-  constructor() {
+  constructor(@Optional() private readonly backup?: StorageBackupService) {
     this.bucket = process.env.S3_BUCKET!;
     this.endpoint = process.env.S3_ENDPOINT!;
 
@@ -52,11 +70,16 @@ export class StorageService {
         }),
       );
     } catch (err) {
-      throw new InternalServerErrorException(`S3 upload failed: ${err.message}`);
+      throw new InternalServerErrorException(
+        `S3 upload failed: ${err.message}`,
+      );
     }
 
     // Supabase public URL format
-    const baseUrl = this.endpoint.replace('/storage/v1/s3', '/storage/v1/object/public');
+    const baseUrl = this.endpoint.replace(
+      '/storage/v1/s3',
+      '/storage/v1/object/public',
+    );
     const url = `${baseUrl}/${this.bucket}/${storageKey}`;
     return { url, storageKey };
   }
@@ -118,9 +141,33 @@ export class StorageService {
   }
 
   /**
-   * Delete a file from S3 by its storage key.
+   * Delete a file from S3 by its storage key. Files in protected folders are
+   * never deleted, and when backup is set up the file is copied to the
+   * backup first — if that copy fails, the file is kept.
    */
   async delete(storageKey: string): Promise<void> {
+    if (
+      !storageKey ||
+      storageKey.includes('..') ||
+      PROTECTED_PREFIXES.some((p) => storageKey.startsWith(p))
+    ) {
+      this.logger.warn(`Refused to delete protected file ${storageKey}`);
+      throw new ForbiddenException(
+        'This file is protected and cannot be deleted',
+      );
+    }
+    if (this.backup) {
+      try {
+        await this.backup.ensureBackedUp(storageKey);
+      } catch (err) {
+        this.logger.error(
+          `Kept ${storageKey}: could not back it up before deleting (${err instanceof Error ? err.message : String(err)})`,
+        );
+        throw new InternalServerErrorException(
+          'Could not back up the file, so it was kept',
+        );
+      }
+    }
     try {
       await this.s3.send(
         new DeleteObjectCommand({
@@ -129,7 +176,9 @@ export class StorageService {
         }),
       );
     } catch (err) {
-      throw new InternalServerErrorException(`S3 delete failed: ${err.message}`);
+      throw new InternalServerErrorException(
+        `S3 delete failed: ${err.message}`,
+      );
     }
   }
 

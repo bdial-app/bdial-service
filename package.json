@@ -22,6 +22,7 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "seed:supabase-users": "npx ts-node src/scripts/seed-supabase-users.ts",
+    "storage:restore": "npx ts-node src/scripts/storage-restore.ts",
     "db:migrate": "bash scripts/run-migrations.sh",
     "db:migrate:dry": "bash scripts/run-migrations.sh --dry",
     "db:seed:uat": "bash scripts/run-uat-seed.sh",
