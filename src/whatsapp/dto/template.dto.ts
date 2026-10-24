@@ -51,6 +51,16 @@ export class TemplateVariableDto {
   @IsString()
   @MaxLength(500)
   sample: string;
+
+  @ApiPropertyOptional({
+    example: '/?tab=chats&mode=provider',
+    description: 'app_link buttons: the app screen the link opens',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\//, { message: 'target must be an app route starting with /' })
+  @MaxLength(300)
+  target?: string;
 }
 
 export class UpsertTemplateDto {

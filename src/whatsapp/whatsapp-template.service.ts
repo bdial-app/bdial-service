@@ -24,7 +24,7 @@ import {
 } from './meta-cloud-api.service';
 import sharp from 'sharp';
 import { STARTER_TEMPLATES } from './seeds/starter-templates';
-import { appLinkOrigin, withLinkOrigin } from '../common/app-links';
+import { withLinkOrigin } from '../common/app-links';
 import {
   DEFAULT_CARD_ID,
   WhatsAppMediaService,
@@ -380,9 +380,11 @@ export class WhatsAppTemplateService {
     return { synced: remote.length, created, updated, removed };
   }
 
-  async seed(
-    userId: string | null,
-  ): Promise<{ created: number; linksFixed: number }> {
+  async seed(userId: string | null): Promise<{
+    created: number;
+    linksFixed: number;
+    outdated: string[];
+  }> {
     let created = 0;
     for (const raw of STARTER_TEMPLATES) {
       const s = withLinkOrigin(raw);
@@ -405,37 +407,67 @@ export class WhatsAppTemplateService {
       );
       created++;
     }
-    return { created, linksFixed: await this.fixDraftLinks() };
+    return { created, ...(await this.refreshStarterLinks()) };
   }
 
   /**
-   * Drafts (not yet sent to Meta) whose buttons point at the old web pages:
-   * tijarahapp.in isn't live, and /provider-details opens the web app. Point
-   * them at /b/ and /go on the live link domain, which open the app or the
-   * store. Submitted templates are left alone (Meta holds those).
+   * Bring starter templates up to date with their smart link (…/go?c={{1}},
+   * a code per recipient opening the right screen). Drafts nobody has edited
+   * take the whole new version; edited drafts keep their wording and only
+   * get the link. Submitted ones can't change here: they're listed so they
+   * can be resubmitted (their old links still open the app or the store).
    */
-  private async fixDraftLinks(): Promise<number> {
-    const origin = appLinkOrigin();
-    const OLD: Array<[RegExp, string]> = [
-      [
-        /https:\/\/(?:www\.)?tijarahapp\.in\/provider-details\?id=/g,
-        `${origin}/b/`,
-      ],
-      [/https:\/\/(?:www\.)?tijarahapp\.in\/go\?c=/g, `${origin}/go?c=`],
-      [/https:\/\/tijarah\.app\/provider-details\?id=/g, `${origin}/b/`],
-    ];
-    const drafts = await this.templateRepo.find({ where: { status: 'draft' } });
-    let fixed = 0;
-    for (const t of drafts) {
-      const before = JSON.stringify(t.components);
-      let after = before;
-      for (const [re, to] of OLD) after = after.replace(re, to);
-      if (after === before) continue;
-      t.components = JSON.parse(after) as typeof t.components;
+  private async refreshStarterLinks(): Promise<{
+    linksFixed: number;
+    outdated: string[];
+  }> {
+    const byName = new Map(
+      STARTER_TEMPLATES.map((t) => [`${t.name}|${t.language}`, t]),
+    );
+    const rows = await this.templateRepo.find();
+    let linksFixed = 0;
+    const outdated: string[] = [];
+    for (const t of rows) {
+      const raw = byName.get(`${t.name}|${t.language}`);
+      if (!raw) continue;
+      const def = withLinkOrigin(raw);
+      const defLink = def.components
+        .find((c) => c.type === 'BUTTONS')
+        ?.buttons?.find((b) => b.type === 'URL');
+      if (!defLink) continue;
+      const buttons = t.components.find((c) => c.type === 'BUTTONS')?.buttons;
+      const link = buttons?.find((b) => b.type === 'URL');
+      const defVar = def.variables.find((v) => v.location === 'button');
+      const curVar = t.variables?.find((v) => v.location === 'button');
+      const upToDate =
+        link?.url === defLink.url &&
+        (curVar?.target ?? null) === (defVar?.target ?? null);
+      if (upToDate) continue;
+      if (t.status !== 'draft') {
+        if (link && link.url !== defLink.url) outdated.push(t.name);
+        continue;
+      }
+      const untouched =
+        t.isSeed &&
+        Math.abs(t.updatedAt.getTime() - t.createdAt.getTime()) < 5_000;
+      if (untouched) {
+        t.components = def.components;
+        t.variables = def.variables;
+        t.description = def.description;
+      } else {
+        if (link) {
+          link.url = defLink.url;
+          link.example = defLink.example;
+        }
+        t.variables = [
+          ...(t.variables ?? []).filter((v) => v.location !== 'button'),
+          ...(defVar ? [defVar] : []),
+        ];
+      }
       await this.templateRepo.save(t);
-      fixed++;
+      linksFixed++;
     }
-    return fixed;
+    return { linksFixed, outdated };
   }
 
   /** Apply a Meta template-status webhook. */

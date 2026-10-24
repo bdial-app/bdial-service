@@ -19,7 +19,7 @@ export class GoLinksService {
     @InjectRepository(GoLink) private readonly repo: Repository<GoLink>,
   ) {}
 
-  private newCode(): string {
+  newCode(): string {
     const bytes = randomBytes(10);
     let s = '';
     for (const b of bytes) s += ALPHABET[b % ALPHABET.length];
@@ -49,6 +49,27 @@ export class GoLinksService {
       }
     }
     throw new Error('unreachable');
+  }
+
+  /** Many links at once (a campaign): codes made with newCode(). */
+  async insertMany(
+    rows: Array<{
+      code: string;
+      target: string;
+      userId: string | null;
+      providerId: string | null;
+      automationKey?: string | null;
+    }>,
+  ): Promise<void> {
+    for (let i = 0; i < rows.length; i += 500) {
+      await this.repo.insert(
+        rows.slice(i, i + 500).map((r) => ({
+          ...r,
+          target: r.target.slice(0, 500),
+          automationKey: r.automationKey ?? null,
+        })),
+      );
+    }
   }
 
   /** Where a code goes (public: the code is the secret). */

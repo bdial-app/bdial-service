@@ -421,9 +421,13 @@ export class WhatsAppInboxService {
         ...this.templates.sampleVariables(template),
         ...(input.variables ?? {}),
       };
-      const buttonValues =
-        input.buttonValues ??
-        this.variables.buttonValues(null, providerId, undefined, template);
+      const buttonValues = input.buttonValues ?? {
+        ...this.variables.buttonValues(null, providerId, undefined, template),
+        ...(await this.variables.appLinkValues(null, template, {
+          providerId,
+          userId: contact.userId ?? null,
+        })),
+      };
       const components = this.templates.buildSendComponents(
         template,
         variables,
