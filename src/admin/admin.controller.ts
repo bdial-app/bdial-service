@@ -1061,53 +1061,6 @@ export class AdminController {
   }
 
   // ============================================
-  // Provider Badges Management
-  // ============================================
-
-  @Get('badges')
-  @ApiOperation({ summary: 'List all badges' })
-  @ApiQuery({ name: 'page', required: false, type: Number })
-  @ApiQuery({ name: 'limit', required: false, type: Number })
-  @ApiQuery({ name: 'type', required: false, type: String })
-  @ApiQuery({ name: 'isActive', required: false, type: String })
-  getBadges(
-    @Request() req,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
-    @Query('type') type?: string,
-    @Query('isActive') isActive?: string,
-  ) {
-    return this.adminService.getBadges(req.user, page, limit, type, isActive);
-  }
-
-  @Get('badges/:id')
-  @ApiOperation({ summary: 'Get badge detail' })
-  @ApiParam({ name: 'id', description: 'Badge ID' })
-  getBadge(@Param('id') id: string, @Request() req) {
-    return this.adminService.getBadgeById(req.user, id);
-  }
-
-  @Post('badges')
-  @ApiOperation({ summary: 'Manually award a badge to a provider' })
-  createBadge(@Request() req, @Body() body: { providerId: string; type: string; source?: string; expiresAt?: string }) {
-    return this.adminService.createBadge(req.user, body);
-  }
-
-  @Patch('badges/:id')
-  @ApiOperation({ summary: 'Update a badge' })
-  @ApiParam({ name: 'id', description: 'Badge ID' })
-  updateBadge(@Param('id') id: string, @Request() req, @Body() body: any) {
-    return this.adminService.updateBadge(req.user, id, body);
-  }
-
-  @Delete('badges/:id')
-  @ApiOperation({ summary: 'Revoke a badge' })
-  @ApiParam({ name: 'id', description: 'Badge ID' })
-  deleteBadge(@Param('id') id: string, @Request() req) {
-    return this.adminService.deleteBadge(req.user, id);
-  }
-
-  // ============================================
   // Dashboard Time Series
   // ============================================
 

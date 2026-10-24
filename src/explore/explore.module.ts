@@ -1,3 +1,4 @@
+import { BadgesModule } from '../badges/badges.module';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ExploreController } from './explore.controller';
@@ -18,6 +19,7 @@ import {
 
 @Module({
   imports: [
+    BadgesModule,
     TypeOrmModule.forFeature([
       Provider,
       Category,

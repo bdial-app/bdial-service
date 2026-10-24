@@ -1,3 +1,4 @@
+import { BadgesService } from '../badges/badges.service';
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, IsNull, Not, MoreThan, LessThan, DataSource } from 'typeorm';
@@ -42,6 +43,7 @@ export class HomeService {
     private readonly categoryPersonalization: CategoryPersonalizationService,
     private readonly dataSource: DataSource,
     @Inject(CACHE_MANAGER) private cacheManager: Cache,
+    private readonly badges: BadgesService,
   ) {}
 
   // ─── Performance Helpers ─────────────────────────────────────
@@ -244,21 +246,40 @@ export class HomeService {
       .slice(0, 6)
       .map((c) => c.name);
 
+    // Every business in the feed, with its badges (one query for all sections).
+    const badgeMap = await this.badges.activeFor(
+      [
+        ...dedupedNearby,
+        ...(dedupedFeatured?.providers ?? []),
+        ...(dedupedForYou ?? []),
+        ...dedupedTopRated,
+        ...(dedupedCity?.providers ?? []),
+        ...dedupedNewArrivals,
+        ...dedupedDeals,
+        ...(sponsoredProviders ?? []),
+        ...dedupedWomenLed,
+      ].map((p: { id: string }) => p.id),
+    );
+    const withBadges = <T extends { id: string }>(list: T[]) =>
+      list.map((p) => ({ ...p, badges: badgeMap.get(p.id) ?? [] }));
+
     return {
-      nearbyProviders: dedupedNearby,
-      featuredCategory: dedupedFeatured,
+      nearbyProviders: withBadges(dedupedNearby),
+      featuredCategory: dedupedFeatured
+        ? { ...dedupedFeatured, providers: withBadges(dedupedFeatured.providers) }
+        : null,
       promoBanners,
       trendingCategories,
       personalizedCategories,
-      forYouProviders: dedupedForYou,
+      forYouProviders: dedupedForYou ? withBadges(dedupedForYou) : null,
       communityReviews,
       platformStats,
-      topRatedProviders: dedupedTopRated,
-      cityProviders: dedupedCity,
-      newArrivals: dedupedNewArrivals,
-      dealsAroundYou: dedupedDeals,
-      sponsoredProviders,
-      womenLedProviders: dedupedWomenLed,
+      topRatedProviders: withBadges(dedupedTopRated),
+      cityProviders: dedupedCity ? { ...dedupedCity, providers: withBadges(dedupedCity.providers) } : null,
+      newArrivals: withBadges(dedupedNewArrivals),
+      dealsAroundYou: withBadges(dedupedDeals),
+      sponsoredProviders: withBadges(sponsoredProviders ?? []),
+      womenLedProviders: withBadges(dedupedWomenLed),
       bestProducts,
       forYouProducts,
       searchPrompts,

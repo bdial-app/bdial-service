@@ -1,7 +1,7 @@
 import { Injectable, ForbiddenException, NotFoundException, BadRequestException, ConflictException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, IsNull, Not, In, MoreThan, ILike, Between, Brackets } from 'typeorm';
-import { Provider, User, Verification, Review, ReviewReport, Report, ProviderWarning, Product, Category, ProviderCategory, Conversation, ConversationParticipant, Message, PromoBanner, SponsoredListing, ProviderOffer, ProviderBadge, ProviderAnalyticsEvent, ProviderLead, SearchLog, AdEvent, AppInvite, AuditLog, SystemSetting, Photo, ReviewPhoto, ServiceableCity, UserArchive, Payment } from '../entities';
+import { Provider, User, Verification, Review, ReviewReport, Report, ProviderWarning, Product, Category, ProviderCategory, Conversation, ConversationParticipant, Message, PromoBanner, SponsoredListing, ProviderOffer, ProviderAnalyticsEvent, ProviderLead, SearchLog, AdEvent, AppInvite, AuditLog, SystemSetting, Photo, ReviewPhoto, ServiceableCity, UserArchive, Payment } from '../entities';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { BugReport } from '../bug-reports/bug-report.entity';
 import { AdminCreateUserDto, AdminCreateProviderWithUserDto } from './dto/admin-create-user.dto';
@@ -136,7 +136,6 @@ export class AdminService {
     @InjectRepository(SponsoredListing) private sponsoredRepo: Repository<SponsoredListing>,
     @InjectRepository(Payment) private paymentRepo: Repository<Payment>,
     @InjectRepository(ProviderOffer) private offerRepo: Repository<ProviderOffer>,
-    @InjectRepository(ProviderBadge) private badgeRepo: Repository<ProviderBadge>,
     @InjectRepository(ProviderAnalyticsEvent) private analyticsEventRepo: Repository<ProviderAnalyticsEvent>,
     @InjectRepository(ProviderLead) private leadRepo: Repository<ProviderLead>,
     @InjectRepository(SearchLog) private searchLogRepo: Repository<SearchLog>,
@@ -4308,74 +4307,6 @@ export class AdminService {
   // ============================================
   // Provider Badges Management
   // ============================================
-
-  async getBadges(admin: any, page?: number, limit?: number, type?: string, isActive?: string) {
-    this.assertAdmin(admin);
-    const currentPage = Math.max(1, page || 1);
-    const pageSize = Math.min(100, Math.max(1, limit || 10));
-    const skip = (currentPage - 1) * pageSize;
-
-    const qb = this.badgeRepo.createQueryBuilder('b')
-      .leftJoinAndSelect('b.provider', 'provider');
-
-    if (type) qb.andWhere('b.type = :type', { type });
-    if (isActive === 'true') qb.andWhere('b.is_active = true');
-    if (isActive === 'false') qb.andWhere('b.is_active = false');
-
-    qb.orderBy('b.createdAt', 'DESC').skip(skip).take(pageSize);
-
-    const [items, total] = await qb.getManyAndCount();
-    return {
-      items,
-      meta: { total, page: currentPage, limit: pageSize, totalPages: Math.ceil(total / pageSize) },
-    };
-  }
-
-  async getBadgeById(admin: any, id: string) {
-    this.assertAdmin(admin);
-    const badge = await this.badgeRepo.findOne({
-      where: { id },
-      relations: ['provider'],
-    });
-    if (!badge) throw new NotFoundException('Badge not found');
-    return badge;
-  }
-
-  async createBadge(admin: any, body: { providerId: string; type: string; source?: string; expiresAt?: string }) {
-    this.assertAdmin(admin);
-    const provider = await this.providerRepo.findOneBy({ id: body.providerId });
-    if (!provider) throw new NotFoundException('Provider not found');
-
-    const badge = this.badgeRepo.create({
-      providerId: body.providerId,
-      type: body.type as any,
-      source: (body.source as any) || 'earned',
-      expiresAt: body.expiresAt ? new Date(body.expiresAt) : null,
-    });
-    return this.badgeRepo.save(badge);
-  }
-
-  async updateBadge(admin: any, id: string, body: { isActive?: boolean; expiresAt?: string | null }) {
-    this.assertAdmin(admin);
-    const badge = await this.badgeRepo.findOneBy({ id });
-    if (!badge) throw new NotFoundException('Badge not found');
-
-    const update: any = {};
-    if (body.isActive !== undefined) update.isActive = body.isActive;
-    if (body.expiresAt !== undefined) update.expiresAt = body.expiresAt ? new Date(body.expiresAt) : null;
-
-    if (Object.keys(update).length === 0) throw new BadRequestException('No valid fields to update');
-    await this.badgeRepo.update(id, update);
-    return this.badgeRepo.findOne({ where: { id }, relations: ['provider'] });
-  }
-
-  async deleteBadge(admin: any, id: string) {
-    this.assertAdmin(admin);
-    const badge = await this.badgeRepo.findOneBy({ id });
-    if (!badge) throw new NotFoundException('Badge not found');
-    await this.badgeRepo.remove(badge);
-    return { success: true };
-  }
 
   // ============================================
   // Dashboard Time Series

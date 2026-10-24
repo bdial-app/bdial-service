@@ -803,6 +803,417 @@ const CUSTOMER_TEMPLATES: StarterTemplate[] = [
   },
 ];
 
+// ── Utility: event updates that carry a link (drafts) ───────────────────────
+//
+// Meta keeps a template in Utility only while it is a plain, non-promotional
+// update about something the person did or has with us, sent because that
+// thing happened. These are written that way: no selling, each tied to one
+// event (see its description). The visibility comes from the links they
+// carry — owners get their own page link to share, customers the business's.
+// Send each when its event happens (one person, not a broadcast).
+
+/** A link button to a business: /b/<provider id>, opening the app or the store. */
+const businessButton = (text: string): WhatsAppTemplateComponent => ({
+  type: 'BUTTONS',
+  buttons: [
+    {
+      type: 'URL',
+      text,
+      url: `${PROFILE_URL_BASE}{{1}}`,
+      example: [PROFILE_URL_EXAMPLE],
+    },
+  ],
+});
+
+const pageLinkAt = (i: number) =>
+  v(
+    i,
+    'Business page link',
+    'business_link',
+    'https://www.tijarahapp.in/business/burhani-sweets/',
+  );
+
+const OWNER_UTILITY_TEMPLATES: StarterTemplate[] = [
+  {
+    name: 'tijarah_page_ready',
+    language: 'en',
+    category: 'utility',
+    description:
+      "Event: the owner's listing goes live. Gives them their own page link.",
+    components: [
+      body(
+        'Salaam {{1}},\nthe listing for {{2}} on Tijarah is now live. Your business page is at {{3}}\n\nAnyone who opens this link can see your details and contact you directly.',
+        'Huzefa',
+        'Burhani Sweets',
+        'https://www.tijarahapp.in/business/burhani-sweets/',
+      ),
+      FOOTER,
+      businessButton('Open my shop'),
+    ],
+    variables: [ownerVar(1), brandAt(2), pageLinkAt(3)],
+  },
+  {
+    name: 'tijarah_listing_created_for_you',
+    language: 'en',
+    category: 'utility',
+    description:
+      'Event: an admin or a bulk import created a listing for this owner. "Not mine" lands in the inbox.',
+    components: [
+      body(
+        'Salaam {{1}},\na business listing for {{2}} has been created on Tijarah, the business app of our Dawoodi Bohra community. Its page is at {{3}}\n\nYou can check and edit the details from the app. If this is not your business, reply Not mine.',
+        'Huzefa',
+        'Burhani Sweets',
+        'https://www.tijarahapp.in/business/burhani-sweets/',
+      ),
+      FOOTER,
+      {
+        type: 'BUTTONS',
+        buttons: [
+          {
+            type: 'URL',
+            text: 'Check my listing',
+            url: `${PROFILE_URL_BASE}{{1}}`,
+            example: [PROFILE_URL_EXAMPLE],
+          },
+          { type: 'QUICK_REPLY', text: 'Not mine' },
+        ],
+      },
+    ],
+    variables: [ownerVar(1), brandAt(2), pageLinkAt(3)],
+  },
+  {
+    name: 'tijarah_link_changed',
+    language: 'en',
+    category: 'utility',
+    description:
+      "Event: the business's link (slug) was changed by the owner or an admin. {{4}} = the old link.",
+    components: [
+      body(
+        'Salaam {{1}},\nthe web address of {{2}} on Tijarah is now {{3}}\n\nYour old link, {{4}}, still opens your page, so links you have already shared keep working.',
+        'Huzefa',
+        'Burhani Sweets',
+        'https://www.tijarahapp.in/business/burhani-sweets-pune/',
+        'https://www.tijarahapp.in/business/burhani-sweets/',
+      ),
+      FOOTER,
+      businessButton('Open my shop'),
+    ],
+    variables: [
+      ownerVar(1),
+      brandAt(2),
+      pageLinkAt(3),
+      v(
+        4,
+        'Old link',
+        'custom',
+        'https://www.tijarahapp.in/business/burhani-sweets/',
+      ),
+    ],
+  },
+  {
+    name: 'tijarah_details_updated',
+    language: 'en',
+    category: 'utility',
+    description:
+      'Event: the listing was edited by someone other than the owner (e.g. an admin). {{2}} = what changed, {{4}} = when.',
+    components: [
+      body(
+        'Salaam {{1}},\nthe {{2}} of {{3}} on Tijarah was updated on {{4}}. If you did not ask for this change, reply to this message and our team will help.',
+        'Huzefa',
+        'opening hours',
+        'Burhani Sweets',
+        '24 Oct',
+      ),
+      FOOTER,
+      businessButton('View my listing'),
+    ],
+    variables: [
+      ownerVar(1),
+      v(2, 'What changed', 'custom', 'opening hours'),
+      brandAt(3),
+      v(4, 'Date', 'custom', '24 Oct'),
+    ],
+  },
+  {
+    name: 'tijarah_photo_removed',
+    language: 'en',
+    category: 'utility',
+    description:
+      'Event: a photo was removed in Photo Moderation. {{3}} = the reason.',
+    components: [
+      body(
+        'Salaam {{1}},\na photo was removed from {{2}} on Tijarah because {{3}}. You can upload a replacement from the app at any time.',
+        'Huzefa',
+        'Burhani Sweets',
+        'it was blurry',
+      ),
+      FOOTER,
+      businessButton('Open my shop'),
+    ],
+    variables: [
+      ownerVar(1),
+      brandAt(2),
+      v(3, 'Reason', 'custom', 'it was blurry'),
+    ],
+  },
+  {
+    name: 'tijarah_item_hidden',
+    language: 'en',
+    category: 'utility',
+    description:
+      'Event: an admin hid one of their products or services. {{2}} = the item, {{4}} = the reason.',
+    components: [
+      body(
+        'Salaam {{1}},\nthe item "{{2}}" from {{3}} is hidden from customers on Tijarah because {{4}}. You can edit it in the app to show it again.',
+        'Huzefa',
+        'Kaju Katli 1 kg',
+        'Burhani Sweets',
+        'the price was missing',
+      ),
+      FOOTER,
+      businessButton('Open my shop'),
+    ],
+    variables: [
+      ownerVar(1),
+      v(2, 'Item', 'custom', 'Kaju Katli 1 kg'),
+      brandAt(3),
+      v(4, 'Reason', 'custom', 'the price was missing'),
+    ],
+  },
+  {
+    name: 'tijarah_review_link',
+    language: 'en',
+    category: 'utility',
+    description:
+      'Event: the owner asked for their review link (My business → Get reviews). {{3}} = their review link.',
+    components: [
+      body(
+        'Salaam {{1}},\nhere is the review link for {{2}} that you asked for: {{3}}\n\nCustomers who open it can rate your business in one step.',
+        'Huzefa',
+        'Burhani Sweets',
+        'https://www.tijarahapp.in/r?b=burhani-sweets',
+      ),
+      FOOTER,
+      businessButton('Open my shop'),
+    ],
+    variables: [
+      ownerVar(1),
+      brandAt(2),
+      v(
+        3,
+        'Review link',
+        'custom',
+        'https://www.tijarahapp.in/r?b=burhani-sweets',
+      ),
+    ],
+  },
+  {
+    name: 'tijarah_catalogue_link',
+    language: 'en',
+    category: 'utility',
+    description:
+      'Event: the owner asked for their catalogue link. {{3}} = /business/<slug>/catalogue/.',
+    components: [
+      body(
+        'Salaam {{1}},\nhere is the catalogue link for {{2}} that you asked for: {{3}}\n\nIt lists every item with its price and stays up to date as you edit your catalogue.',
+        'Huzefa',
+        'Burhani Sweets',
+        'https://www.tijarahapp.in/business/burhani-sweets/catalogue/',
+      ),
+      FOOTER,
+      businessButton('Open my shop'),
+    ],
+    variables: [
+      ownerVar(1),
+      brandAt(2),
+      v(
+        3,
+        'Catalogue link',
+        'custom',
+        'https://www.tijarahapp.in/business/burhani-sweets/catalogue/',
+      ),
+    ],
+  },
+  {
+    name: 'tijarah_verification_received',
+    language: 'en',
+    category: 'utility',
+    description:
+      'Event: the owner submitted verification documents. {{3}} = how long review takes.',
+    components: [
+      body(
+        'Salaam {{1}},\nwe have received the verification documents for {{2}}. Our team reviews them within {{3}}, and you will get a message as soon as it is done.',
+        'Huzefa',
+        'Burhani Sweets',
+        '2 working days',
+      ),
+      FOOTER,
+      businessButton('Open my shop'),
+    ],
+    variables: [
+      ownerVar(1),
+      brandAt(2),
+      v(3, 'Review time', 'custom', '2 working days'),
+    ],
+  },
+];
+
+/**
+ * Customers' updates. Business details come in as custom values, filled by
+ * whatever sends them; the button opens the business (/b/<provider id>).
+ */
+const CUSTOMER_UTILITY_TEMPLATES: StarterTemplate[] = [
+  {
+    name: 'tijarah_enquiry_sent',
+    language: 'en',
+    category: 'utility',
+    description:
+      'Event: a customer sent an enquiry. {{2}} = business, {{3}} = their message, {{4}} = the business page link.',
+    components: [
+      body(
+        'Salaam {{1}},\nyour enquiry to {{2}} was sent on Tijarah:\n"{{3}}"\n\nTheir reply will come to you in the app. Their page, {{4}}, has their phone number and location.',
+        'Sakina',
+        'Burhani Sweets',
+        'Do you have kaju katli 1 kg boxes for Eid?',
+        'https://www.tijarahapp.in/business/burhani-sweets/',
+      ),
+      FOOTER,
+      businessButton('View business'),
+    ],
+    variables: [
+      customerVar,
+      v(2, 'Business name', 'custom', 'Burhani Sweets'),
+      v(
+        3,
+        'Enquiry text',
+        'custom',
+        'Do you have kaju katli 1 kg boxes for Eid?',
+      ),
+      v(
+        4,
+        'Business page link',
+        'custom',
+        'https://www.tijarahapp.in/business/burhani-sweets/',
+      ),
+    ],
+  },
+  {
+    name: 'tijarah_review_posted',
+    language: 'en',
+    category: 'utility',
+    description:
+      "Event: a customer's review was published. {{3}} = the business page link.",
+    components: [
+      body(
+        'Salaam {{1}},\nyour review of {{2}} is now published on Tijarah. You can see it, or edit it, on their page, {{3}}, at any time.',
+        'Sakina',
+        'Burhani Sweets',
+        'https://www.tijarahapp.in/business/burhani-sweets/',
+      ),
+      FOOTER,
+      businessButton('View business'),
+    ],
+    variables: [
+      customerVar,
+      v(2, 'Business name', 'custom', 'Burhani Sweets'),
+      v(
+        3,
+        'Business page link',
+        'custom',
+        'https://www.tijarahapp.in/business/burhani-sweets/',
+      ),
+    ],
+  },
+  {
+    name: 'tijarah_saved_business',
+    language: 'en',
+    category: 'utility',
+    description:
+      'Event: a customer saved a business. Its address and hours, for reference.',
+    components: [
+      body(
+        'Salaam {{1}},\nyou saved {{2}} on Tijarah. Address: {{3}}. Hours: {{4}}. You can find it again any time under Saved in the app.',
+        'Sakina',
+        'Burhani Sweets',
+        'Shop 4, Camp, Pune',
+        '10 AM to 8 PM',
+      ),
+      FOOTER,
+      businessButton('View business'),
+    ],
+    variables: [
+      customerVar,
+      v(2, 'Business name', 'custom', 'Burhani Sweets'),
+      v(3, 'Address', 'custom', 'Shop 4, Camp, Pune'),
+      v(4, 'Hours', 'custom', '10 AM to 8 PM'),
+    ],
+  },
+  {
+    name: 'tijarah_saved_business_update',
+    language: 'en',
+    category: 'utility',
+    description:
+      'Event: a business the customer saved changed its hours, phone or location. {{3}} = what changed, {{4}} = the new value.',
+    components: [
+      body(
+        'Salaam {{1}},\n{{2}}, a business you saved on Tijarah, has updated its {{3}}. The new details: {{4}}. Open it in the app for directions or to contact them.',
+        'Sakina',
+        'Burhani Sweets',
+        'opening hours',
+        '9 AM to 9 PM',
+      ),
+      FOOTER,
+      businessButton('View business'),
+    ],
+    variables: [
+      customerVar,
+      v(2, 'Business name', 'custom', 'Burhani Sweets'),
+      v(3, 'What changed', 'custom', 'opening hours'),
+      v(4, 'New details', 'custom', '9 AM to 9 PM'),
+    ],
+  },
+  {
+    name: 'tijarah_account_ready',
+    language: 'en',
+    category: 'utility',
+    description:
+      'Event: a customer signed up. {{2}} = last digits of their number. A "not me" reply lands in the inbox.',
+    components: [
+      body(
+        'Salaam {{1}},\nyour Tijarah account is ready. You signed up with the number ending {{2}}. If this was not you, reply to this message and we will look into it.',
+        'Sakina',
+        '4885',
+      ),
+      FOOTER,
+      {
+        type: 'BUTTONS',
+        buttons: [{ type: 'URL', text: 'Open Tijarah', url: `${SITE}/` }],
+      },
+    ],
+    variables: [customerVar, v(2, 'Number ending', 'custom', '4885')],
+  },
+  {
+    name: 'tijarah_invite_joined',
+    language: 'en',
+    category: 'utility',
+    description:
+      'Event: someone joined Tijarah through this person’s invite. {{2}} = who joined.',
+    components: [
+      body(
+        'Salaam {{1}},\n{{2}} joined Tijarah using your invite. Thank you for sharing the app with the community.',
+        'Sakina',
+        'Fatema',
+      ),
+      FOOTER,
+      {
+        type: 'BUTTONS',
+        buttons: [{ type: 'URL', text: 'Open Tijarah', url: `${SITE}/` }],
+      },
+    ],
+    variables: [customerVar, v(2, 'Who joined', 'custom', 'Fatema')],
+  },
+];
+
 /** The automated messages' templates (admin → WhatsApp → Automations sends them). */
 const AUTOMATION_TEMPLATES: StarterTemplate[] = AUTOMATIONS.map((a) => ({
   name: a.template.name,
@@ -818,4 +1229,6 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
   ...ONBOARDING_CAMPAIGN_TEMPLATES,
   ...OWNER_GROWTH_TEMPLATES,
   ...CUSTOMER_TEMPLATES,
+  ...OWNER_UTILITY_TEMPLATES,
+  ...CUSTOMER_UTILITY_TEMPLATES,
 ];
