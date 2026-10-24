@@ -76,16 +76,4 @@ export class ExploreController {
   async getDeals(@Query() dto: DealsQueryDto) {
     return this.exploreService.getDeals(dto);
   }
-
-  @Post('award-badges')
-  @UseGuards(AuthGuard('jwt'))
-  @ApiBearerAuth()
-  @ApiOperation({
-    summary: 'Trigger badge auto-award for all eligible providers',
-    description: 'Awards earned badges (top_rated, rising_star, trusted) based on metrics.',
-  })
-  @ApiResponse({ status: 200, description: 'Badges awarded' })
-  async awardBadges() {
-    return this.exploreService.awardEarnedBadges();
-  }
 }

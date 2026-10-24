@@ -7,7 +7,9 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, ILike } from 'typeorm';
+import { Repository, DataSource, ILike, In } from 'typeorm';
+import { BADGE_KEYS, badgeRank } from '../badges/badge-catalog';
+import { BadgesService } from '../badges/badges.service';
 import { Provider, User, Verification, ProviderCategory, Review, Product, Photo, Message, ConversationParticipant, ProviderBadge, ProviderOffer, SponsoredListing, ProviderWarning, SystemSetting, Subscription, ProviderOnboardingDraft } from '../entities';
 import { StorageService } from '../storage/storage.service';
 import { BrandMarkService } from './brand-mark.service';
@@ -40,6 +42,7 @@ export class ProvidersService {
     @InjectRepository(Message) private messageRepo: Repository<Message>,
     @InjectRepository(ConversationParticipant) private participantRepo: Repository<ConversationParticipant>,
     @InjectRepository(ProviderBadge) private badgeRepo: Repository<ProviderBadge>,
+    private readonly badgesService: BadgesService,
     @InjectRepository(ProviderOffer) private offerRepo: Repository<ProviderOffer>,
     @InjectRepository(SponsoredListing) private sponsorRepo: Repository<SponsoredListing>,
     @InjectRepository(ProviderWarning) private warningRepo: Repository<ProviderWarning>,
@@ -507,8 +510,7 @@ export class ProvidersService {
         take: 50,
       }),
       this.badgeRepo.find({
-        where: { providerId: id, isActive: true },
-        order: { createdAt: 'DESC' },
+        where: { providerId: id, isActive: true, type: In(BADGE_KEYS) },
       }),
       this.offerRepo
         .createQueryBuilder('o')
@@ -570,7 +572,11 @@ export class ProvidersService {
       photos,
       products,
       reviews,
-      badges,
+      // Live badges only, highest first (src/badges/badge-catalog.ts).
+      badges: badges
+        .filter((b) => !b.expiresAt || b.expiresAt > new Date())
+        .sort((a, b) => badgeRank(a.type) - badgeRank(b.type))
+        .map((b) => ({ id: b.id, type: b.type, source: b.source, reason: b.reason, since: b.createdAt, expiresAt: b.expiresAt })),
       activeOffers,
       isSponsored: !!activeSponsor,
       sponsorEndsAt: activeSponsor?.endsAt ?? null,
@@ -861,7 +867,7 @@ export class ProvidersService {
     }
 
     return {
-      data,
+      data: await this.badgesService.attach(data),
       meta: { total, page, limit, totalPages: Math.ceil(total / limit), radius },
     };
   }

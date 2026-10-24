@@ -52,6 +52,7 @@ import { GoogleReviewsModule } from './google-reviews/google-reviews.module';
 import { WhatsAppModule } from './whatsapp/whatsapp.module';
 import { ShareLinksModule } from './share-links/share-links.module';
 import { SlugsModule } from './slugs/slugs.module';
+import { BadgesModule } from './badges/badges.module';
 import { AppVersionModule } from './app-version/app-version.module';
 import { AudienceModule } from './audience/audience.module';
 import { SystemSetting } from './entities';
@@ -118,6 +119,7 @@ import { SystemSetting } from './entities';
     WhatsAppModule,
     ShareLinksModule,
     SlugsModule,
+    BadgesModule,
     AppVersionModule,
     AudienceModule,
     TypeOrmModule.forFeature([SystemSetting]),

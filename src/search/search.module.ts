@@ -1,3 +1,4 @@
+import { BadgesModule } from '../badges/badges.module';
 import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Provider } from '../entities/provider.entity';
@@ -16,6 +17,7 @@ import { CategoryPersonalizationService } from '../users/category-personalizatio
 
 @Module({
   imports: [
+    BadgesModule,
     TypeOrmModule.forFeature([Provider, Product, Category, SearchLog, ProviderAnalyticsEvent, SponsoredListing, SearchSynonym, UserCategoryInteraction, User, SystemSetting]),
   ],
   controllers: [SearchController],

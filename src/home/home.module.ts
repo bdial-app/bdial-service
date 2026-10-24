@@ -1,3 +1,4 @@
+import { BadgesModule } from '../badges/badges.module';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { HomeController } from './home.controller';
@@ -24,6 +25,7 @@ import { ProductsModule } from '../products/products.module';
 
 @Module({
   imports: [
+    BadgesModule,
     TypeOrmModule.forFeature([
       Provider,
       Category,

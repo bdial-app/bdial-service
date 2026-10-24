@@ -1,3 +1,4 @@
+import { BadgesService } from '../badges/badges.service';
 import { Injectable, Logger, Inject, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
@@ -119,6 +120,7 @@ export class SearchService implements OnModuleInit {
     private dataSource: DataSource,
     @Inject(CACHE_MANAGER) private cacheManager: Cache,
     private readonly categoryPersonalization: CategoryPersonalizationService,
+    private readonly badges: BadgesService,
   ) {}
 
   // ────────────────────────────────────────────────────────────
@@ -659,7 +661,7 @@ export class SearchService implements OnModuleInit {
       const total = rows.length > 0 ? parseInt(rows[0].total_count, 10) : 0;
 
       return {
-        data: rows.map((r: any) => ({
+        data: await this.badges.attach(rows.map((r: any) => ({
           id: r.id,
           brandName: r.brand_name,
           description: r.description,
@@ -681,7 +683,7 @@ export class SearchService implements OnModuleInit {
           offerTitle: r.offer_title || null,
           discountValue: r.discount_value != null ? parseFloat(r.discount_value) : null,
           discountType: r.discount_type || null,
-        })),
+        }))),
         total,
       };
     } catch (err) {

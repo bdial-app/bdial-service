@@ -11,10 +11,10 @@ import {
   Photo,
   SponsoredListing,
   SystemSetting,
-  ProviderBadge,
   ProviderOffer,
   AdEvent,
 } from '../entities';
+import { BadgesService, type BadgeRef } from '../badges/badges.service';
 import { ExploreFeedDto } from './dto/explore-feed.dto';
 import { TrackAdEventDto } from './dto/track-ad-event.dto';
 
@@ -38,12 +38,12 @@ export class ExploreService {
     @InjectRepository(Booking) private bookingRepo: Repository<Booking>,
     @InjectRepository(Photo) private photoRepo: Repository<Photo>,
     @InjectRepository(SponsoredListing) private sponsoredRepo: Repository<SponsoredListing>,
-    @InjectRepository(ProviderBadge) private badgeRepo: Repository<ProviderBadge>,
     @InjectRepository(ProviderOffer) private offerRepo: Repository<ProviderOffer>,
     @InjectRepository(AdEvent) private adEventRepo: Repository<AdEvent>,
     @InjectRepository(SystemSetting) private settingRepo: Repository<SystemSetting>,
     @Inject(CACHE_MANAGER) private cacheManager: Cache,
     private readonly dataSource: DataSource,
+    private readonly badgesService: BadgesService,
   ) {}
 
   // ─── Performance Helpers ─────────────────────────────────────
@@ -954,26 +954,9 @@ export class ExploreService {
 
   // ─── Badge Enrichment ────────────────────────────────────────
 
-  private async enrichWithBadges(providerIds: string[]): Promise<Map<string, any[]>> {
-    const map = new Map<string, any[]>();
-    if (providerIds.length === 0) return map;
-
-    const now = new Date();
-    const badges = await this.badgeRepo
-      .createQueryBuilder('b')
-      .select(['b.provider_id AS "providerId"', 'b.type AS type', 'b.source AS source'])
-      .where('b.provider_id IN (:...providerIds)', { providerIds })
-      .andWhere('b.is_active = :active', { active: true })
-      .andWhere('(b.expires_at IS NULL OR b.expires_at > :now)', { now })
-      .getRawMany();
-
-    for (const badge of badges) {
-      const list = map.get(badge.providerId) || [];
-      list.push({ type: badge.type, source: badge.source });
-      map.set(badge.providerId, list);
-    }
-
-    return map;
+  /** Each business's current badges, highest first (rules: src/badges). */
+  private enrichWithBadges(providerIds: string[]): Promise<Map<string, BadgeRef[]>> {
+    return this.badgesService.activeFor(providerIds);
   }
 
   // ─── Active Offer Check (for non-offer sections) ────────────
@@ -1049,89 +1032,6 @@ export class ExploreService {
     // surface that reports impressions. The ad_event row inserted above is
     // still written, so the admin analytics chart has per-day view data —
     // the counter tracks serves, the events track actual views.
-  }
-
-  // ─── Badge Auto-Award ────────────────────────────────────────
-
-  async awardEarnedBadges() {
-    const now = new Date();
-
-    // Top Rated: avg rating >= 4.5 with >= 10 reviews
-    const topRated = await this.providerRepo
-      .createQueryBuilder('p')
-      .select('p.id', 'id')
-      .where("p.status IN ('active', 'unverified')")
-      .andWhere(
-        `(SELECT AVG(r.star_rating) FROM reviews r WHERE r.provider_id = p.id AND r.status = 'active') >= 4.5`,
-      )
-      .andWhere(
-        `(SELECT COUNT(r.id) FROM reviews r WHERE r.provider_id = p.id AND r.status = 'active') >= 10`,
-      )
-      .getRawMany();
-
-    // Rising Star: created < 60 days, rating >= 4.0, >= 3 reviews
-    const sixtyDaysAgo = new Date();
-    sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
-
-    const risingStar = await this.providerRepo
-      .createQueryBuilder('p')
-      .select('p.id', 'id')
-      .where("p.status IN ('active', 'unverified')")
-      .andWhere('p.created_at >= :since', { since: sixtyDaysAgo })
-      .andWhere(
-        `(SELECT AVG(r.star_rating) FROM reviews r WHERE r.provider_id = p.id AND r.status = 'active') >= 4.0`,
-      )
-      .andWhere(
-        `(SELECT COUNT(r.id) FROM reviews r WHERE r.provider_id = p.id AND r.status = 'active') >= 3`,
-      )
-      .getRawMany();
-
-    // Trusted: >= 50 completed bookings
-    const trusted = await this.providerRepo
-      .createQueryBuilder('p')
-      .select('p.id', 'id')
-      .where("p.status IN ('active', 'unverified')")
-      .andWhere(
-        `(SELECT COUNT(b.id) FROM bookings b WHERE b.provider_id = p.id AND b.status = 'completed') >= 50`,
-      )
-      .getRawMany();
-
-    const upsert = async (providers: { id: string }[], type: string) => {
-      if (providers.length === 0) return;
-      const providerIds = providers.map((p) => p.id);
-      // Batch-fetch existing badges for all providers at once
-      const existing = await this.badgeRepo.find({
-        where: { providerId: In(providerIds), type: type as any, isActive: true },
-        select: ['providerId'],
-      });
-      const existingIds = new Set(existing.map((b) => b.providerId));
-      // Only create badges for providers that don't already have one
-      const newBadges = providerIds
-        .filter((id) => !existingIds.has(id))
-        .map((id) =>
-          this.badgeRepo.create({
-            providerId: id,
-            type: type as any,
-            source: 'earned',
-            isActive: true,
-          }),
-        );
-      if (newBadges.length > 0) {
-        await this.badgeRepo.save(newBadges);
-      }
-    };
-
-    await upsert(topRated, 'top_rated');
-    await upsert(risingStar, 'rising_star');
-    await upsert(trusted, 'trusted');
-
-    return {
-      awarded: {
-        top_rated: topRated.length,
-        rising_star: risingStar.length,
-        trusted: trusted.length,
-      },
-    };
   }
 
   // ─── Community Reviews ────────────────────────────────────────
