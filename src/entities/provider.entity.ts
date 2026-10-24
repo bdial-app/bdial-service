@@ -33,6 +33,14 @@ export class Provider {
   @Column({ name: 'brand_name', type: 'varchar', length: 150 })
   brandName: string;
 
+  /**
+   * The business's public address: tijarahapp.in/business/<slug>. Unique.
+   * Made by the database from the brand name when left empty (see the
+   * PublicSlugs migration), and kept when the name changes.
+   */
+  @Column({ type: 'varchar', length: 80 })
+  slug: string;
+
   @Column({ type: 'text', nullable: true })
   description: string | null;
 

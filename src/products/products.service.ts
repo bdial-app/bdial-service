@@ -204,6 +204,7 @@ export class ProductsService {
       product,
       provider: {
         id: provider.id,
+        slug: provider.slug,
         userId: provider.userId,
         brandName: provider.brandName,
         description: provider.description,
