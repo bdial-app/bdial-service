@@ -468,9 +468,28 @@ export class AdminService {
 
     const [items, total] = await qb.getManyAndCount();
     const now = Date.now();
+
+    // The business each applicant runs, so the reviewer can open it.
+    const userIds = [...new Set(items.map((v) => v.userId).filter(Boolean))];
+    const businesses = userIds.length
+      ? await this.providerRepo
+          .createQueryBuilder('p')
+          .select(['p.id', 'p.userId', 'p.brandName', 'p.slug', 'p.status'])
+          .where('p.userId IN (:...userIds)', { userIds })
+          .andWhere('p.deletedAt IS NULL')
+          .getMany()
+      : [];
+    const businessOf = new Map(
+      businesses.map((p) => [
+        p.userId,
+        { id: p.id, brandName: p.brandName, slug: p.slug, status: p.status },
+      ]),
+    );
+
     return {
       items: items.map((v) => ({
         ...this.toAdminVerification(v),
+        provider: businessOf.get(v.userId) ?? null,
         // Whole days the applicant has been waiting; null once a decision is in.
         waitingDays:
           v.status === 'approved' || v.status === 'rejected'
