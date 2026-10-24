@@ -427,6 +427,382 @@ const ONBOARDING_CAMPAIGN_TEMPLATES: StarterTemplate[] = [
   },
 ];
 
+// ── Growth: visibility for owners, discovery for customers (drafts) ─────────
+
+/** The public website: links here open the app if installed, else the site. */
+const SITE = 'https://www.tijarahapp.in';
+const NOT_INTERESTED = { type: 'QUICK_REPLY' as const, text: 'Not interested' };
+
+/** Open the owner's shop in the app (/b/<id>), any extra replies, and a way out. */
+function shopButtons(
+  text: string,
+  ...replies: string[]
+): WhatsAppTemplateComponent {
+  return {
+    type: 'BUTTONS',
+    buttons: [
+      {
+        type: 'URL',
+        text,
+        url: `${PROFILE_URL_BASE}{{1}}`,
+        example: [PROFILE_URL_EXAMPLE],
+      },
+      ...replies.map((r) => ({ type: 'QUICK_REPLY' as const, text: r })),
+      NOT_INTERESTED,
+    ],
+  };
+}
+
+/** A fixed page on the website (customers have no shop to link), and a way out. */
+function siteButtons(text: string, path: string): WhatsAppTemplateComponent {
+  return {
+    type: 'BUTTONS',
+    buttons: [{ type: 'URL', text, url: `${SITE}${path}` }, NOT_INTERESTED],
+  };
+}
+
+const ownerVar = (i: number) => v(i, 'Owner name', 'owner_name', 'Huzefa');
+const brandAt = (i: number) =>
+  v(i, 'Business name', 'brand_name', 'Burhani Sweets');
+const cityAt = (i: number) => v(i, 'City', 'city', 'Pune');
+/** For customers, owner_name is the customer's own name. */
+const customerVar = v(1, 'Customer name', 'owner_name', 'Sakina');
+
+/**
+ * For Campaigns to business owners: each nudges one thing that gets a shop
+ * seen more. Audience: Businesses.
+ */
+const OWNER_GROWTH_TEMPLATES: StarterTemplate[] = [
+  {
+    name: 'tijarah_shop_link',
+    language: 'en',
+    category: 'marketing',
+    description:
+      "Owners: their shop's own web page (www.tijarahapp.in/business/…) to post on their status, Instagram bio and visiting cards. {{3}} = Business page link.",
+    components: [
+      body(
+        'Salaam {{1}},\n{{2}} now has its own page on the web: {{3}}\n\nPost it on your WhatsApp status, Instagram bio and visiting cards. Anyone who opens it sees your products and prices and can call or message you directly.',
+        'Huzefa',
+        'Burhani Sweets',
+        'https://www.tijarahapp.in/business/burhani-sweets/',
+      ),
+      MARKETING_FOOTER,
+      shopButtons('Open my shop'),
+    ],
+    variables: [
+      ownerVar(1),
+      brandAt(2),
+      v(
+        3,
+        'Business page link',
+        'business_link',
+        'https://www.tijarahapp.in/business/burhani-sweets/',
+      ),
+    ],
+  },
+  {
+    name: 'tijarah_add_photos',
+    language: 'en',
+    category: 'marketing',
+    description:
+      'Owners with few or no gallery photos: photos are what customers look at first.',
+    components: [
+      body(
+        'Salaam {{1}},\ncustomers in {{2}} decide in seconds, and photos are the first thing they look at. Add a few clear photos of {{3}}, your products or your shop, so they know what to expect before they call.',
+        'Huzefa',
+        'Pune',
+        'Burhani Sweets',
+      ),
+      MARKETING_FOOTER,
+      shopButtons('Add photos'),
+    ],
+    variables: [ownerVar(1), cityAt(2), brandAt(3)],
+  },
+  {
+    name: 'tijarah_post_deal',
+    language: 'en',
+    category: 'marketing',
+    description:
+      'Owners with no running deal: offers appear in the Deals section and on their shop.',
+    components: [
+      body(
+        'Salaam {{1}},\nposting an offer is the quickest way to get noticed on Tijarah. Deals from {{2}} show in the Deals section that customers in {{3}} browse, and on your shop page. It takes a minute in the app.',
+        'Huzefa',
+        'Burhani Sweets',
+        'Pune',
+      ),
+      MARKETING_FOOTER,
+      shopButtons('Post a deal'),
+    ],
+    variables: [ownerVar(1), brandAt(2), cityAt(3)],
+  },
+  {
+    name: 'tijarah_get_reviews',
+    language: 'en',
+    category: 'marketing',
+    description:
+      'Owners with few reviews: send happy customers their review link from the app (My business → Get reviews).',
+    components: [
+      body(
+        'Salaam {{1}},\nnew customers trust what other Mumineen say. Ask a few happy customers to review {{2}} on Tijarah: in the app, open My business and tap Get reviews to send them your review link on WhatsApp.',
+        'Huzefa',
+        'Burhani Sweets',
+      ),
+      MARKETING_FOOTER,
+      shopButtons('Get reviews'),
+    ],
+    variables: [ownerVar(1), brandAt(2)],
+  },
+  {
+    name: 'tijarah_get_verified',
+    language: 'en',
+    category: 'marketing',
+    description: 'Unverified owners: what the Verified badge gives them.',
+    components: [
+      body(
+        'Salaam {{1}},\nget the Verified badge for {{2}} on Tijarah. Verified businesses show higher in search and customers trust them more. It takes a few minutes in the app.',
+        'Huzefa',
+        'Burhani Sweets',
+      ),
+      MARKETING_FOOTER,
+      shopButtons('Get verified'),
+    ],
+    variables: [ownerVar(1), brandAt(2)],
+  },
+  {
+    name: 'tijarah_check_details',
+    language: 'en',
+    category: 'marketing',
+    description:
+      'Every few months: are hours, phone and address still right? Wrong hours lose customers.',
+    components: [
+      body(
+        'Salaam {{1}},\nare the opening hours, phone number and address of {{2}} still right on Tijarah? Customers in {{3}} check them before they visit or call, so it is worth a quick look.',
+        'Huzefa',
+        'Burhani Sweets',
+        'Pune',
+      ),
+      MARKETING_FOOTER,
+      shopButtons('Check my details', 'All correct'),
+    ],
+    variables: [ownerVar(1), brandAt(2), cityAt(3)],
+  },
+  {
+    name: 'tijarah_share_catalogue',
+    language: 'en',
+    category: 'marketing',
+    description:
+      'Owners with products: send their whole catalogue, with prices, in one tap.',
+    components: [
+      body(
+        'Salaam {{1}},\nyour customers can now see everything {{2}} sells, with prices, from one link. In the app, open your catalogue and tap Share to send it to a customer, a group or your WhatsApp status.',
+        'Huzefa',
+        'Burhani Sweets',
+      ),
+      MARKETING_FOOTER,
+      shopButtons('Open my catalogue'),
+    ],
+    variables: [ownerVar(1), brandAt(2)],
+  },
+  {
+    name: 'tijarah_boost_listing',
+    language: 'en',
+    category: 'marketing',
+    description:
+      'Owners getting views who could reach more: a sponsored boost puts them at the top.',
+    components: [
+      body(
+        'Salaam {{1}},\nwant more customers in {{2}} to see {{3}}? A boost puts your shop at the top of search and on the home page for the days you choose. Set it up in the app under My business.',
+        'Huzefa',
+        'Pune',
+        'Burhani Sweets',
+      ),
+      MARKETING_FOOTER,
+      shopButtons('Boost my shop'),
+    ],
+    variables: [ownerVar(1), cityAt(2), brandAt(3)],
+  },
+  {
+    name: 'tijarah_women_led_badge',
+    language: 'en',
+    category: 'marketing',
+    description:
+      'Owners not marked Women-Led: a "Yes" reply lands in the inbox, where an admin checks and adds the badge.',
+    components: [
+      body(
+        'Salaam {{1}},\nis {{2}} run by a woman? Tijarah has a Women-Led section where customers look for women-run businesses. Reply below and our team will add the badge to your shop after a quick check.',
+        'Huzefa',
+        'Burhani Sweets',
+      ),
+      MARKETING_FOOTER,
+      shopButtons('Open my shop', "Yes, it's women-led"),
+    ],
+    variables: [ownerVar(1), brandAt(2)],
+  },
+  {
+    name: 'tijarah_refer_business',
+    language: 'en',
+    category: 'marketing',
+    description:
+      'Owners: invite other business owners. More shops on Tijarah bring more customers to all of them.',
+    components: [
+      body(
+        'Salaam {{1}},\ndo you know another business owner in {{2}} who should be on Tijarah? Forward them this message. Listing a business is free and takes about three minutes, and every new shop brings more customers to the app.',
+        'Huzefa',
+        'Pune',
+      ),
+      MARKETING_FOOTER,
+      siteButtons('List a business', '/provider-onboarding/'),
+    ],
+    variables: [ownerVar(1), cityAt(2)],
+  },
+];
+
+/**
+ * For Campaigns to app customers: bring them back to discover community
+ * businesses. Audience: Customers. Only their name and city can be filled
+ * in (business fields are refused for customers); buttons are fixed pages.
+ */
+const CUSTOMER_TEMPLATES: StarterTemplate[] = [
+  {
+    name: 'tijarah_cust_discover',
+    language: 'en',
+    category: 'marketing',
+    description: 'Customers: what Tijarah has near them.',
+    components: [
+      body(
+        'Salaam {{1}},\nlooking for something in {{2}}? Tijarah has shops, services and home businesses from our community, with photos, prices and reviews. Call or WhatsApp them directly from the app.',
+        'Sakina',
+        'Pune',
+      ),
+      MARKETING_FOOTER,
+      siteButtons('Explore Tijarah', '/'),
+    ],
+    variables: [customerVar, cityAt(2)],
+  },
+  {
+    name: 'tijarah_cust_deals',
+    language: 'en',
+    category: 'marketing',
+    description: 'Customers: new offers from community businesses.',
+    components: [
+      body(
+        'Salaam {{1}},\nthere are new deals from community businesses in {{2}} on Tijarah this week. Have a look before they end.',
+        'Sakina',
+        'Pune',
+      ),
+      MARKETING_FOOTER,
+      siteButtons('See deals', '/deals/'),
+    ],
+    variables: [customerVar, cityAt(2)],
+  },
+  {
+    name: 'tijarah_cust_occasion',
+    language: 'en',
+    category: 'marketing',
+    description:
+      'Customers, before a community occasion. {{2}} = the occasion (custom value, e.g. Eid).',
+    components: [
+      body(
+        'Salaam {{1}},\ngetting ready for {{2}}? Find ridas, sweets, caterers, gifts and more from community businesses in {{3}} on Tijarah, and order straight from them.',
+        'Sakina',
+        'Eid',
+        'Pune',
+      ),
+      MARKETING_FOOTER,
+      siteButtons('Start shopping', '/'),
+    ],
+    variables: [customerVar, v(2, 'Occasion', 'custom', 'Eid'), cityAt(3)],
+  },
+  {
+    name: 'tijarah_cust_women_led',
+    language: 'en',
+    category: 'marketing',
+    description: 'Customers: the Women-Led section.',
+    components: [
+      body(
+        'Salaam {{1}},\nsupport women-run businesses in our community. The Women-Led section on Tijarah has home bakers, boutiques, tutors and more in {{2}}, all in one place.',
+        'Sakina',
+        'Pune',
+      ),
+      MARKETING_FOOTER,
+      siteButtons('See Women-Led', '/women-led/'),
+    ],
+    variables: [customerVar, cityAt(2)],
+  },
+  {
+    name: 'tijarah_cust_new_businesses',
+    language: 'en',
+    category: 'marketing',
+    description:
+      'Customers: how many shops joined lately. {{2}} = the number (custom value per campaign).',
+    components: [
+      body(
+        'Salaam {{1}},\n{{2}} new community businesses joined Tijarah in {{3}} recently. See who is new near you.',
+        'Sakina',
+        '12',
+        'Pune',
+      ),
+      MARKETING_FOOTER,
+      siteButtons("See what's new", '/'),
+    ],
+    variables: [
+      customerVar,
+      v(2, 'New businesses (number)', 'custom', '12'),
+      cityAt(3),
+    ],
+  },
+  {
+    name: 'tijarah_cust_list_business',
+    language: 'en',
+    category: 'marketing',
+    description:
+      'Customers who might run a business, even from home: list it free. Turns customers into listings.',
+    components: [
+      body(
+        'Salaam {{1}},\ndo you run a business, even from home? List it on Tijarah for free and let the community in {{2}} find you. It takes about three minutes.',
+        'Sakina',
+        'Pune',
+      ),
+      MARKETING_FOOTER,
+      siteButtons('List my business', '/provider-onboarding/'),
+    ],
+    variables: [customerVar, cityAt(2)],
+  },
+  {
+    name: 'tijarah_cust_invite',
+    language: 'en',
+    category: 'marketing',
+    description: 'Customers: share the app with family and friends.',
+    components: [
+      body(
+        'Salaam {{1}},\nshukran for using Tijarah. Know someone in {{2}} who would find it useful? Share the app with family and friends, so more of our businesses get found.',
+        'Sakina',
+        'Pune',
+      ),
+      MARKETING_FOOTER,
+      siteButtons('Get the app', '/'),
+    ],
+    variables: [customerVar, cityAt(2)],
+  },
+  {
+    name: 'tijarah_cust_comeback',
+    language: 'en',
+    category: 'marketing',
+    description: "Customers who haven't opened the app in a while.",
+    components: [
+      body(
+        "Salaam {{1}},\nit's been a while! Since your last visit, new shops, services and deals from community businesses in {{2}} have joined Tijarah.",
+        'Sakina',
+        'Pune',
+      ),
+      MARKETING_FOOTER,
+      siteButtons('Open Tijarah', '/'),
+    ],
+    variables: [customerVar, cityAt(2)],
+  },
+];
+
 /** The automated messages' templates (admin → WhatsApp → Automations sends them). */
 const AUTOMATION_TEMPLATES: StarterTemplate[] = AUTOMATIONS.map((a) => ({
   name: a.template.name,
@@ -440,4 +816,6 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
   ...BASE_TEMPLATES,
   ...AUTOMATION_TEMPLATES,
   ...ONBOARDING_CAMPAIGN_TEMPLATES,
+  ...OWNER_GROWTH_TEMPLATES,
+  ...CUSTOMER_TEMPLATES,
 ];

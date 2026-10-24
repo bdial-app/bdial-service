@@ -12,6 +12,7 @@ import { WhatsAppTemplateService } from './whatsapp-template.service';
 
 interface ProviderBase {
   id: string;
+  slug: string | null;
   brand_name: string;
   city: string | null;
   owner_name: string | null;
@@ -22,6 +23,7 @@ export const BUSINESS_ONLY_SOURCES = new Set<WhatsAppVariableSource>([
   'brand_name',
   'category',
   'profile_url',
+  'business_link',
   'products_count',
   'visits_7d',
   'enquiries_7d',
@@ -42,6 +44,18 @@ export class WhatsAppVariableService {
   /** Opens the business in the app, or sends them to the right store. */
   profileUrl(providerId: string): string {
     return businessAppLink(providerId);
+  }
+
+  /**
+   * The business's own page on the website, readable and shareable:
+   * https://www.tijarahapp.in/business/<slug>/ — for owners to post on their
+   * status, bio or cards. (profile_url instead opens the app.)
+   */
+  businessLink(slug: string | null, providerId: string): string {
+    const site = (
+      this.config.get<string>('PUBLIC_SITE_URL') || 'https://www.tijarahapp.in'
+    ).replace(/\/+$/, '');
+    return `${site}/business/${slug || providerId}/`;
   }
 
   appDownloadUrl(): string {
@@ -75,7 +89,7 @@ export class WhatsAppVariableService {
     if (!ids.length) return out;
 
     const base = await this.dataSource.query<ProviderBase[]>(
-      `SELECT p.id, p.brand_name, p.city, u.name AS owner_name
+      `SELECT p.id, p.slug, p.brand_name, p.city, u.name AS owner_name
          FROM providers p
          LEFT JOIN users u ON u.id = p.user_id
         WHERE p.id = ANY($1::uuid[])`,
@@ -87,6 +101,7 @@ export class WhatsAppVariableService {
         city: row.city ?? '',
         owner_name: row.owner_name ?? row.brand_name,
         profile_url: this.profileUrl(row.id),
+        business_link: this.businessLink(row.slug, row.id),
         app_download_url: this.appDownloadUrl(),
       });
     }

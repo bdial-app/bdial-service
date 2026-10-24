@@ -39,6 +39,7 @@ export type WhatsAppVariableSource =
   | 'city'
   | 'category'
   | 'profile_url'
+  | 'business_link'
   | 'products_count'
   | 'visits_7d'
   | 'enquiries_7d'
@@ -50,6 +51,7 @@ export const WHATSAPP_VARIABLE_SOURCES: WhatsAppVariableSource[] = [
   'city',
   'category',
   'profile_url',
+  'business_link',
   'products_count',
   'visits_7d',
   'enquiries_7d',
