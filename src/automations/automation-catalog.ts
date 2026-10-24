@@ -109,7 +109,7 @@ export const AUTOMATIONS: AutomationDef[] = [
     template: {
       name: 'tijarah_enquiries_waiting',
       category: 'utility',
-      body: '{{1}} customers are waiting for a reply from {{2}} on Tijarah. The oldest enquiry is from {{3}}.',
+      body: 'Salaam, {{1}} customers are waiting for a reply from {{2}} on Tijarah. The oldest enquiry is from {{3}}.',
       vars: [
         { key: 'waitingCount', label: 'Customers waiting', sample: '3' },
         { key: 'brandName', label: 'Business name', sample: 'Burhani Sweets' },
@@ -130,7 +130,7 @@ export const AUTOMATIONS: AutomationDef[] = [
     template: {
       name: 'tijarah_weekly_summary',
       category: 'utility',
-      body: '{{1}} this week on Tijarah ({{2}}): {{3}} views, {{4}} times in search, {{5}} enquiries, {{6}} calls.',
+      body: 'Salaam, here is how {{1}} did on Tijarah this week ({{2}}): {{3}} views, {{4}} times in search, {{5}} enquiries and {{6}} calls.',
       vars: [
         { key: 'brandName', label: 'Business name', sample: 'Burhani Sweets' },
         { key: 'range', label: 'Dates', sample: '6–12 Oct' },
@@ -181,7 +181,7 @@ export const AUTOMATIONS: AutomationDef[] = [
     template: {
       name: 'tijarah_free_leads_left',
       category: 'utility',
-      body: '{{1}} has {{2}} of {{3}} free lead unlocks left for {{4}} on Tijarah. They reset on {{5}}. {{6}} leads are waiting to be seen.',
+      body: 'Salaam, {{1}} has {{2}} of {{3}} free lead unlocks left for {{4}} on Tijarah. They reset on {{5}}. {{6}} leads are waiting to be seen.',
       vars: [
         { key: 'brandName', label: 'Business name', sample: 'Burhani Sweets' },
         { key: 'left', label: 'Unlocks left', sample: '3' },
@@ -205,7 +205,7 @@ export const AUTOMATIONS: AutomationDef[] = [
     template: {
       name: 'tijarah_review_alert',
       category: 'utility',
-      body: '{{1}} rated {{2}} {{3}}★ on Tijarah: "{{4}}"',
+      body: 'Salaam, {{1}} rated {{2}} {{3}}★ on Tijarah: "{{4}}"\n\nTap below to read it and reply.',
       vars: [
         { key: 'reviewerName', label: 'Reviewer', sample: 'Sakina' },
         { key: 'brandName', label: 'Business name', sample: 'Burhani Sweets' },
@@ -250,7 +250,7 @@ export const AUTOMATIONS: AutomationDef[] = [
     template: {
       name: 'tijarah_verification_not_approved',
       category: 'utility',
-      body: "We couldn't verify {{1}} on Tijarah yet: {{2}}",
+      body: "We couldn't verify {{1}} on Tijarah yet. Reason: {{2}}\n\nTap below to fix it and try again.",
       vars: [
         { key: 'brandName', label: 'Business name', sample: 'Burhani Sweets' },
         {
@@ -274,7 +274,7 @@ export const AUTOMATIONS: AutomationDef[] = [
     template: {
       name: 'tijarah_women_led_approved',
       category: 'utility',
-      body: '{{1}} is approved as women-led on Tijarah. It now gets {{2}} free lead unlocks a month and the women-led badge.',
+      body: 'Mubarak! {{1}} is approved as women-led on Tijarah. It now gets {{2}} free lead unlocks a month and the women-led badge.',
       vars: [
         { key: 'brandName', label: 'Business name', sample: 'Fatema Boutique' },
         { key: 'freeLeads', label: 'Free unlocks', sample: '8' },
@@ -315,7 +315,7 @@ export const AUTOMATIONS: AutomationDef[] = [
     template: {
       name: 'tijarah_deal_not_approved',
       category: 'utility',
-      body: 'Your deal "{{1}}" for {{2}} wasn\'t approved on Tijarah: {{3}}',
+      body: 'Your deal "{{1}}" for {{2}} wasn\'t approved on Tijarah. Reason: {{3}}\n\nTap below to edit it and send it again.',
       vars: [
         { key: 'dealTitle', label: 'Deal', sample: 'Eid gift boxes 10% off' },
         { key: 'brandName', label: 'Business name', sample: 'Burhani Sweets' },
@@ -340,7 +340,7 @@ export const AUTOMATIONS: AutomationDef[] = [
     template: {
       name: 'tijarah_shop_live',
       category: 'utility',
-      body: '{{1}} is live on Tijarah. {{2}} people have viewed it so far. Sign in with {{3}} to manage it.',
+      body: 'Mubarak! {{1}} is live on Tijarah. {{2}} people have viewed it so far. Sign in with {{3}} to manage it.',
       vars: [
         { key: 'brandName', label: 'Business name', sample: 'Burhani Sweets' },
         { key: 'views', label: 'Views so far', sample: '23' },
@@ -404,7 +404,7 @@ export const AUTOMATIONS: AutomationDef[] = [
     template: {
       name: 'tijarah_boost_ending',
       category: 'utility',
-      body: "{{1}}'s boost on Tijarah ends on {{2}}. So far: {{3}} impressions and {{4}} visits.",
+      body: 'Salaam, the boost for {{1}} on Tijarah ends on {{2}}. So far: {{3}} impressions and {{4}} visits.',
       vars: [
         { key: 'brandName', label: 'Business name', sample: 'Burhani Sweets' },
         { key: 'endDate', label: 'Ends', sample: '20 Oct' },
@@ -426,7 +426,7 @@ export const AUTOMATIONS: AutomationDef[] = [
     template: {
       name: 'tijarah_business_replied',
       category: 'utility',
-      body: '{{1}} replied to your enquiry on Tijarah: "{{2}}"',
+      body: 'Salaam, {{1}} replied to your enquiry on Tijarah: "{{2}}"\n\nTap below to read it and reply.',
       vars: [
         { key: 'brandName', label: 'Business name', sample: 'Burhani Sweets' },
         {

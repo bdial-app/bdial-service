@@ -53,6 +53,8 @@ const RETRYABLE_CODES = Object.entries(META_ERROR_MAP)
   .map(([code]) => Number(code));
 
 import { WhatsAppMediaService } from './whatsapp-media.service';
+import { GoLinksService } from '../go-links/go-links.service';
+import { fillAppLinkTarget } from './whatsapp-variable.service';
 @Injectable()
 export class WhatsAppCampaignService {
   private readonly logger = new Logger(WhatsAppCampaignService.name);
@@ -72,6 +74,7 @@ export class WhatsAppCampaignService {
     private readonly variables: WhatsAppVariableService,
     private readonly inbox: WhatsAppInboxService,
     private readonly media: WhatsAppMediaService,
+    private readonly goLinks: GoLinksService,
   ) {}
 
   // ── CRUD ─────────────────────────────────────────────────────────────────
@@ -297,6 +300,10 @@ export class WhatsAppCampaignService {
         ? await this.media.logoCardUrls(providerIds)
         : null;
 
+    // Smart-link buttons: a code per recipient, saved before anything sends.
+    const appLinks = this.variables.appLinkButtons(c.buttonUrlParams, template);
+    const linkRows: Parameters<GoLinksService['insertMany']>[0] = [];
+
     const rows: QueryDeepPartialEntity<WhatsAppMessage>[] = [];
     let queued = 0;
     let skipped = 0;
@@ -317,6 +324,19 @@ export class WhatsAppCampaignService {
         vars,
         template,
       );
+      if (!r.skipReason) {
+        for (const [index, target] of appLinks) {
+          const code = this.goLinks.newCode();
+          buttonValues[index] = code;
+          linkRows.push({
+            code,
+            target: fillAppLinkTarget(target, r.providerId),
+            userId: r.userId ?? null,
+            providerId: r.providerId ?? null,
+            automationKey: 'campaign',
+          });
+        }
+      }
       const renderedBody = this.templates.render(
         template.components,
         variables,
@@ -378,6 +398,7 @@ export class WhatsAppCampaignService {
       queued++;
     }
 
+    await this.goLinks.insertMany(linkRows);
     for (let i = 0; i < rows.length; i += WHATSAPP_INSERT_CHUNK) {
       await this.messageRepo.insert(rows.slice(i, i + WHATSAPP_INSERT_CHUNK));
     }
@@ -602,12 +623,20 @@ export class WhatsAppCampaignService {
       vars,
       template,
     );
-    const buttonValues = this.variables.buttonValues(
-      c.buttonUrlParams,
-      first?.providerId ?? null,
-      vars,
-      template,
-    );
+    const contact = await this.inbox.ensureContact(phone);
+    const buttonValues = {
+      ...this.variables.buttonValues(
+        c.buttonUrlParams,
+        first?.providerId ?? null,
+        vars,
+        template,
+      ),
+      // The tester's own link, to the screen the campaign's link opens.
+      ...(await this.variables.appLinkValues(c.buttonUrlParams, template, {
+        providerId: first?.providerId ?? null,
+        userId: contact.userId ?? null,
+      })),
+    };
 
     this.assertHeaderImage(c, template);
     const logoCards =
@@ -620,7 +649,6 @@ export class WhatsAppCampaignService {
       logoCards,
     );
 
-    const contact = await this.inbox.ensureContact(phone);
     const m = await this.inbox.sendDirect(
       contact,
       { template, variables, headerMediaUrl, buttonValues },

@@ -3,13 +3,13 @@
  * /b/<business> and /go?c=<code> pages open the Tijarah app when it's
  * installed (iOS universal links / Android app links on this domain) and
  * otherwise send the person to the App Store or Google Play — never the web
- * app. Set APP_LINK_ORIGIN when production web goes live (tijarahapp.in);
- * until then it's the live UAT domain.
+ * app. APP_LINK_ORIGIN overrides it; by default it's the live website,
+ * whose apple-app-site-association and assetlinks.json cover /b and /go.
  *
  * Read at call time, not import time, so .env is always loaded.
  */
 export function appLinkOrigin(): string {
-  return (process.env.APP_LINK_ORIGIN || 'https://uat.tijarahapp.in')
+  return (process.env.APP_LINK_ORIGIN || 'https://www.tijarahapp.in')
     .trim()
     .replace(/\/+$/, '');
 }

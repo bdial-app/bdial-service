@@ -1,4 +1,3 @@
-import { LINK_ORIGIN_TOKEN } from '../../common/app-links';
 import {
   WhatsAppTemplateCategory,
   WhatsAppTemplateComponent,
@@ -6,6 +5,7 @@ import {
 } from '../../entities/whatsapp-template.entity';
 import {
   AUTOMATIONS,
+  GO_URL_BASE,
   templateComponents,
 } from '../../automations/automation-catalog';
 
@@ -23,11 +23,13 @@ const FOOTER: WhatsAppTemplateComponent = {
   text: 'Tijarah Connect',
 };
 
-/** /b/<business>: opens the app on that business, or the right app store. */
-const PROFILE_URL_BASE = `${LINK_ORIGIN_TOKEN}/b/`;
-const PROFILE_URL_EXAMPLE = `${PROFILE_URL_BASE}3f9c2e1a-0000-4000-8000-000000000000`;
-const APP_URL =
-  'https://play.google.com/store/apps/details?id=com.pronttera.tijarah';
+/**
+ * Every link button is …/go?c={{1}}: each person gets their own code, which
+ * opens the template's screen in the app (LINK_TARGETS below), or sends them
+ * to the App Store / Google Play and opens that screen after they sign in.
+ */
+const LINK_URL = `${GO_URL_BASE}{{1}}`;
+const LINK_EXAMPLE = `${GO_URL_BASE}k3m9q2xw7a`;
 
 const brandVar: WhatsAppTemplateVariable = {
   index: 1,
@@ -44,25 +46,11 @@ const cityVar: WhatsAppTemplateVariable = {
   sample: 'Pune',
 };
 
-/** A URL button whose last path segment is the provider id ({{1}} suffix). */
-function profileButton(text: string): WhatsAppTemplateComponent {
+/** One link button (to the template's screen in LINK_TARGETS). */
+function linkButton(text: string): WhatsAppTemplateComponent {
   return {
     type: 'BUTTONS',
-    buttons: [
-      {
-        type: 'URL',
-        text,
-        url: `${PROFILE_URL_BASE}{{1}}`,
-        example: [PROFILE_URL_EXAMPLE],
-      },
-    ],
-  };
-}
-
-function appButton(text: string): WhatsAppTemplateComponent {
-  return {
-    type: 'BUTTONS',
-    buttons: [{ type: 'URL', text, url: APP_URL }],
+    buttons: [{ type: 'URL', text, url: LINK_URL, example: [LINK_EXAMPLE] }],
   };
 }
 
@@ -83,12 +71,12 @@ const BASE_TEMPLATES: StarterTemplate[] = [
       'Tell an owner a customer has sent an enquiry so they reply quickly.',
     components: [
       body(
-        'Hi {{1}}, you have a new enquiry on Tijarah Connect from a customer in {{2}}. Reply quickly to win the business.',
+        'Salaam, {{1}} has a new enquiry on Tijarah from a customer in {{2}}. Open the chat to read it and reply.',
         'Pronttera',
         'Pune',
       ),
       FOOTER,
-      profileButton('Open enquiries'),
+      linkButton('Open enquiries'),
     ],
     variables: [brandVar, cityVar],
   },
@@ -99,12 +87,12 @@ const BASE_TEMPLATES: StarterTemplate[] = [
     description: 'Weekly profile-view count to keep owners engaged.',
     components: [
       body(
-        'Hi {{1}}, your Tijarah Connect profile was viewed {{2}} times this week. Keep it updated to turn visits into customers.',
+        'Salaam, {{1}} was viewed {{2}} times on Tijarah this week. Up-to-date photos, prices and hours turn more of these visits into customers.',
         'Pronttera',
         '37',
       ),
       FOOTER,
-      profileButton('View profile'),
+      linkButton('See my week'),
     ],
     variables: [
       brandVar,
@@ -124,11 +112,11 @@ const BASE_TEMPLATES: StarterTemplate[] = [
     description: 'Sent when a business verification is approved.',
     components: [
       body(
-        'Congratulations {{1}}! Your business is now verified on Tijarah Connect. Verified businesses appear higher in search and earn more trust.',
+        'Mubarak! {{1}} is now verified on Tijarah. Your listing shows the Verified badge, and verified businesses appear higher in search.',
         'Pronttera',
       ),
       FOOTER,
-      profileButton('See your badge'),
+      linkButton('See my listing'),
     ],
     variables: [brandVar],
   },
@@ -139,11 +127,11 @@ const BASE_TEMPLATES: StarterTemplate[] = [
     description: 'Ask an owner to upload a valid ID document.',
     components: [
       body(
-        "Hi {{1}}, we couldn't complete your Tijarah Connect verification yet. Please upload a valid ID document so customers can see your verified badge.",
+        "Salaam, we couldn't complete the verification of {{1}} on Tijarah yet. Please upload a clear photo of a valid ID document from the app so your listing can show the Verified badge.",
         'Pronttera',
       ),
       FOOTER,
-      profileButton('Upload documents'),
+      linkButton('Upload documents'),
     ],
     variables: [brandVar],
   },
@@ -154,12 +142,12 @@ const BASE_TEMPLATES: StarterTemplate[] = [
     description: 'Nudge owners whose listing has no logo or products.',
     components: [
       body(
-        'Hi {{1}}, your Tijarah Connect listing is missing a logo and products. Complete it in 2 minutes so customers in {{2}} can find you.',
+        'Salaam, the listing for {{1}} on Tijarah is missing a logo and products. Adding them takes about two minutes and helps customers in {{2}} find and choose you.',
         'Pronttera',
         'Pune',
       ),
       FOOTER,
-      profileButton('Complete profile'),
+      linkButton('Complete profile'),
     ],
     variables: [brandVar, cityVar],
   },
@@ -171,12 +159,12 @@ const BASE_TEMPLATES: StarterTemplate[] = [
       'Owners whose listing sits at the city centre: ask them to drop their pin so customers get a distance and directions.',
     components: [
       body(
-        'Hi {{1}}, customers in {{2}} can see your business on Tijarah Connect but not how far away it is, because its map location is not set. Open the app, go to My business, then Details, and tap Set my location. It takes a minute and lets customers get directions to you.',
+        'Salaam, {{1}} is on Tijarah, but customers in {{2}} cannot see how far away it is because its map location is not set. Tap below and choose Set my location. It takes a minute and gives customers directions to you.',
         'Pronttera',
         'Pune',
       ),
       FOOTER,
-      profileButton('Open Tijarah'),
+      linkButton('Set my location'),
     ],
     variables: [brandVar, cityVar],
   },
@@ -187,11 +175,11 @@ const BASE_TEMPLATES: StarterTemplate[] = [
     description: 'Tell an owner a customer left a review.',
     components: [
       body(
-        'Hi {{1}}, a customer just left a review for your business on Tijarah Connect. Read and respond to build trust.',
+        'Salaam, a customer just reviewed {{1}} on Tijarah. Read it and reply, since customers notice businesses that respond to reviews.',
         'Pronttera',
       ),
       FOOTER,
-      profileButton('Read review'),
+      linkButton('Read review'),
     ],
     variables: [brandVar],
   },
@@ -202,12 +190,12 @@ const BASE_TEMPLATES: StarterTemplate[] = [
     description: 'Promote adding products to the listing.',
     components: [
       body(
-        'Hi {{1}}, businesses with products listed get 3× more enquiries on Tijarah Connect. Add yours today and get discovered in {{2}}.',
+        "Salaam, customers on Tijarah can only see what {{1}} sells once it's listed. Add your products and services with prices so people in {{2}} can find them.",
         'Pronttera',
         'Pune',
       ),
       FOOTER,
-      profileButton('Add products'),
+      linkButton('Add products'),
     ],
     variables: [brandVar, cityVar],
   },
@@ -218,11 +206,11 @@ const BASE_TEMPLATES: StarterTemplate[] = [
     description: 'Encourage owners to share their profile link.',
     components: [
       body(
-        'Hi {{1}}, share your Tijarah Connect profile with your customers and on social media to get more reviews and reach. Here is your link.',
+        'Salaam, share the Tijarah page of {{1}} with your customers and on your WhatsApp status. More visits bring more reviews and enquiries.',
         'Pronttera',
       ),
       FOOTER,
-      profileButton('Share now'),
+      linkButton('Open my page'),
     ],
     variables: [brandVar],
   },
@@ -233,12 +221,12 @@ const BASE_TEMPLATES: StarterTemplate[] = [
     description: 'Generic announcement; {{2}} is free text set per campaign.',
     components: [
       body(
-        'Hi {{1}}, here is an update from the Tijarah Connect team for your business:\n\n{{2}}\n\nOpen the app to see what has changed.',
+        'Salaam, an update from the Tijarah team for {{1}}:\n\n{{2}}\n\nTap below to see it in the app.',
         'Pronttera',
         'we have launched a new Deals section where you can post offers for free this month',
       ),
       FOOTER,
-      appButton('Open Tijarah'),
+      linkButton('Open Tijarah'),
     ],
     variables: [
       brandVar,
@@ -260,15 +248,15 @@ const BASE_TEMPLATES: StarterTemplate[] = [
       'Ask the existing base for opt-in before regular marketing broadcasts.',
     components: [
       body(
-        "Hi {{1}}, this is Tijarah Connect. We'd like to send you occasional tips and updates to help grow your business on WhatsApp. Reply START to subscribe or STOP to opt out.",
+        'Salaam, this is Tijarah. May we message {{1}} on WhatsApp when customers enquire, along with occasional tips to grow your business? Tap a reply below.',
         'Pronttera',
       ),
       FOOTER,
       {
         type: 'BUTTONS',
         buttons: [
-          { type: 'QUICK_REPLY', text: 'START' },
-          { type: 'QUICK_REPLY', text: 'STOP' },
+          { type: 'QUICK_REPLY', text: 'Yes, send me customer alerts' },
+          { type: 'QUICK_REPLY', text: 'Not interested' },
         ],
       },
     ],
@@ -281,12 +269,12 @@ const BASE_TEMPLATES: StarterTemplate[] = [
     description: 'Win back owners who have not opened the app recently.',
     components: [
       body(
-        'Hi {{1}}, we miss you on Tijarah Connect! Customers in {{2}} are searching for businesses like yours. Log in to check your new enquiries.',
+        'Salaam, {{1}} has been quiet on Tijarah lately, while customers in {{2}} keep searching for businesses like yours. Open the app to see your latest enquiries.',
         'Pronttera',
         'Pune',
       ),
       FOOTER,
-      appButton('Open app'),
+      linkButton('See my enquiries'),
     ],
     variables: [brandVar, cityVar],
   },
@@ -311,8 +299,8 @@ function welcomeButtons(): WhatsAppTemplateComponent {
       {
         type: 'URL',
         text: 'Open my shop',
-        url: `${PROFILE_URL_BASE}{{1}}`,
-        example: [PROFILE_URL_EXAMPLE],
+        url: LINK_URL,
+        example: [LINK_EXAMPLE],
       },
       { type: 'QUICK_REPLY', text: 'Yes, send me customer alerts' },
       { type: 'QUICK_REPLY', text: 'Not interested' },
@@ -375,7 +363,7 @@ const ONBOARDING_CAMPAIGN_TEMPLATES: StarterTemplate[] = [
     components: [
       {
         type: 'BODY',
-        text: '{{1}} Mumineen viewed {{2}} on Tijarah this week. Your shop is ready whenever you are.',
+        text: 'Salaam, {{1}} Mumineen viewed {{2}} on Tijarah this week. Your shop is ready whenever you are.',
       },
       MARKETING_FOOTER,
       welcomeButtons(),
@@ -394,10 +382,10 @@ const ONBOARDING_CAMPAIGN_TEMPLATES: StarterTemplate[] = [
     components: [
       {
         type: 'BODY',
-        text: '{{1}} Mubarak from Tijarah. Mumineen are searching for {{2}} this week. Add a deal so they find {{3}} first.',
+        text: 'Salaam, and {{1}} Mubarak from Tijarah. Mumineen are searching for {{2}} this week. Add a deal so they find {{3}} first.',
       },
       MARKETING_FOOTER,
-      profileButton('Add a deal'),
+      linkButton('Add a deal'),
     ],
     variables: [
       v(1, 'Occasion', 'custom', 'Eid'),
@@ -417,7 +405,7 @@ const ONBOARDING_CAMPAIGN_TEMPLATES: StarterTemplate[] = [
         text: 'In the last 7 days, {{1}} got {{2}} views and {{3}} enquiries on Tijarah.',
       },
       MARKETING_FOOTER,
-      profileButton('Open my shop'),
+      linkButton('Open my shop'),
     ],
     variables: [
       v(1, 'Business name', 'brand_name', 'Burhani Sweets'),
@@ -429,11 +417,9 @@ const ONBOARDING_CAMPAIGN_TEMPLATES: StarterTemplate[] = [
 
 // ── Growth: visibility for owners, discovery for customers (drafts) ─────────
 
-/** The public website: links here open the app if installed, else the site. */
-const SITE = 'https://www.tijarahapp.in';
 const NOT_INTERESTED = { type: 'QUICK_REPLY' as const, text: 'Not interested' };
 
-/** Open the owner's shop in the app (/b/<id>), any extra replies, and a way out. */
+/** A link (to the screen in LINK_TARGETS), any extra replies, and a way out. */
 function shopButtons(
   text: string,
   ...replies: string[]
@@ -444,8 +430,8 @@ function shopButtons(
       {
         type: 'URL',
         text,
-        url: `${PROFILE_URL_BASE}{{1}}`,
-        example: [PROFILE_URL_EXAMPLE],
+        url: LINK_URL,
+        example: [LINK_EXAMPLE],
       },
       ...replies.map((r) => ({ type: 'QUICK_REPLY' as const, text: r })),
       NOT_INTERESTED,
@@ -453,11 +439,14 @@ function shopButtons(
   };
 }
 
-/** A fixed page on the website (customers have no shop to link), and a way out. */
-function siteButtons(text: string, path: string): WhatsAppTemplateComponent {
+/** A link (to the screen in LINK_TARGETS) and a way out. */
+function siteButtons(text: string): WhatsAppTemplateComponent {
   return {
     type: 'BUTTONS',
-    buttons: [{ type: 'URL', text, url: `${SITE}${path}` }, NOT_INTERESTED],
+    buttons: [
+      { type: 'URL', text, url: LINK_URL, example: [LINK_EXAMPLE] },
+      NOT_INTERESTED,
+    ],
   };
 }
 
@@ -652,7 +641,7 @@ const OWNER_GROWTH_TEMPLATES: StarterTemplate[] = [
         'Pune',
       ),
       MARKETING_FOOTER,
-      siteButtons('List a business', '/provider-onboarding/'),
+      siteButtons('List a business'),
     ],
     variables: [ownerVar(1), cityAt(2)],
   },
@@ -676,7 +665,7 @@ const CUSTOMER_TEMPLATES: StarterTemplate[] = [
         'Pune',
       ),
       MARKETING_FOOTER,
-      siteButtons('Explore Tijarah', '/'),
+      siteButtons('Explore Tijarah'),
     ],
     variables: [customerVar, cityAt(2)],
   },
@@ -692,7 +681,7 @@ const CUSTOMER_TEMPLATES: StarterTemplate[] = [
         'Pune',
       ),
       MARKETING_FOOTER,
-      siteButtons('See deals', '/deals/'),
+      siteButtons('See deals'),
     ],
     variables: [customerVar, cityAt(2)],
   },
@@ -710,7 +699,7 @@ const CUSTOMER_TEMPLATES: StarterTemplate[] = [
         'Pune',
       ),
       MARKETING_FOOTER,
-      siteButtons('Start shopping', '/'),
+      siteButtons('Start shopping'),
     ],
     variables: [customerVar, v(2, 'Occasion', 'custom', 'Eid'), cityAt(3)],
   },
@@ -726,7 +715,7 @@ const CUSTOMER_TEMPLATES: StarterTemplate[] = [
         'Pune',
       ),
       MARKETING_FOOTER,
-      siteButtons('See Women-Led', '/women-led/'),
+      siteButtons('See Women-Led'),
     ],
     variables: [customerVar, cityAt(2)],
   },
@@ -744,7 +733,7 @@ const CUSTOMER_TEMPLATES: StarterTemplate[] = [
         'Pune',
       ),
       MARKETING_FOOTER,
-      siteButtons("See what's new", '/'),
+      siteButtons("See what's new"),
     ],
     variables: [
       customerVar,
@@ -765,7 +754,7 @@ const CUSTOMER_TEMPLATES: StarterTemplate[] = [
         'Pune',
       ),
       MARKETING_FOOTER,
-      siteButtons('List my business', '/provider-onboarding/'),
+      siteButtons('List my business'),
     ],
     variables: [customerVar, cityAt(2)],
   },
@@ -781,7 +770,7 @@ const CUSTOMER_TEMPLATES: StarterTemplate[] = [
         'Pune',
       ),
       MARKETING_FOOTER,
-      siteButtons('Get the app', '/'),
+      siteButtons('Get the app'),
     ],
     variables: [customerVar, cityAt(2)],
   },
@@ -797,7 +786,7 @@ const CUSTOMER_TEMPLATES: StarterTemplate[] = [
         'Pune',
       ),
       MARKETING_FOOTER,
-      siteButtons('Open Tijarah', '/'),
+      siteButtons('Open Tijarah'),
     ],
     variables: [customerVar, cityAt(2)],
   },
@@ -811,19 +800,6 @@ const CUSTOMER_TEMPLATES: StarterTemplate[] = [
 // event (see its description). The visibility comes from the links they
 // carry — owners get their own page link to share, customers the business's.
 // Send each when its event happens (one person, not a broadcast).
-
-/** A link button to a business: /b/<provider id>, opening the app or the store. */
-const businessButton = (text: string): WhatsAppTemplateComponent => ({
-  type: 'BUTTONS',
-  buttons: [
-    {
-      type: 'URL',
-      text,
-      url: `${PROFILE_URL_BASE}{{1}}`,
-      example: [PROFILE_URL_EXAMPLE],
-    },
-  ],
-});
 
 const pageLinkAt = (i: number) =>
   v(
@@ -848,7 +824,7 @@ const OWNER_UTILITY_TEMPLATES: StarterTemplate[] = [
         'https://www.tijarahapp.in/business/burhani-sweets/',
       ),
       FOOTER,
-      businessButton('Open my shop'),
+      linkButton('Open my page'),
     ],
     variables: [ownerVar(1), brandAt(2), pageLinkAt(3)],
   },
@@ -872,8 +848,8 @@ const OWNER_UTILITY_TEMPLATES: StarterTemplate[] = [
           {
             type: 'URL',
             text: 'Check my listing',
-            url: `${PROFILE_URL_BASE}{{1}}`,
-            example: [PROFILE_URL_EXAMPLE],
+            url: LINK_URL,
+            example: [LINK_EXAMPLE],
           },
           { type: 'QUICK_REPLY', text: 'Not mine' },
         ],
@@ -896,7 +872,7 @@ const OWNER_UTILITY_TEMPLATES: StarterTemplate[] = [
         'https://www.tijarahapp.in/business/burhani-sweets/',
       ),
       FOOTER,
-      businessButton('Open my shop'),
+      linkButton('Open my page'),
     ],
     variables: [
       ownerVar(1),
@@ -925,7 +901,7 @@ const OWNER_UTILITY_TEMPLATES: StarterTemplate[] = [
         '24 Oct',
       ),
       FOOTER,
-      businessButton('View my listing'),
+      linkButton('View my listing'),
     ],
     variables: [
       ownerVar(1),
@@ -948,7 +924,7 @@ const OWNER_UTILITY_TEMPLATES: StarterTemplate[] = [
         'it was blurry',
       ),
       FOOTER,
-      businessButton('Open my shop'),
+      linkButton('Add a photo'),
     ],
     variables: [
       ownerVar(1),
@@ -971,7 +947,7 @@ const OWNER_UTILITY_TEMPLATES: StarterTemplate[] = [
         'the price was missing',
       ),
       FOOTER,
-      businessButton('Open my shop'),
+      linkButton('Edit the item'),
     ],
     variables: [
       ownerVar(1),
@@ -994,7 +970,7 @@ const OWNER_UTILITY_TEMPLATES: StarterTemplate[] = [
         'https://www.tijarahapp.in/r?b=burhani-sweets',
       ),
       FOOTER,
-      businessButton('Open my shop'),
+      linkButton('Open my reviews'),
     ],
     variables: [
       ownerVar(1),
@@ -1021,7 +997,7 @@ const OWNER_UTILITY_TEMPLATES: StarterTemplate[] = [
         'https://www.tijarahapp.in/business/burhani-sweets/catalogue/',
       ),
       FOOTER,
-      businessButton('Open my shop'),
+      linkButton('Open my catalogue'),
     ],
     variables: [
       ownerVar(1),
@@ -1048,7 +1024,7 @@ const OWNER_UTILITY_TEMPLATES: StarterTemplate[] = [
         '2 working days',
       ),
       FOOTER,
-      businessButton('Open my shop'),
+      linkButton('Check status'),
     ],
     variables: [
       ownerVar(1),
@@ -1078,7 +1054,7 @@ const CUSTOMER_UTILITY_TEMPLATES: StarterTemplate[] = [
         'https://www.tijarahapp.in/business/burhani-sweets/',
       ),
       FOOTER,
-      businessButton('View business'),
+      linkButton('Open my enquiry'),
     ],
     variables: [
       customerVar,
@@ -1111,7 +1087,7 @@ const CUSTOMER_UTILITY_TEMPLATES: StarterTemplate[] = [
         'https://www.tijarahapp.in/business/burhani-sweets/',
       ),
       FOOTER,
-      businessButton('View business'),
+      linkButton('View business'),
     ],
     variables: [
       customerVar,
@@ -1139,7 +1115,7 @@ const CUSTOMER_UTILITY_TEMPLATES: StarterTemplate[] = [
         '10 AM to 8 PM',
       ),
       FOOTER,
-      businessButton('View business'),
+      linkButton('View business'),
     ],
     variables: [
       customerVar,
@@ -1163,7 +1139,7 @@ const CUSTOMER_UTILITY_TEMPLATES: StarterTemplate[] = [
         '9 AM to 9 PM',
       ),
       FOOTER,
-      businessButton('View business'),
+      linkButton('View business'),
     ],
     variables: [
       customerVar,
@@ -1187,7 +1163,14 @@ const CUSTOMER_UTILITY_TEMPLATES: StarterTemplate[] = [
       FOOTER,
       {
         type: 'BUTTONS',
-        buttons: [{ type: 'URL', text: 'Open Tijarah', url: `${SITE}/` }],
+        buttons: [
+          {
+            type: 'URL',
+            text: 'Open Tijarah',
+            url: LINK_URL,
+            example: [LINK_EXAMPLE],
+          },
+        ],
       },
     ],
     variables: [customerVar, v(2, 'Number ending', 'custom', '4885')],
@@ -1207,12 +1190,111 @@ const CUSTOMER_UTILITY_TEMPLATES: StarterTemplate[] = [
       FOOTER,
       {
         type: 'BUTTONS',
-        buttons: [{ type: 'URL', text: 'Open Tijarah', url: `${SITE}/` }],
+        buttons: [
+          {
+            type: 'URL',
+            text: 'Open Tijarah',
+            url: LINK_URL,
+            example: [LINK_EXAMPLE],
+          },
+        ],
       },
     ],
     variables: [customerVar, v(2, 'Who joined', 'custom', 'Fatema')],
   },
 ];
+
+// ── Where each link button opens ───────────────────────────────────────────
+//
+// App routes. `mode=provider` opens the owner's side of the app, `customer`
+// the shopper's. `{provider_id}` is the recipient's own business;
+// `{business_id}` is a business the message is about (the campaign picks it).
+
+const owner = (path: string) =>
+  `${path}${path.includes('?') ? '&' : '?'}mode=provider`;
+const shopper = (path: string) =>
+  `${path}${path.includes('?') ? '&' : '?'}mode=customer`;
+const MY_PAGE = owner('/provider-details?id={provider_id}');
+const MANAGE = (subTab: string) => owner(`/?tab=listings&subTab=${subTab}`);
+const BUSINESS = shopper('/provider-details?id={business_id}');
+
+export const LINK_TARGETS: Record<string, string> = {
+  // Owners: alerts and their listing
+  tijarah_new_enquiry: owner('/?tab=chats'),
+  tijarah_weekly_visits: owner('/?tab=analytics'),
+  tijarah_verification_approved: MY_PAGE,
+  tijarah_verification_docs_needed: owner('/provider-onboarding/verify'),
+  tijarah_profile_incomplete: MANAGE('details'),
+  tijarah_set_location: MANAGE('details'),
+  tijarah_new_review: MANAGE('reviews'),
+  tijarah_add_products: MANAGE('products'),
+  tijarah_share_profile: MY_PAGE,
+  tijarah_announcement: owner('/?tab=home'),
+  tijarah_winback: owner('/?tab=chats'),
+  // Owners: onboarding campaigns
+  tijarah_welcome: owner('/?tab=home'),
+  tijarah_welcome_new: owner('/?tab=home'),
+  tijarah_listing_reminder: owner('/?tab=home'),
+  tijarah_occasion: MANAGE('deals'),
+  tijarah_win_back: owner('/?tab=analytics'),
+  // Owners: growth
+  tijarah_shop_link: MY_PAGE,
+  tijarah_add_photos: MANAGE('photos'),
+  tijarah_post_deal: MANAGE('deals'),
+  tijarah_get_reviews: MANAGE('reviews'),
+  tijarah_get_verified: owner('/provider-onboarding/verify'),
+  tijarah_check_details: MANAGE('details'),
+  tijarah_share_catalogue: owner('/shop?id={provider_id}'),
+  tijarah_boost_listing: MANAGE('boost'),
+  tijarah_women_led_badge: owner('/?tab=home'),
+  tijarah_refer_business: '/provider-onboarding',
+  // Customers: discovery
+  tijarah_cust_discover: shopper('/?tab=explore'),
+  tijarah_cust_deals: shopper('/deals'),
+  tijarah_cust_occasion: shopper('/?tab=explore'),
+  tijarah_cust_women_led: shopper('/women-led'),
+  tijarah_cust_new_businesses: shopper('/'),
+  tijarah_cust_list_business: '/provider-onboarding',
+  tijarah_cust_invite: shopper('/invite'),
+  tijarah_cust_comeback: shopper('/'),
+  // Owners: event updates
+  tijarah_page_ready: MY_PAGE,
+  tijarah_listing_created_for_you: MANAGE('details'),
+  tijarah_link_changed: MY_PAGE,
+  tijarah_details_updated: MANAGE('details'),
+  tijarah_photo_removed: MANAGE('photos'),
+  tijarah_item_hidden: MANAGE('products'),
+  tijarah_review_link: MANAGE('reviews'),
+  tijarah_catalogue_link: owner('/shop?id={provider_id}'),
+  tijarah_verification_received: owner('/provider-onboarding/verify'),
+  // Customers: event updates
+  tijarah_enquiry_sent: shopper('/?tab=chats'),
+  tijarah_review_posted: BUSINESS,
+  tijarah_saved_business: BUSINESS,
+  tijarah_saved_business_update: BUSINESS,
+  tijarah_account_ready: shopper('/'),
+  tijarah_invite_joined: shopper('/'),
+};
+
+/** The link button's own variable: a code per recipient, for LINK_TARGETS[name]. */
+function withLinkTarget(t: StarterTemplate): StarterTemplate {
+  const target = LINK_TARGETS[t.name];
+  if (!target) return t;
+  return {
+    ...t,
+    variables: [
+      ...t.variables,
+      {
+        index: 1,
+        location: 'button',
+        label: 'Opens',
+        source: 'app_link',
+        sample: 'k3m9q2xw7a',
+        target,
+      },
+    ],
+  };
+}
 
 /** The automated messages' templates (admin → WhatsApp → Automations sends them). */
 const AUTOMATION_TEMPLATES: StarterTemplate[] = AUTOMATIONS.map((a) => ({
@@ -1231,4 +1313,4 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
   ...CUSTOMER_TEMPLATES,
   ...OWNER_UTILITY_TEMPLATES,
   ...CUSTOMER_UTILITY_TEMPLATES,
-];
+].map(withLinkTarget);

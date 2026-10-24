@@ -9,6 +9,27 @@ import {
 import { WhatsAppVariableMapping } from '../entities/whatsapp-campaign.entity';
 import { ResolvedProviderVariables } from './whatsapp.types';
 import { WhatsAppTemplateService } from './whatsapp-template.service';
+import { GoLinksService } from '../go-links/go-links.service';
+
+/** A URL button that ends in a smart-link code: …/go?c={{1}}. */
+export const isAppLinkUrl = (url: string | undefined) =>
+  /\/go\/?\?c=\{\{1\}\}$/.test(url ?? '');
+
+/**
+ * `{provider_id}` → the recipient's business. A blank nobody filled (no
+ * business, or a `{business_id}` the campaign didn't pick), or an owner
+ * screen for someone without a business, opens the home screen instead.
+ */
+export function fillAppLinkTarget(
+  target: string,
+  providerId: string | null,
+): string {
+  if (!providerId && /[?&]mode=provider\b/.test(target)) return '/';
+  const filled = providerId
+    ? target.split('{provider_id}').join(providerId)
+    : target;
+  return /\{[a-z_]+\}/.test(filled) ? '/' : filled;
+}
 
 interface ProviderBase {
   id: string;
@@ -39,7 +60,58 @@ export class WhatsAppVariableService {
     private readonly dataSource: DataSource,
     private readonly config: ConfigService,
     private readonly templates: WhatsAppTemplateService,
+    private readonly goLinks: GoLinksService,
   ) {}
+
+  /**
+   * Smart-link buttons (…/go?c={{1}}) and the app screen each opens: the
+   * campaign's choice (source app_link, value = screen), else the template's
+   * own target, else the home screen. Keyed by button index.
+   */
+  appLinkButtons(
+    buttonParams: WhatsAppVariableMapping | null | undefined,
+    template: WhatsAppTemplate,
+  ): Map<string, string> {
+    const out = new Map<string, string>();
+    const declared = template.variables?.find(
+      (v) => v.location === 'button' && v.source === 'app_link',
+    );
+    for (const { index, button } of this.templates.urlButtonsWithParam(
+      template.components,
+    )) {
+      if (!isAppLinkUrl(button.url)) continue;
+      const entry = buttonParams?.[String(index)];
+      const value = entry?.source === 'app_link' ? entry.value?.trim() : '';
+      // An app route only, never another site.
+      const chosen =
+        value?.startsWith('/') && !value.startsWith('//') ? value : '';
+      out.set(String(index), chosen || declared?.target || '/');
+    }
+    return out;
+  }
+
+  /**
+   * Codes for one recipient's smart-link buttons, saved so the link opens
+   * their screen (also after installing and signing in).
+   */
+  async appLinkValues(
+    buttonParams: WhatsAppVariableMapping | null | undefined,
+    template: WhatsAppTemplate,
+    who: { providerId: string | null; userId: string | null },
+    automationKey: string | null = null,
+  ): Promise<Record<string, string>> {
+    const out: Record<string, string> = {};
+    for (const [index, target] of this.appLinkButtons(buttonParams, template)) {
+      const link = await this.goLinks.create({
+        target: fillAppLinkTarget(target, who.providerId),
+        userId: who.userId,
+        providerId: who.providerId,
+        automationKey,
+      });
+      out[index] = link.code;
+    }
+    return out;
+  }
 
   /** Opens the business in the app, or sends them to the right store. */
   profileUrl(providerId: string): string {
@@ -245,6 +317,7 @@ export class WhatsAppVariableService {
     for (const { index, button } of this.templates.urlButtonsWithParam(
       template.components,
     )) {
+      if (isAppLinkUrl(button.url)) continue;
       const source = buttonParams?.[String(index)]?.source ?? 'profile_url';
       if (BUSINESS_ONLY_SOURCES.has(source))
         uses.push(`the "${button.text}" button`);
@@ -305,9 +378,11 @@ export class WhatsAppVariableService {
     template: WhatsAppTemplate,
   ): Record<string, string> {
     const out: Record<string, string> = {};
-    for (const { index } of this.templates.urlButtonsWithParam(
+    for (const { index, button } of this.templates.urlButtonsWithParam(
       template.components,
     )) {
+      // Smart links get a code per recipient: appLinkValues().
+      if (isAppLinkUrl(button.url)) continue;
       const entry = buttonParams?.[String(index)];
       let value: string | undefined;
       if (!entry || entry.source === 'profile_url') {

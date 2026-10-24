@@ -44,6 +44,7 @@ export type WhatsAppVariableSource =
   | 'visits_7d'
   | 'enquiries_7d'
   | 'app_download_url'
+  | 'app_link'
   | 'custom';
 export const WHATSAPP_VARIABLE_SOURCES: WhatsAppVariableSource[] = [
   'brand_name',
@@ -56,6 +57,7 @@ export const WHATSAPP_VARIABLE_SOURCES: WhatsAppVariableSource[] = [
   'visits_7d',
   'enquiries_7d',
   'app_download_url',
+  'app_link',
   'custom',
 ];
 
@@ -67,6 +69,12 @@ export interface WhatsAppTemplateVariable {
   label: string;
   source: WhatsAppVariableSource;
   sample: string;
+  /**
+   * `app_link` buttons (…/go?c={{1}}): the app screen it opens, e.g.
+   * `/?tab=chats&mode=provider`. `{provider_id}` becomes the recipient's
+   * business. Each recipient gets their own code for it.
+   */
+  target?: string;
 }
 
 export interface WhatsAppTemplateButton {
