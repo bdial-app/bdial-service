@@ -60,8 +60,11 @@ export class WhatsAppTemplateService {
       .createQueryBuilder('t')
       .orderBy('t.updatedAt', 'DESC')
       .take(200);
+    // Disabled ones (deleted or switched off at Meta) can't be sent; they
+    // only show when asked for.
     if (query.status)
       qb.andWhere('t.status = :status', { status: query.status });
+    else qb.andWhere("t.status <> 'disabled'");
     if (query.category)
       qb.andWhere('t.category = :category', { category: query.category });
     if (query.search) {
@@ -272,12 +275,68 @@ export class WhatsAppTemplateService {
     return { deleted: true };
   }
 
-  async sync(): Promise<{ synced: number; created: number; updated: number }> {
+  /**
+   * Clear out disabled templates: removed at Meta (when it still holds them)
+   * and here. Ones a campaign used stay, hidden, so its history still reads.
+   */
+  async clearDisabled(): Promise<{ removed: number; kept: number }> {
+    const rows = await this.templateRepo.find({
+      where: { status: 'disabled' },
+    });
+    const usage = await this.usageCounts(rows.map((r) => r.id));
+    let removed = 0;
+    let kept = 0;
+    for (const t of rows) {
+      if ((usage.get(t.id) ?? 0) > 0) {
+        kept++;
+        continue;
+      }
+      if (t.metaTemplateId && this.meta.isConfigured()) {
+        try {
+          await this.meta.deleteTemplate(t.name, t.metaTemplateId);
+        } catch (err) {
+          // Already deleted at Meta — nothing left to remove there.
+          this.logger.debug(
+            `Meta delete skipped for ${t.name}: ${errMessage(err)}`,
+          );
+        }
+      }
+      await this.templateRepo.delete({ id: t.id });
+      removed++;
+    }
+    return { removed, kept };
+  }
+
+  async sync(): Promise<{
+    synced: number;
+    created: number;
+    updated: number;
+    removed: number;
+  }> {
     this.meta.assertConfigured();
     const remote = await this.meta.listTemplates();
     let created = 0;
     let updated = 0;
+    let removed = 0;
     for (const r of remote) {
+      // Meta keeps deleted templates listed for a while. Don't bring them
+      // back; drop our copy unless a campaign used it.
+      if (r.status === 'DELETED' || r.status === 'PENDING_DELETION') {
+        const local = await this.templateRepo.findOne({
+          where: { name: r.name, language: r.language },
+        });
+        if (!local || local.metaTemplateId !== r.id) continue;
+        const usage = await this.usageCounts([local.id]);
+        if ((usage.get(local.id) ?? 0) > 0) {
+          local.status = 'disabled';
+          local.lastSyncedAt = new Date();
+          await this.templateRepo.save(local);
+        } else {
+          await this.templateRepo.delete({ id: local.id });
+          removed++;
+        }
+        continue;
+      }
       const status =
         (META_TEMPLATE_STATUS_MAP[r.status] as WhatsAppTemplateStatus) ||
         'pending';
@@ -318,7 +377,7 @@ export class WhatsAppTemplateService {
       }
       await this.templateRepo.save(local);
     }
-    return { synced: remote.length, created, updated };
+    return { synced: remote.length, created, updated, removed };
   }
 
   async seed(

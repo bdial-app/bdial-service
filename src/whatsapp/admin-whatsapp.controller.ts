@@ -150,6 +150,15 @@ export class AdminWhatsAppController {
     return this.templates.seed(req.user?.id ?? null);
   }
 
+  @Roles('admin')
+  @Post('templates/clear-disabled')
+  @ApiOperation({
+    summary: 'Delete disabled templates (kept if a campaign used them)',
+  })
+  clearDisabledTemplates() {
+    return this.templates.clearDisabled();
+  }
+
   @Post('templates/preview')
   @ApiOperation({ summary: 'Render a template with sample variables' })
   previewTemplate(@Body() dto: TemplatePreviewDto) {
