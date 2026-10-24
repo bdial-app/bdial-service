@@ -16,6 +16,8 @@ type ItemType = 'product' | 'service';
 /** One product or service as every catalog surface shows it. */
 export interface CatalogItem {
   id: string;
+  /** Its address under the business: /business/<providerSlug>/<slug>. */
+  slug: string;
   name: string;
   description: string | null;
   price: number | null;
@@ -27,6 +29,7 @@ export interface CatalogItem {
   categoryId: string | null;
   categoryName: string | null;
   providerId: string;
+  providerSlug: string;
   providerUserId: string;
   providerName: string;
   providerImage: string | null;
@@ -402,6 +405,7 @@ export class CatalogService {
   async getSellerCatalogue(providerId: string) {
     const [shop]: {
       id: string;
+      slug: string;
       brand_name: string;
       profile_photo_url: string | null;
       banner_image_url: string | null;
@@ -414,7 +418,7 @@ export class CatalogService {
       rating: string | number;
       review_count: string | number;
     }[] = await this.dataSource.query(
-      `SELECT p.id, p.brand_name, p.profile_photo_url, p.banner_image_url, p.city, p.area, p.status,
+      `SELECT p.id, p.slug, p.brand_name, p.profile_photo_url, p.banner_image_url, p.city, p.area, p.status,
               p.is_women_led, p.is_available, p.user_id,
               COALESCE(rs.avg_rating, 0) AS rating, COALESCE(rs.review_count, 0) AS review_count
          FROM providers p
@@ -452,6 +456,7 @@ export class CatalogService {
     return {
       provider: {
         id: shop.id,
+        slug: shop.slug,
         userId: shop.user_id,
         name: shop.brand_name,
         logoUrl: shop.profile_photo_url,
@@ -605,10 +610,10 @@ export class CatalogService {
   // ─── Query builder ──────────────────────────────────────────────────
 
   private static readonly ITEM_COLUMNS = `
-    prod.id, prod.name, prod.description, prod.price, prod.currency, prod.photo_url, prod.photo_urls,
+    prod.id, prod.slug, prod.name, prod.description, prod.price, prod.currency, prod.photo_url, prod.photo_urls,
     prod.product_type, prod.is_hero, prod.category_id, prod.display_order,
     COALESCE(sc.name, c.name) AS category_name,
-    p.id AS provider_id, p.user_id AS provider_user_id, p.brand_name, p.profile_photo_url, p.city, p.area, p.status,
+    p.id AS provider_id, p.slug AS provider_slug, p.user_id AS provider_user_id, p.brand_name, p.profile_photo_url, p.city, p.area, p.status,
     p.is_women_led, p.geocode_precision, p.created_at AS provider_created_at,
     COALESCE(rs.avg_rating, 0) AS rating, COALESCE(rs.review_count, 0) AS review_count,
     COALESCE(pv.views, 0) AS views`;
@@ -922,6 +927,7 @@ export class CatalogService {
       : [];
     return {
       id: r.id,
+      slug: r.slug,
       name: r.name,
       description: r.description,
       price: r.price != null ? parseFloat(r.price) : null,
@@ -933,6 +939,7 @@ export class CatalogService {
       categoryId: r.category_id,
       categoryName: r.category_name,
       providerId: r.provider_id,
+      providerSlug: r.provider_slug,
       providerUserId: r.provider_user_id,
       providerName: r.brand_name,
       providerImage: r.profile_photo_url,

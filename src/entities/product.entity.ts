@@ -24,6 +24,14 @@ export class Product {
   @Column({ type: 'varchar', length: 150 })
   name: string;
 
+  /**
+   * The product's public address under its business:
+   * /business/<business slug>/<slug>. Unique within the business. Made by
+   * the database from the name when left empty.
+   */
+  @Column({ type: 'varchar', length: 90 })
+  slug: string;
+
   @Column({ type: 'text', nullable: true })
   description: string | null;
 
