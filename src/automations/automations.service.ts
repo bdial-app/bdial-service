@@ -1012,6 +1012,7 @@ export class AutomationsService {
         return owner('/?tab=listings&subTab=plans');
       case 'boost_ending':
         return owner('/?tab=listings&subTab=boost');
+      case 'women_led_not_approved':
       case 'listing_created_for_you':
       case 'details_updated':
         return owner('/?tab=listings&subTab=details');

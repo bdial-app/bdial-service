@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsOptional, IsBoolean, IsUUID, MaxLength, Matches, IsEnum, IsUrl } from 'class-validator';
+import { IsString, IsOptional, IsBoolean, IsUUID, MaxLength, MinLength, IsIn, Matches, IsEnum, IsUrl } from 'class-validator';
 import { Transform } from 'class-transformer';
 
 /** Trim, strip seconds (HH:MM:SS → HH:MM), and convert blank to undefined */
@@ -115,6 +115,18 @@ export class CreateProviderDto {
   @Transform(({ value }) => value === 'true' || value === true)
   @IsBoolean()
   isWomenLed?: boolean;
+
+  @ApiPropertyOptional({ example: 'Fatema Burhani', description: 'Women-led: her name, as on her ID' })
+  @IsOptional()
+  @IsString()
+  @MinLength(2)
+  @MaxLength(100)
+  womenLedName?: string;
+
+  @ApiPropertyOptional({ enum: ['owner', 'co_owner', 'runs_it'], description: 'Women-led: her role' })
+  @IsOptional()
+  @IsIn(['owner', 'co_owner', 'runs_it'])
+  womenLedRole?: 'owner' | 'co_owner' | 'runs_it';
 
   @ApiPropertyOptional({ example: 'https://mybusiness.com', description: 'Business website URL' })
   @IsOptional()

@@ -79,6 +79,7 @@ export { WhatsAppConsentEvent } from './whatsapp-consent-event.entity';
 export { MessagingAutomation } from './messaging-automation.entity';
 export { AutomationJob } from './automation-job.entity';
 export { GoLink } from './go-link.entity';
+export { WomenLedRequest } from './women-led-request.entity';
 export { ReviewIntent } from './review-intent.entity';
 export { LegalDocument } from './legal-document.entity';
 export { LegalDocumentVersion } from './legal-document-version.entity';
