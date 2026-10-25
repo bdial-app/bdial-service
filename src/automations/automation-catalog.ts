@@ -32,7 +32,15 @@ export type AutomationKey =
   | 'payment_failed'
   | 'boost_ending'
   | 'business_replied'
-  | 'customer_waiting';
+  | 'customer_waiting'
+  | 'listing_created_for_you'
+  | 'link_changed'
+  | 'details_updated'
+  | 'photo_removed'
+  | 'item_hidden'
+  | 'verification_received'
+  | 'review_published'
+  | 'saved_business_update';
 
 export interface AutomationTemplateDef {
   name: string;
@@ -62,8 +70,14 @@ export interface AutomationDef {
   essential: boolean;
   /** Enquiry alerts may be 2 a day; everything else 1. */
   enquiry?: boolean;
-  /** Who it's for: opted_in (utility) or not_decided (asks for consent). */
-  consent: 'opted_in' | 'not_decided';
+  /**
+   * Who it's for: opted_in (utility), not_decided (asks for consent), or
+   * not_opted_out — an account notice anyone gets unless they said no (e.g.
+   * "a listing was created with your number").
+   */
+  consent: 'opted_in' | 'not_decided' | 'not_opted_out';
+  /** Where the admin page lists it. */
+  section?: 'alerts' | 'listing_updates' | 'asking' | 'customers';
 }
 
 const FOOTER = 'Tijarah · reply STOP to turn off';
@@ -460,6 +474,226 @@ export const AUTOMATIONS: AutomationDef[] = [
       quickReplies: ['Yes, alert me'],
     },
   },
+
+  // ── Updates about the owner's own listing (utility, event-driven) ──────────
+  {
+    key: 'listing_created_for_you',
+    name: 'A listing was made for you',
+    when: 'An admin or a bulk import creates a listing with this owner’s number. Sent unless they said no; “Not mine” lands in the inbox.',
+    audience: 'owner',
+    section: 'listing_updates',
+    delayMinutes: 10,
+    appFirstMinutes: 0,
+    essential: true,
+    consent: 'not_opted_out',
+    template: {
+      name: 'tijarah_listing_created_for_you',
+      category: 'utility',
+      body: 'Salaam {{1}},\na business listing for {{2}} has been created on Tijarah with this mobile number. Its page is at {{3}}\n\nYou can check and edit the details from the app. If this is not your business, tap Not mine.',
+      vars: [
+        { key: 'ownerFirstName', label: 'Owner first name', sample: 'Huzefa' },
+        { key: 'brandName', label: 'Business name', sample: 'Burhani Sweets' },
+        {
+          key: 'pageLink',
+          label: 'Business page link',
+          sample: 'https://www.tijarahapp.in/business/burhani-sweets/',
+        },
+      ],
+      linkButton: 'Check my listing',
+      quickReplies: ['Not mine'],
+    },
+  },
+  {
+    key: 'link_changed',
+    name: 'Business link changed',
+    when: 'The business’s web address (slug) changes. Skipped if the owner changed it themselves in the app just now.',
+    audience: 'owner',
+    section: 'listing_updates',
+    delayMinutes: 5,
+    appFirstMinutes: 30,
+    essential: false,
+    consent: 'opted_in',
+    template: {
+      name: 'tijarah_link_changed',
+      category: 'utility',
+      body: 'Salaam {{1}},\nthe web address of {{2}} on Tijarah is now {{3}}\n\nYour old link, {{4}}, still opens your page, so links you have already shared keep working.',
+      vars: [
+        { key: 'ownerFirstName', label: 'Owner first name', sample: 'Huzefa' },
+        { key: 'brandName', label: 'Business name', sample: 'Burhani Sweets' },
+        {
+          key: 'newLink',
+          label: 'New link',
+          sample: 'https://www.tijarahapp.in/business/burhani-sweets-pune/',
+        },
+        {
+          key: 'oldLink',
+          label: 'Old link',
+          sample: 'https://www.tijarahapp.in/business/burhani-sweets/',
+        },
+      ],
+      linkButton: 'Open my page',
+    },
+  },
+  {
+    key: 'details_updated',
+    name: 'Listing details changed by the team',
+    when: 'An admin edits the listing’s name, hours, address, phone or links. Once a day per business.',
+    audience: 'owner',
+    section: 'listing_updates',
+    delayMinutes: 5,
+    appFirstMinutes: 0,
+    essential: false,
+    consent: 'opted_in',
+    template: {
+      name: 'tijarah_details_updated',
+      category: 'utility',
+      body: 'Salaam {{1}},\nthe {{2}} of {{3}} on Tijarah was updated on {{4}}. If you did not ask for this change, reply to this message and our team will help.',
+      vars: [
+        { key: 'ownerFirstName', label: 'Owner first name', sample: 'Huzefa' },
+        { key: 'what', label: 'What changed', sample: 'opening hours' },
+        { key: 'brandName', label: 'Business name', sample: 'Burhani Sweets' },
+        { key: 'when', label: 'Date', sample: '24 Oct' },
+      ],
+      linkButton: 'View my listing',
+    },
+  },
+  {
+    key: 'photo_removed',
+    name: 'Photo removed',
+    when: 'Photo Moderation removes one of the business’s or its products’ photos. Once a day per business.',
+    audience: 'owner',
+    section: 'listing_updates',
+    delayMinutes: 5,
+    appFirstMinutes: 0,
+    essential: false,
+    consent: 'opted_in',
+    template: {
+      name: 'tijarah_photo_removed',
+      category: 'utility',
+      body: 'Salaam {{1}},\na photo was removed from {{2}} on Tijarah because {{3}}. You can upload a replacement from the app at any time.',
+      vars: [
+        { key: 'ownerFirstName', label: 'Owner first name', sample: 'Huzefa' },
+        { key: 'brandName', label: 'Business name', sample: 'Burhani Sweets' },
+        {
+          key: 'reason',
+          label: 'Reason',
+          sample: 'it did not meet our photo guidelines',
+        },
+      ],
+      linkButton: 'Add a photo',
+    },
+  },
+  {
+    key: 'item_hidden',
+    name: 'Item hidden by the team',
+    when: 'An admin hides one of the business’s products or services.',
+    audience: 'owner',
+    section: 'listing_updates',
+    delayMinutes: 5,
+    appFirstMinutes: 0,
+    essential: false,
+    consent: 'opted_in',
+    template: {
+      name: 'tijarah_item_hidden',
+      category: 'utility',
+      body: 'Salaam {{1}},\nthe item "{{2}}" from {{3}} is hidden from customers on Tijarah because {{4}}. You can edit it in the app to show it again.',
+      vars: [
+        { key: 'ownerFirstName', label: 'Owner first name', sample: 'Huzefa' },
+        { key: 'itemName', label: 'Item', sample: 'Kaju Katli 1 kg' },
+        { key: 'brandName', label: 'Business name', sample: 'Burhani Sweets' },
+        { key: 'reason', label: 'Reason', sample: 'our team reviewed it' },
+      ],
+      linkButton: 'Edit the item',
+    },
+  },
+  {
+    key: 'verification_received',
+    name: 'Verification documents received',
+    when: 'The owner submits verification documents. Their decision follows as “Verification approved / not approved”.',
+    audience: 'owner',
+    section: 'listing_updates',
+    delayMinutes: 2,
+    appFirstMinutes: 0,
+    essential: false,
+    consent: 'opted_in',
+    template: {
+      name: 'tijarah_verification_received',
+      category: 'utility',
+      body: 'Salaam {{1}},\nwe have received the verification documents for {{2}}. Our team reviews them within {{3}}, and you will get a message as soon as it is done.',
+      vars: [
+        { key: 'ownerFirstName', label: 'Owner first name', sample: 'Huzefa' },
+        { key: 'brandName', label: 'Business name', sample: 'Burhani Sweets' },
+        { key: 'reviewTime', label: 'Review time', sample: '2 working days' },
+      ],
+      linkButton: 'Check status',
+    },
+  },
+  // ── Customers ─────────────────────────────────────────────────────────────
+  {
+    key: 'review_published',
+    name: 'Your review is published (customers)',
+    when: '2 hours after a customer’s review goes live, if they haven’t opened the app since.',
+    audience: 'customer',
+    section: 'customers',
+    delayMinutes: 120,
+    appFirstMinutes: 120,
+    essential: false,
+    consent: 'opted_in',
+    template: {
+      name: 'tijarah_review_posted',
+      category: 'utility',
+      body: 'Salaam {{1}},\nyour review of {{2}} is now published on Tijarah. You can see it, or edit it, on their page, {{3}}, at any time.',
+      vars: [
+        {
+          key: 'customerFirstName',
+          label: 'Customer first name',
+          sample: 'Sakina',
+        },
+        {
+          key: 'businessName',
+          label: 'Business name',
+          sample: 'Burhani Sweets',
+        },
+        {
+          key: 'businessLink',
+          label: 'Business page link',
+          sample: 'https://www.tijarahapp.in/business/burhani-sweets/',
+        },
+      ],
+      linkButton: 'View business',
+    },
+  },
+  {
+    key: 'saved_business_update',
+    name: 'A saved business changed its details (customers)',
+    when: 'A business changes its hours, phone or address: everyone who saved it hears once that day.',
+    audience: 'customer',
+    section: 'customers',
+    delayMinutes: 30,
+    appFirstMinutes: 0,
+    essential: false,
+    consent: 'opted_in',
+    template: {
+      name: 'tijarah_saved_business_update',
+      category: 'utility',
+      body: 'Salaam {{1}},\n{{2}}, a business you saved on Tijarah, has updated its {{3}}. The new details: {{4}}. Open it in the app for directions or to contact them.',
+      vars: [
+        {
+          key: 'customerFirstName',
+          label: 'Customer first name',
+          sample: 'Sakina',
+        },
+        {
+          key: 'businessName',
+          label: 'Business name',
+          sample: 'Burhani Sweets',
+        },
+        { key: 'what', label: 'What changed', sample: 'opening hours' },
+        { key: 'newDetails', label: 'New details', sample: '9 AM to 9 PM' },
+      ],
+      linkButton: 'View business',
+    },
+  },
 ];
 
 export const AUTOMATION_BY_KEY = new Map(AUTOMATIONS.map((a) => [a.key, a]));
@@ -468,7 +702,8 @@ export const AUTOMATION_KEYS = AUTOMATIONS.map((a) => a.key);
 /** Quick replies that mean "yes" / "no" to WhatsApp alerts (any template). */
 export const CONSENT_YES_REPLIES = [
   'YES, ALERT ME',
-  'YES, SEND ME CUSTOMER ALERTS',
+  'YES, SEND ME CUSTOMER ALERTS', // templates approved before it was shortened
+  'YES, SEND ME ALERTS',
 ];
 export const CONSENT_NO_REPLIES = ['NOT INTERESTED'];
 

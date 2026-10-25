@@ -6,6 +6,7 @@ import {
   BadRequestException,
   ForbiddenException,
 } from '@nestjs/common';
+import { AutomationsService } from '../automations/automations.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, ILike, In } from 'typeorm';
 import { BADGE_KEYS, badgeRank } from '../badges/badge-catalog';
@@ -56,6 +57,7 @@ export class ProvidersService {
     private contentSanitizer: ContentSanitizerService,
     private otpService: OtpService,
     private websiteMetaService: WebsiteMetaService,
+    private readonly automations: AutomationsService,
   ) {}
 
   async sendProviderOtp(mobileNumber: string) {
@@ -137,6 +139,14 @@ export class ProvidersService {
       contactNumber: phone,
       lastContactNumberChangeAt: new Date(),
     });
+    // Customers who saved the business hear the new number (when switched on).
+    void this.automations
+      .onBusinessDetailsChanged(
+        providerId,
+        { contactNumber: provider.contactNumber },
+        { contactNumber: phone },
+      )
+      .catch(() => {});
 
     return { message: 'Contact number updated successfully', contactNumber: phone };
   }
@@ -641,6 +651,14 @@ export class ProvidersService {
     if (latitude !== undefined) updateData.latitude = latitude ? parseFloat(latitude) : null;
     if (longitude !== undefined) updateData.longitude = longitude ? parseFloat(longitude) : null;
     await this.providerRepo.update(id, updateData);
+    // Customers who saved the business hear about new hours or address.
+    void this.automations
+      .onBusinessDetailsChanged(
+        id,
+        existingProvider,
+        updateData as Partial<Provider>,
+      )
+      .catch(() => {});
 
     // Async logo re-fetch when website URL changes
     if (updateProviderDto.websiteUrl && updateProviderDto.websiteUrl !== existingProvider.websiteUrl) {

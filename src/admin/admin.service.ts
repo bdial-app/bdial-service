@@ -1789,7 +1789,24 @@ export class AdminService {
     }
 
     if (Object.keys(update).length === 0) throw new BadRequestException('No valid fields to update');
+    const before = await this.providerRepo.findOneBy({ id: providerId });
     await this.providerRepo.update(providerId, update);
+    if (before) {
+      // WhatsApp the owner what the team changed, and customers who saved it
+      // about new hours, phone or address (each when switched on).
+      const was = before as unknown as Record<string, unknown>;
+      const now = update as Record<string, unknown>;
+      const changed = Object.keys(now).filter(
+        (k) =>
+          JSON.stringify(now[k] ?? null) !== JSON.stringify(was[k] ?? null),
+      );
+      void this.automations
+        .onDetailsChangedByAdmin(providerId, changed)
+        .catch(() => {});
+      void this.automations
+        .onBusinessDetailsChanged(providerId, before, now as Partial<Provider>)
+        .catch(() => {});
+    }
     return this.providerRepo.findOne({
       where: { id: providerId },
       relations: ['user', 'providerCategories', 'providerCategories.category'],
@@ -2485,7 +2502,14 @@ export class AdminService {
     if (Object.keys(update).length === 0) throw new BadRequestException('No valid fields to update');
     // Reordering the gallery moves the cover with it.
     if (Array.isArray(update.photoUrls)) update.photoUrl = update.photoUrls[0] ?? null;
+    const hiding = (update as { isActive?: boolean }).isActive === false;
+    const wasActive = hiding
+      ? (await this.productRepo.findOneBy({ id: productId }))?.isActive
+      : false;
     await this.productRepo.update(productId, update);
+    if (wasActive) {
+      void this.automations.onItemHidden(productId).catch(() => {});
+    }
     return this.productRepo.findOne({ where: { id: productId }, relations: ['provider'] });
   }
 
@@ -2494,6 +2518,9 @@ export class AdminService {
     const product = await this.productRepo.findOneBy({ id: productId });
     if (!product) throw new NotFoundException('Product not found');
     await this.productRepo.update(productId, { isActive: false });
+    if (product.isActive) {
+      void this.automations.onItemHidden(productId).catch(() => {});
+    }
     return { success: true };
   }
 
@@ -5163,6 +5190,8 @@ export class AdminService {
         })
         .catch((err: Error) => new Logger(AdminService.name).warn(`WhatsApp consent not recorded for ${created.provider.id}: ${err.message}`));
     }
+    // WhatsApp "a listing was made with your number" (when switched on).
+    void this.automations.onListingCreated(created.provider.id).catch(() => {});
     return created;
   }
 
@@ -5902,6 +5931,7 @@ export class AdminService {
         null,
         'Provider gallery photo removed',
       );
+      void this.automations.onPhotoRemoved(photo.providerId).catch(() => {});
       return { message: 'Provider photo removed' };
     }
 
@@ -5945,6 +5975,9 @@ export class AdminService {
           update,
           'Product photo removed',
         );
+        void this.automations
+          .onPhotoRemoved(product.providerId)
+          .catch(() => {});
         return { message: 'Product photo removed' };
       }
       await this.productRepo.update(id, { photoUrl: null, photoUrls: [] });
@@ -5957,6 +5990,7 @@ export class AdminService {
         { photoUrl: null, photoUrls: [] },
         'Product photos removed',
       );
+      void this.automations.onPhotoRemoved(product.providerId).catch(() => {});
       return { message: 'Product photos removed' };
     }
 
@@ -6078,6 +6112,18 @@ export class AdminService {
     this.assertAdmin(admin);
     if (!ids?.length) throw new BadRequestException('No IDs provided');
     if (ids.length > 50) throw new BadRequestException('Maximum 50 items per bulk action');
+
+    // Products being hidden now, for the owners' WhatsApp (when switched on).
+    const hiding =
+      action === 'activate'
+        ? []
+        : await this.productRepo.find({
+            where: ids.map((id) => ({ id, isActive: true })),
+            select: ['id'],
+          });
+    for (const p of hiding) {
+      void this.automations.onItemHidden(p.id).catch(() => {});
+    }
 
     if (action === 'delete') {
       const result = await this.productRepo.update(ids.map(id => id), { isActive: false });
