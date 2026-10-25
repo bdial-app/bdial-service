@@ -7,6 +7,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { LastActiveInterceptor } from './common/interceptors/last-active.interceptor';
 import { GoLinksModule } from './go-links/go-links.module';
+import { WomenLedModule } from './women-led/women-led.module';
 import { ReviewLinksModule } from './review-links/review-links.module';
 import { LegalModule } from './legal/legal.module';
 import { AutomationsModule } from './automations/automations.module';
@@ -105,6 +106,7 @@ import { SystemSetting } from './entities';
     SystemLogsModule,
     AdminAttentionModule,
     GoLinksModule,
+    WomenLedModule,
     ReviewLinksModule,
     LegalModule,
     AutomationsModule,

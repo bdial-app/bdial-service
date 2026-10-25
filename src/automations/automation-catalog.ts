@@ -25,6 +25,7 @@ export type AutomationKey =
   | 'verification_approved'
   | 'verification_not_approved'
   | 'women_led_approved'
+  | 'women_led_not_approved'
   | 'deal_approved'
   | 'deal_not_approved'
   | 'shop_live'
@@ -626,6 +627,31 @@ export const AUTOMATIONS: AutomationDef[] = [
         { key: 'reviewTime', label: 'Review time', sample: '2 working days' },
       ],
       linkButton: 'Check status',
+    },
+  },
+  {
+    key: 'women_led_not_approved',
+    name: 'Women-Led not approved',
+    when: 'The team decides a Women-Led request can’t be approved; the reason goes with it.',
+    audience: 'owner',
+    section: 'listing_updates',
+    delayMinutes: 2,
+    appFirstMinutes: 0,
+    essential: true,
+    consent: 'opted_in',
+    template: {
+      name: 'tijarah_women_led_not_approved',
+      category: 'utility',
+      body: "We couldn't add the Women-Led badge to {{1}} on Tijarah yet. Reason: {{2}}\n\nTap below to check the details and ask again.",
+      vars: [
+        { key: 'brandName', label: 'Business name', sample: 'Burhani Sweets' },
+        {
+          key: 'reason',
+          label: 'Reason',
+          sample: 'The name on the ID does not match the request.',
+        },
+      ],
+      linkButton: 'Check my request',
     },
   },
   // ── Customers ─────────────────────────────────────────────────────────────

@@ -19,6 +19,7 @@ import { StorageService } from '../storage/storage.service';
 import { BrandMarkService } from '../providers/brand-mark.service';
 import { WhatsAppConsentService } from '../whatsapp/whatsapp-consent.service';
 import { AutomationsService } from '../automations/automations.service';
+import { WomenLedService } from '../women-led/women-led.service';
 import { BRAND_MARK_FOLDER, isBrandMarkUrl } from '../providers/brand-mark';
 import { AdminProviderFiltersDto, AdminProviderListDto } from './dto/admin-provider-list.dto';
 import { OtpService } from '../otp/otp.service';
@@ -159,6 +160,7 @@ export class AdminService {
     private serviceableCitiesService: ServiceableCitiesService,
     private contentSanitizer: ContentSanitizerService,
     private googleReviewsService: GoogleReviewsService,
+    private womenLed: WomenLedService,
   ) {}
 
   private assertAdmin(user: any) {
@@ -1759,7 +1761,8 @@ export class AdminService {
       'status', 'isFeatured', 'communityVerified', 'brandName', 'description',
       'isAvailable', 'websiteUrl', 'instagramHandle', 'facebookHandle',
       'youtubeHandle', 'whatsappNumber', 'openTime', 'closeTime',
-      'city', 'area', 'pincode', 'address', 'isWomenLed',
+      // isWomenLed is not here: it changes only through WomenLedService.
+      'city', 'area', 'pincode', 'address',
       'latitude', 'longitude',
     ];
     const update: any = {};
@@ -5115,8 +5118,9 @@ export class AdminService {
         whatsappNumber: dto.whatsappNumber?.trim() || null,
         websiteUrl: dto.websiteUrl?.trim() || null,
         facebookHandle: dto.facebookHandle?.trim() || null,
-        isWomenLed: dto.isWomenLed ?? (dto.userGender === 'female'),
-        womenLedStatus: (dto.isWomenLed ?? (dto.userGender === 'female')) ? 'approved' : 'none',
+        // Set below by WomenLedService when the admin says yes; never guessed.
+        isWomenLed: false,
+        womenLedStatus: 'none',
         communityVerified: dto.communityVerified ?? false,
         status: (dto.providerStatus as any) || 'active',
       });
@@ -5189,6 +5193,18 @@ export class AdminService {
           source: opts.bulk ? 'bulk_import' : 'admin_recorded',
         })
         .catch((err: Error) => new Logger(AdminService.name).warn(`WhatsApp consent not recorded for ${created.provider.id}: ${err.message}`));
+    }
+    // Women-led only when the admin (or the import's column) says yes,
+    // recorded as verified by this admin.
+    if (dto.isWomenLed === true) {
+      await this.womenLed
+        .grant(admin, created.provider.id, {
+          womanName: dto.userName,
+          role: 'owner',
+          source: opts.bulk ? 'import' : 'admin',
+          quiet: !!opts.bulk,
+        })
+        .catch((err: Error) => new Logger(AdminService.name).warn(`Women-led not recorded for ${created.provider.id}: ${err.message}`));
     }
     // WhatsApp "a listing was made with your number" (when switched on).
     void this.automations.onListingCreated(created.provider.id).catch(() => {});
@@ -5566,54 +5582,12 @@ export class AdminService {
     };
   }
 
+  /** The older approve/reject endpoints: same rules as the review queue. */
   async reviewWomenLedStatus(admin: any, providerId: string, decision: 'approved' | 'rejected') {
     this.assertAdmin(admin);
+    await this.womenLed.decideForProvider(admin, providerId, decision);
     const provider = await this.providerRepo.findOneBy({ id: providerId });
-    if (!provider) throw new NotFoundException('Provider not found');
-
-    const oldStatus = provider.womenLedStatus;
-
-    await this.providerRepo.update(providerId, {
-      womenLedStatus: decision,
-      isWomenLed: decision === 'approved',
-      womenLedReviewedAt: new Date(),
-      womenLedReviewedBy: admin.id,
-    });
-
-    await this.createAuditLog(
-      admin.id,
-      `women_led_${decision}`,
-      'provider',
-      providerId,
-      { womenLedStatus: oldStatus },
-      { womenLedStatus: decision },
-    );
-
-    // Tell the owner (there was no notification for this before).
-    this.notificationDispatch.sendToUser(
-      provider.userId,
-      'provider_status',
-      decision === 'approved' ? 'Women-led badge approved' : 'Women-led request not approved',
-      decision === 'approved'
-        ? `${provider.brandName} now shows the women-led badge and gets more free lead unlocks every month.`
-        : `${provider.brandName}'s women-led request wasn't approved. Contact us if you think this is a mistake.`,
-      { route: '/provider-details', params: { id: providerId } },
-      undefined,
-      undefined,
-      'provider',
-    ).catch(() => {});
-    if (decision === 'approved') {
-      const [q] = await this.dataSource
-        .query<{ value: string }[]>(`SELECT value FROM system_settings WHERE key = 'women_led_free_leads_per_month'`)
-        .catch(() => [] as { value: string }[]);
-      void this.automations.schedule('women_led_approved', {
-        dedupeKey: `women_led_approved:${providerId}`,
-        providerId,
-        context: { freeLeads: parseInt(q?.value ?? '', 10) || 8 },
-      });
-    }
-
-    return { id: providerId, womenLedStatus: decision, isWomenLed: decision === 'approved' };
+    return { id: providerId, womenLedStatus: provider?.womenLedStatus, isWomenLed: provider?.isWomenLed };
   }
 
   async getWomenLedAnalytics(admin: any) {

@@ -7,6 +7,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { AutomationsService } from '../automations/automations.service';
+import { WomenLedService } from '../women-led/women-led.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, ILike, In } from 'typeorm';
 import { BADGE_KEYS, badgeRank } from '../badges/badge-catalog';
@@ -58,6 +59,7 @@ export class ProvidersService {
     private otpService: OtpService,
     private websiteMetaService: WebsiteMetaService,
     private readonly automations: AutomationsService,
+    private readonly womenLed: WomenLedService,
   ) {}
 
   async sendProviderOtp(mobileNumber: string) {
@@ -164,15 +166,31 @@ export class ProvidersService {
 
     // Featured is an admin decision, and women-led waits for review — same
     // rules as becomeProvider.
-    const { latitude, longitude, isFeatured: _featured, ...rest } = createProviderDto;
+    const {
+      latitude,
+      longitude,
+      isFeatured: _featured,
+      isWomenLed: askedWomenLed,
+      womenLedName,
+      womenLedRole,
+      ...rest
+    } = createProviderDto;
     const provider = this.providerRepo.create({
       ...rest,
       userId,
-      womenLedStatus: rest.isWomenLed ? 'pending' : 'none',
+      // The badge waits for the team: a request is made below.
+      isWomenLed: false,
+      womenLedStatus: 'none',
       latitude: latitude ? parseFloat(latitude) : null,
       longitude: longitude ? parseFloat(longitude) : null,
     });
     const saved = await this.providerRepo.save(provider);
+    if (askedWomenLed === true) {
+      await this.womenLed.requestFromOnboarding(saved.id, userId, {
+        womanName: womenLedName,
+        role: womenLedRole,
+      });
+    }
     return this.providerRepo.findOne({ where: { id: saved.id }, relations: ['user'] });
   }
 
@@ -266,17 +284,20 @@ export class ProvidersService {
     );
 
     let result: { provider: Provider; verification: Verification | null; products: Product[] };
+    let declaredWomenLed = false;
     try {
       result = await this.dataSource.transaction(async (manager) => {
         // isFeatured is dropped: Featured is an admin decision, never self-set.
-        const { latitude, longitude, isFeatured: _featured, file: _file, bannerImage: _bi, profileImage: _pi, productImages: _pImgs, bannerImageUrl: _biu, profilePhotoUrl: _ppu, ...cleanData } = providerData as any;
-        const declaredWomenLed = providerData.isWomenLed != null ? providerData.isWomenLed : user.gender === 'female';
+        const { latitude, longitude, isFeatured: _featured, file: _file, bannerImage: _bi, profileImage: _pi, productImages: _pImgs, bannerImageUrl: _biu, profilePhotoUrl: _ppu, womenLedName: _wln, womenLedRole: _wlr, ...cleanData } = providerData as any;
+        // Only a ticked box asks for the badge (no guessing from gender); the
+        // team checks it before it shows (request made after the transaction).
+        declaredWomenLed = providerData.isWomenLed === true;
         const provider = manager.create(Provider, {
           ...cleanData,
           userId,
           status: 'unverified',
-          isWomenLed: declaredWomenLed,
-          womenLedStatus: declaredWomenLed ? 'pending' : 'none',
+          isWomenLed: false,
+          womenLedStatus: 'none',
           latitude: latitude ? parseFloat(latitude) : null,
           longitude: longitude ? parseFloat(longitude) : null,
           bannerImageUrl: bannerUrl || null,
@@ -366,6 +387,20 @@ export class ProvidersService {
 
     // The draft has done its job.
     await this.draftRepo.delete({ userId }).catch(() => undefined);
+
+    // Ticked "women-led": the team checks it like any request.
+    if (declaredWomenLed) {
+      await this.womenLed
+        .requestFromOnboarding(result.provider.id, userId, {
+          womanName: becomeProviderDto.womenLedName,
+          role: becomeProviderDto.womenLedRole,
+        })
+        .catch((err: Error) =>
+          this.logger.warn(
+            `Women-led request not made for ${result.provider.id}: ${err.message}`,
+          ),
+        );
+    }
 
     // Listed without a logo: a generated brand mark until they upload one.
     if (!result.provider.profilePhotoUrl) this.brandMarks.enqueue([result.provider.id]);
@@ -635,6 +670,8 @@ export class ProvidersService {
       delete updateProviderDto.isFeatured;
       delete updateProviderDto.userId;
     }
+    // Women-Led changes only through its own requests (WomenLedService).
+    delete updateProviderDto.isWomenLed;
 
     // Content moderation: check brand name and description
     this.checkProviderContent(updateProviderDto.brandName, updateProviderDto.description);

@@ -10,6 +10,7 @@ import { WhatsAppConsentEvent } from '../entities/whatsapp-consent-event.entity'
 import { MessagingAutomation } from '../entities/messaging-automation.entity';
 import { AutomationJob } from '../entities/automation-job.entity';
 import { GoLink } from '../entities/go-link.entity';
+import { WomenLedRequest } from '../entities/women-led-request.entity';
 import { ReviewIntent } from '../entities/review-intent.entity';
 import { LegalDocument } from '../entities/legal-document.entity';
 import { LegalDocumentVersion } from '../entities/legal-document-version.entity';
@@ -128,6 +129,7 @@ export const ALL_ENTITIES = [
   MessagingAutomation,
   AutomationJob,
   GoLink,
+  WomenLedRequest,
   ReviewIntent,
   LegalDocument,
   LegalDocumentVersion,

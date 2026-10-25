@@ -27,6 +27,7 @@ import { WhatsAppInboxMediaService } from './whatsapp-inbox-media.service';
 import { WhatsAppConsentService } from './whatsapp-consent.service';
 import { ModuleRef } from '@nestjs/core';
 import { GoLinksService } from '../go-links/go-links.service';
+import { WomenLedService } from '../women-led/women-led.service';
 import {
   CONSENT_NO_REPLIES,
   CONSENT_YES_REPLIES,
@@ -532,6 +533,27 @@ export class WhatsAppWebhookService {
         contact,
         CONSENT_YES_REPLIES.includes(word),
       );
+      return;
+    }
+
+    // "Yes, it's women-led" (women-led badge template): a request for the team.
+    if (/^YES,? IT.S WOMEN.LED$/.test(word) && contact.providerId) {
+      try {
+        const womenLed = this.moduleRef.get(WomenLedService, { strict: false });
+        const outcome = await womenLed.requestFromWhatsApp(contact.providerId);
+        const reply: Record<string, string> = {
+          requested:
+            'Shukran! Our team will check the details and add the Women-Led badge to your shop. You can follow it in the Tijarah app under My business → Details.',
+          already_pending:
+            'Shukran! Your Women-Led request is already with our team. You can follow it in the app under My business → Details.',
+          already_approved: 'Your shop already shows the Women-Led badge.',
+        };
+        if (reply[outcome]) await this.autoReply(contact, reply[outcome]);
+      } catch (err) {
+        this.logger.warn(
+          `Women-led reply not handled: ${(err as Error).message}`,
+        );
+      }
       return;
     }
 
