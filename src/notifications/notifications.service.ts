@@ -33,27 +33,22 @@ export class NotificationsService {
   // ──────────────────────────────────────────────
 
   async registerDevice(userId: string, dto: RegisterDeviceDto): Promise<DeviceToken> {
-    // Upsert: if this token exists for another user, reassign it
-    const existing = await this.deviceTokenRepo.findOneBy({ token: dto.token });
-
-    if (existing) {
-      existing.userId = userId;
-      existing.platform = dto.platform;
-      existing.deviceInfo = dto.deviceInfo || existing.deviceInfo;
-      existing.isActive = true;
-      existing.lastUsedAt = new Date();
-      return this.deviceTokenRepo.save(existing);
-    }
-
-    const deviceToken = this.deviceTokenRepo.create({
-      userId,
-      token: dto.token,
-      platform: dto.platform,
-      deviceInfo: dto.deviceInfo || null,
-      isActive: true,
-      lastUsedAt: new Date(),
-    });
-    return this.deviceTokenRepo.save(deviceToken);
+    // One atomic insert-or-update on the token: the app can register the same
+    // token twice at once (start-up and sign-in), and a find-then-insert let
+    // the second request hit the unique index (500). A token another account
+    // used on this phone moves to whoever is signed in now.
+    await this.deviceTokenRepo.upsert(
+      {
+        userId,
+        token: dto.token,
+        platform: dto.platform,
+        ...(dto.deviceInfo ? { deviceInfo: dto.deviceInfo } : {}),
+        isActive: true,
+        lastUsedAt: new Date(),
+      },
+      { conflictPaths: ['token'], skipUpdateIfNoValuesChanged: false },
+    );
+    return this.deviceTokenRepo.findOneByOrFail({ token: dto.token });
   }
 
   async unregisterDevice(userId: string, token: string): Promise<void> {
