@@ -7,6 +7,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { AuditLog, Product, Provider } from '../entities';
+import { AutomationsService } from '../automations/automations.service';
 import {
   businessSlugProblem,
   normalizeSlug,
@@ -50,6 +51,7 @@ export class SlugsService {
     @InjectRepository(AuditLog)
     private readonly auditLogs: Repository<AuditLog>,
     private readonly dataSource: DataSource,
+    private readonly automations: AutomationsService,
   ) {}
 
   private async redirectTarget(
@@ -290,6 +292,11 @@ export class SlugsService {
       }
       throw err;
     }
+    // WhatsApp the owner their new link (when switched on; skipped if they
+    // just changed it themselves in the app).
+    void this.automations
+      .onLinkChanged(providerId, provider.slug, result.slug)
+      .catch(() => {});
     if (adminId) {
       await this.auditLogs.save(
         this.auditLogs.create({

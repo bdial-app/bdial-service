@@ -255,7 +255,7 @@ const BASE_TEMPLATES: StarterTemplate[] = [
       {
         type: 'BUTTONS',
         buttons: [
-          { type: 'QUICK_REPLY', text: 'Yes, send me customer alerts' },
+          { type: 'QUICK_REPLY', text: 'Yes, send me alerts' },
           { type: 'QUICK_REPLY', text: 'Not interested' },
         ],
       },
@@ -302,7 +302,7 @@ function welcomeButtons(): WhatsAppTemplateComponent {
         url: LINK_URL,
         example: [LINK_EXAMPLE],
       },
-      { type: 'QUICK_REPLY', text: 'Yes, send me customer alerts' },
+      { type: 'QUICK_REPLY', text: 'Yes, send me alerts' },
       { type: 'QUICK_REPLY', text: 'Not interested' },
     ],
   };
@@ -829,134 +829,6 @@ const OWNER_UTILITY_TEMPLATES: StarterTemplate[] = [
     variables: [ownerVar(1), brandAt(2), pageLinkAt(3)],
   },
   {
-    name: 'tijarah_listing_created_for_you',
-    language: 'en',
-    category: 'utility',
-    description:
-      'Event: an admin or a bulk import created a listing for this owner. "Not mine" lands in the inbox.',
-    components: [
-      body(
-        'Salaam {{1}},\na business listing for {{2}} has been created on Tijarah, the business app of our Dawoodi Bohra community. Its page is at {{3}}\n\nYou can check and edit the details from the app. If this is not your business, reply Not mine.',
-        'Huzefa',
-        'Burhani Sweets',
-        'https://www.tijarahapp.in/business/burhani-sweets/',
-      ),
-      FOOTER,
-      {
-        type: 'BUTTONS',
-        buttons: [
-          {
-            type: 'URL',
-            text: 'Check my listing',
-            url: LINK_URL,
-            example: [LINK_EXAMPLE],
-          },
-          { type: 'QUICK_REPLY', text: 'Not mine' },
-        ],
-      },
-    ],
-    variables: [ownerVar(1), brandAt(2), pageLinkAt(3)],
-  },
-  {
-    name: 'tijarah_link_changed',
-    language: 'en',
-    category: 'utility',
-    description:
-      "Event: the business's link (slug) was changed by the owner or an admin. {{4}} = the old link.",
-    components: [
-      body(
-        'Salaam {{1}},\nthe web address of {{2}} on Tijarah is now {{3}}\n\nYour old link, {{4}}, still opens your page, so links you have already shared keep working.',
-        'Huzefa',
-        'Burhani Sweets',
-        'https://www.tijarahapp.in/business/burhani-sweets-pune/',
-        'https://www.tijarahapp.in/business/burhani-sweets/',
-      ),
-      FOOTER,
-      linkButton('Open my page'),
-    ],
-    variables: [
-      ownerVar(1),
-      brandAt(2),
-      pageLinkAt(3),
-      v(
-        4,
-        'Old link',
-        'custom',
-        'https://www.tijarahapp.in/business/burhani-sweets/',
-      ),
-    ],
-  },
-  {
-    name: 'tijarah_details_updated',
-    language: 'en',
-    category: 'utility',
-    description:
-      'Event: the listing was edited by someone other than the owner (e.g. an admin). {{2}} = what changed, {{4}} = when.',
-    components: [
-      body(
-        'Salaam {{1}},\nthe {{2}} of {{3}} on Tijarah was updated on {{4}}. If you did not ask for this change, reply to this message and our team will help.',
-        'Huzefa',
-        'opening hours',
-        'Burhani Sweets',
-        '24 Oct',
-      ),
-      FOOTER,
-      linkButton('View my listing'),
-    ],
-    variables: [
-      ownerVar(1),
-      v(2, 'What changed', 'custom', 'opening hours'),
-      brandAt(3),
-      v(4, 'Date', 'custom', '24 Oct'),
-    ],
-  },
-  {
-    name: 'tijarah_photo_removed',
-    language: 'en',
-    category: 'utility',
-    description:
-      'Event: a photo was removed in Photo Moderation. {{3}} = the reason.',
-    components: [
-      body(
-        'Salaam {{1}},\na photo was removed from {{2}} on Tijarah because {{3}}. You can upload a replacement from the app at any time.',
-        'Huzefa',
-        'Burhani Sweets',
-        'it was blurry',
-      ),
-      FOOTER,
-      linkButton('Add a photo'),
-    ],
-    variables: [
-      ownerVar(1),
-      brandAt(2),
-      v(3, 'Reason', 'custom', 'it was blurry'),
-    ],
-  },
-  {
-    name: 'tijarah_item_hidden',
-    language: 'en',
-    category: 'utility',
-    description:
-      'Event: an admin hid one of their products or services. {{2}} = the item, {{4}} = the reason.',
-    components: [
-      body(
-        'Salaam {{1}},\nthe item "{{2}}" from {{3}} is hidden from customers on Tijarah because {{4}}. You can edit it in the app to show it again.',
-        'Huzefa',
-        'Kaju Katli 1 kg',
-        'Burhani Sweets',
-        'the price was missing',
-      ),
-      FOOTER,
-      linkButton('Edit the item'),
-    ],
-    variables: [
-      ownerVar(1),
-      v(2, 'Item', 'custom', 'Kaju Katli 1 kg'),
-      brandAt(3),
-      v(4, 'Reason', 'custom', 'the price was missing'),
-    ],
-  },
-  {
     name: 'tijarah_review_link',
     language: 'en',
     category: 'utility',
@@ -1010,28 +882,6 @@ const OWNER_UTILITY_TEMPLATES: StarterTemplate[] = [
       ),
     ],
   },
-  {
-    name: 'tijarah_verification_received',
-    language: 'en',
-    category: 'utility',
-    description:
-      'Event: the owner submitted verification documents. {{3}} = how long review takes.',
-    components: [
-      body(
-        'Salaam {{1}},\nwe have received the verification documents for {{2}}. Our team reviews them within {{3}}, and you will get a message as soon as it is done.',
-        'Huzefa',
-        'Burhani Sweets',
-        '2 working days',
-      ),
-      FOOTER,
-      linkButton('Check status'),
-    ],
-    variables: [
-      ownerVar(1),
-      brandAt(2),
-      v(3, 'Review time', 'custom', '2 working days'),
-    ],
-  },
 ];
 
 /**
@@ -1074,33 +924,6 @@ const CUSTOMER_UTILITY_TEMPLATES: StarterTemplate[] = [
     ],
   },
   {
-    name: 'tijarah_review_posted',
-    language: 'en',
-    category: 'utility',
-    description:
-      "Event: a customer's review was published. {{3}} = the business page link.",
-    components: [
-      body(
-        'Salaam {{1}},\nyour review of {{2}} is now published on Tijarah. You can see it, or edit it, on their page, {{3}}, at any time.',
-        'Sakina',
-        'Burhani Sweets',
-        'https://www.tijarahapp.in/business/burhani-sweets/',
-      ),
-      FOOTER,
-      linkButton('View business'),
-    ],
-    variables: [
-      customerVar,
-      v(2, 'Business name', 'custom', 'Burhani Sweets'),
-      v(
-        3,
-        'Business page link',
-        'custom',
-        'https://www.tijarahapp.in/business/burhani-sweets/',
-      ),
-    ],
-  },
-  {
     name: 'tijarah_saved_business',
     language: 'en',
     category: 'utility',
@@ -1125,69 +948,48 @@ const CUSTOMER_UTILITY_TEMPLATES: StarterTemplate[] = [
     ],
   },
   {
-    name: 'tijarah_saved_business_update',
-    language: 'en',
-    category: 'utility',
-    description:
-      'Event: a business the customer saved changed its hours, phone or location. {{3}} = what changed, {{4}} = the new value.',
-    components: [
-      body(
-        'Salaam {{1}},\n{{2}}, a business you saved on Tijarah, has updated its {{3}}. The new details: {{4}}. Open it in the app for directions or to contact them.',
-        'Sakina',
-        'Burhani Sweets',
-        'opening hours',
-        '9 AM to 9 PM',
-      ),
-      FOOTER,
-      linkButton('View business'),
-    ],
-    variables: [
-      customerVar,
-      v(2, 'Business name', 'custom', 'Burhani Sweets'),
-      v(3, 'What changed', 'custom', 'opening hours'),
-      v(4, 'New details', 'custom', '9 AM to 9 PM'),
-    ],
-  },
-  {
+    // A security notice, not a welcome: Meta files "your account is ready"
+    // with an app link as onboarding (marketing) and rejected it as
+    // INCORRECT_CATEGORY. No link, no selling: the sign-up and a way to report it.
     name: 'tijarah_account_ready',
     language: 'en',
     category: 'utility',
     description:
-      'Event: a customer signed up. {{2}} = last digits of their number. A "not me" reply lands in the inbox.',
+      'Event: a customer signed up. Security notice: {{2}} = last digits of their number, {{3}} = when. "This wasn\'t me" lands in the inbox.',
     components: [
       body(
-        'Salaam {{1}},\nyour Tijarah account is ready. You signed up with the number ending {{2}}. If this was not you, reply to this message and we will look into it.',
+        'Salaam {{1}},\na Tijarah account was created with the mobile number ending {{2}} on {{3}}.\n\nIf this was not you, tap "This wasn\'t me" and our team will secure the account.',
         'Sakina',
         '4885',
+        '24 Oct, 6:40 PM',
       ),
-      FOOTER,
+      { type: 'FOOTER', text: 'Tijarah account security' },
       {
         type: 'BUTTONS',
-        buttons: [
-          {
-            type: 'URL',
-            text: 'Open Tijarah',
-            url: LINK_URL,
-            example: [LINK_EXAMPLE],
-          },
-        ],
+        buttons: [{ type: 'QUICK_REPLY', text: "This wasn't me" }],
       },
     ],
-    variables: [customerVar, v(2, 'Number ending', 'custom', '4885')],
+    variables: [
+      customerVar,
+      v(2, 'Number ending', 'custom', '4885'),
+      v(3, 'When', 'custom', '24 Oct, 6:40 PM'),
+    ],
   },
   {
+    // A thank-you for sharing the app is promotional to Meta whatever the
+    // wording: filed as marketing (with a way out), not rejected as utility.
     name: 'tijarah_invite_joined',
     language: 'en',
-    category: 'utility',
+    category: 'marketing',
     description:
       'Event: someone joined Tijarah through this person’s invite. {{2}} = who joined.',
     components: [
       body(
-        'Salaam {{1}},\n{{2}} joined Tijarah using your invite. Thank you for sharing the app with the community.',
+        'Salaam {{1}},\n{{2}} joined Tijarah using your invite. Shukran for sharing the app with the community.',
         'Sakina',
         'Fatema',
       ),
-      FOOTER,
+      MARKETING_FOOTER,
       {
         type: 'BUTTONS',
         buttons: [
@@ -1197,6 +999,7 @@ const CUSTOMER_UTILITY_TEMPLATES: StarterTemplate[] = [
             url: LINK_URL,
             example: [LINK_EXAMPLE],
           },
+          NOT_INTERESTED,
         ],
       },
     ],
@@ -1272,7 +1075,6 @@ export const LINK_TARGETS: Record<string, string> = {
   tijarah_review_posted: BUSINESS,
   tijarah_saved_business: BUSINESS,
   tijarah_saved_business_update: BUSINESS,
-  tijarah_account_ready: shopper('/'),
   tijarah_invite_joined: shopper('/'),
 };
 

@@ -100,6 +100,14 @@ export class ReviewsService {
         stars: dto.starRating,
         text: dto.reviewText,
       });
+      // And the customer: their review is live (if they've left the app).
+      void this.automations
+        .onReviewPublished({
+          reviewId: saved.id,
+          customerUserId: userId,
+          providerId: provider.id,
+        })
+        .catch(() => {});
 
       // Written from the owner's review link: tell them it's working.
       if (dto.source === 'link') {

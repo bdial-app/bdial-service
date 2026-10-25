@@ -14,6 +14,8 @@ import { WhatsAppInboxService } from '../whatsapp/whatsapp-inbox.service';
 import { WhatsAppSettingsService } from '../whatsapp/whatsapp-settings.service';
 import { MetaCloudApiService } from '../whatsapp/meta-cloud-api.service';
 import { toE164 } from '../whatsapp/whatsapp-phone.util';
+import { isAppLinkUrl } from '../whatsapp/whatsapp-variable.service';
+import { appLinkOrigin } from '../common/app-links';
 import {
   AUTOMATIONS,
   AUTOMATION_BY_KEY,
@@ -102,6 +104,105 @@ function param(v: unknown, max = 120): string {
       : '';
   const s = raw.replace(/\s+/g, ' ').trim();
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+/** How many distinct {{n}} blanks the template's body has. */
+function bodyBlanks(t: WhatsAppTemplate): number {
+  const body = t.components.find((c) => c.type === 'BODY')?.text ?? '';
+  return new Set(body.match(/\{\{\s*\d+\s*\}\}/g) ?? []).size;
+}
+
+/** A business's public page on the website. */
+const businessPageLink = (slug: string) =>
+  `${appLinkOrigin()}/business/${slug}/`;
+
+/** Today in India, for "once a day" dedupe keys. */
+function istDay(): string {
+  return new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 10);
+}
+const istShortDate = () =>
+  new Date().toLocaleDateString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    timeZone: 'Asia/Kolkata',
+  });
+
+/** The listing fields an admin changed, in words ("opening hours and address"). */
+const CHANGE_WORDS: Array<[string[], string]> = [
+  [['brandName'], 'name'],
+  [['description'], 'description'],
+  [['openTime', 'closeTime'], 'opening hours'],
+  [['city', 'area', 'pincode', 'address', 'latitude', 'longitude'], 'address'],
+  [['whatsappNumber'], 'WhatsApp number'],
+  [
+    ['websiteUrl', 'instagramHandle', 'facebookHandle', 'youtubeHandle'],
+    'website and social links',
+  ],
+  [['isAvailable'], 'availability'],
+];
+export function describeChanges(keys: string[]): string | null {
+  const words = CHANGE_WORDS.filter(([fields]) =>
+    fields.some((f) => keys.includes(f)),
+  ).map(([, w]) => w);
+  if (!words.length) return null;
+  return words.length === 1
+    ? words[0]
+    : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
+}
+
+/** What a customer who saved the business needs to know, if anything. */
+export function savedBusinessChange(
+  before: Partial<Provider>,
+  after: Partial<Provider>,
+): { what: string; newDetails: string } | null {
+  const asText = (v: unknown): string =>
+    v === null || v === undefined
+      ? ''
+      : typeof v === 'object'
+        ? JSON.stringify(v)
+        : String(v as string | number | boolean);
+  const changed = (k: keyof Provider) =>
+    after[k] !== undefined && asText(after[k]) !== asText(before[k]);
+  const parts: Array<{ what: string; value: string }> = [];
+  if (changed('openTime') || changed('closeTime')) {
+    const open = after.openTime ?? before.openTime;
+    const close = after.closeTime ?? before.closeTime;
+    if (open && close)
+      parts.push({
+        what: 'opening hours',
+        value: `${fmtTime(open)} to ${fmtTime(close)}`,
+      });
+  }
+  if (changed('contactNumber') || changed('whatsappNumber')) {
+    const n =
+      after.contactNumber ?? after.whatsappNumber ?? before.contactNumber;
+    if (n) parts.push({ what: 'phone number', value: String(n) });
+  }
+  if (changed('address') || changed('area') || changed('city')) {
+    const a = [
+      after.address ?? before.address,
+      after.area ?? before.area,
+      after.city ?? before.city,
+    ]
+      .filter(Boolean)
+      .join(', ');
+    if (a) parts.push({ what: 'address', value: a });
+  }
+  if (!parts.length) return null;
+  return {
+    what: parts.map((p) => p.what).join(' and '),
+    newDetails: parts.map((p) => p.value).join('; '),
+  };
+}
+
+/** "09:30" → "9:30 AM". */
+function fmtTime(t: string): string {
+  const m = /^(\d{1,2}):(\d{2})/.exec(t);
+  if (!m) return t;
+  const h = Number(m[1]);
+  const suffix = h >= 12 ? 'PM' : 'AM';
+  const h12 = h % 12 || 12;
+  return m[2] === '00' ? `${h12} ${suffix}` : `${h12}:${m[2]} ${suffix}`;
 }
 
 const maskPhone = (e164: string) =>
@@ -330,6 +431,142 @@ export class AutomationsService {
     });
   }
 
+  // ── Triggers for updates about a listing ─────────────────────────────────
+  // Each is fire-and-forget: a messaging problem never breaks the action.
+
+  /** An admin or a bulk import made a listing with this owner's number. */
+  async onListingCreated(providerId: string): Promise<void> {
+    const provider = await this.providerRepo.findOne({
+      where: { id: providerId },
+    });
+    if (!provider?.slug) return;
+    await this.schedule('listing_created_for_you', {
+      dedupeKey: `listing_created_for_you:${providerId}`,
+      providerId,
+      context: { pageLink: businessPageLink(provider.slug) },
+    });
+  }
+
+  /** The business's web address changed. */
+  async onLinkChanged(
+    providerId: string,
+    oldSlug: string,
+    newSlug: string,
+  ): Promise<void> {
+    await this.schedule('link_changed', {
+      dedupeKey: `link_changed:${providerId}:${newSlug}`,
+      providerId,
+      context: {
+        newLink: businessPageLink(newSlug),
+        oldLink: businessPageLink(oldSlug),
+      },
+    });
+  }
+
+  /** An admin changed the listing (not the owner): once a day per business. */
+  async onDetailsChangedByAdmin(
+    providerId: string,
+    changedKeys: string[],
+  ): Promise<void> {
+    const what = describeChanges(changedKeys);
+    if (!what) return;
+    await this.schedule('details_updated', {
+      dedupeKey: `details_updated:${providerId}:${istDay()}`,
+      providerId,
+      context: { what, when: istShortDate() },
+    });
+  }
+
+  /** Moderation removed one of the business's (or its products') photos. */
+  async onPhotoRemoved(providerId: string, reason?: string): Promise<void> {
+    await this.schedule('photo_removed', {
+      dedupeKey: `photo_removed:${providerId}:${istDay()}`,
+      providerId,
+      context: { reason: reason || 'it did not meet our photo guidelines' },
+    });
+  }
+
+  /** An admin hid a product or service. */
+  async onItemHidden(productId: string, reason?: string): Promise<void> {
+    const [row] = await this.dataSource.query<
+      { name: string; provider_id: string }[]
+    >(`SELECT name, provider_id FROM products WHERE id = $1`, [productId]);
+    if (!row) return;
+    await this.schedule('item_hidden', {
+      dedupeKey: `item_hidden:${productId}:${istDay()}`,
+      providerId: row.provider_id,
+      context: { itemName: row.name, reason: reason || 'our team reviewed it' },
+    });
+  }
+
+  /** The owner sent verification documents. */
+  async onVerificationSubmitted(userId: string): Promise<void> {
+    const provider = await this.providerRepo.findOne({ where: { userId } });
+    if (!provider) return;
+    await this.schedule('verification_received', {
+      dedupeKey: `verification_received:${provider.id}:${istDay()}`,
+      providerId: provider.id,
+      context: { reviewTime: '2 working days' },
+    });
+  }
+
+  /** A customer's review went live. */
+  async onReviewPublished(e: {
+    reviewId: string;
+    customerUserId: string;
+    providerId: string;
+  }): Promise<void> {
+    const provider = await this.providerRepo.findOne({
+      where: { id: e.providerId },
+    });
+    if (!provider?.slug) return;
+    await this.schedule('review_published', {
+      dedupeKey: `review_published:${e.reviewId}`,
+      userId: e.customerUserId,
+      providerId: provider.id,
+      context: {
+        businessId: provider.id,
+        businessName: provider.brandName,
+        businessLink: businessPageLink(provider.slug),
+      },
+    });
+  }
+
+  /**
+   * A business changed its hours, phone or address: tell the customers who
+   * saved it (once that day each), whoever made the change.
+   */
+  async onBusinessDetailsChanged(
+    providerId: string,
+    before: Partial<Provider>,
+    after: Partial<Provider>,
+  ): Promise<void> {
+    if (!(await this.isEnabled('saved_business_update'))) return;
+    const change = savedBusinessChange(before, after);
+    if (!change) return;
+    const provider = await this.providerRepo.findOne({
+      where: { id: providerId },
+    });
+    if (!provider || provider.deletedAt) return;
+    const savers = await this.dataSource.query<{ user_id: string }[]>(
+      `SELECT DISTINCT user_id FROM saved_items WHERE item_id = $1 AND item_type = 'provider' AND user_id <> $2`,
+      [providerId, provider.userId],
+    );
+    for (const s of savers.slice(0, 500)) {
+      await this.schedule('saved_business_update', {
+        dedupeKey: `saved_business_update:${providerId}:${s.user_id}:${istDay()}`,
+        userId: s.user_id,
+        providerId,
+        context: {
+          businessId: providerId,
+          businessName: provider.brandName,
+          what: change.what,
+          newDetails: change.newDetails,
+        },
+      });
+    }
+  }
+
   // ── Running ───────────────────────────────────────────────────────────────
 
   @Cron(CronExpression.EVERY_MINUTE)
@@ -442,6 +679,9 @@ export class AutomationsService {
       if (def.consent === 'opted_in' && contact.consent !== 'opted_in') {
         return { status: 'skipped', reason: 'not_agreed', phone };
       }
+      if (def.consent === 'not_opted_out' && contact.consent === 'opted_out') {
+        return { status: 'skipped', reason: 'opted_out', phone };
+      }
       if (def.consent === 'not_decided' && contact.consent !== 'unknown') {
         return {
           status: 'skipped',
@@ -457,6 +697,10 @@ export class AutomationsService {
     });
     if (!template || template.status !== 'approved') {
       return { status: 'skipped', reason: 'template_not_approved', phone };
+    }
+    if (bodyBlanks(template) !== def.template.vars.length) {
+      // Approved with a different set of blanks: Meta would refuse the send.
+      return { status: 'skipped', reason: 'template_differs', phone };
     }
     if (template.category !== def.template.category) {
       // Meta re-filed it (e.g. utility → marketing): stop rather than pay more.
@@ -503,7 +747,16 @@ export class AutomationsService {
     });
     const message = await this.inbox.sendDirect(
       contact,
-      { template, variables, buttonValues: { '0': link.code } },
+      {
+        template,
+        variables,
+        buttonValues: this.buttonValuesFor(
+          template,
+          link.code,
+          job,
+          who.providerId,
+        ),
+      },
       who.providerId,
     );
     if (message.status === 'failed') {
@@ -530,6 +783,30 @@ export class AutomationsService {
       cost: Number(rates?.[def.template.category] ?? 0),
       linkCode: link.code,
     };
+  }
+
+  /**
+   * What fills the template's link button: a smart link (…/go?c={{1}}) takes
+   * the code; an older /b/{{1}} link takes the business id; a fixed link
+   * takes nothing.
+   */
+  private buttonValuesFor(
+    template: WhatsAppTemplate,
+    code: string,
+    job: AutomationJob,
+    providerId: string | null,
+  ): Record<string, string> {
+    const buttons =
+      template.components.find((c) => c.type === 'BUTTONS')?.buttons ?? [];
+    const out: Record<string, string> = {};
+    buttons.forEach((b, i) => {
+      if (b.type !== 'URL' || !/\{\{1\}\}/.test(b.url ?? '')) return;
+      if (isAppLinkUrl(b.url)) out[String(i)] = code;
+      else
+        out[String(i)] =
+          (job.context?.businessId as string | undefined) ?? providerId ?? '';
+    });
+    return out;
   }
 
   /** The owner (business number) or the customer (their mobile). */
@@ -581,7 +858,9 @@ export class AutomationsService {
       userId: user?.id ?? job.userId,
       providerId: job.providerId,
       lastSeenAt: user?.lastSeenAt ?? null,
-      extra: {},
+      extra: {
+        customerFirstName: (user?.name ?? '').trim().split(/\s+/)[0] || 'there',
+      },
     };
   }
 
@@ -733,6 +1012,24 @@ export class AutomationsService {
         return owner('/?tab=listings&subTab=plans');
       case 'boost_ending':
         return owner('/?tab=listings&subTab=boost');
+      case 'listing_created_for_you':
+      case 'details_updated':
+        return owner('/?tab=listings&subTab=details');
+      case 'photo_removed':
+        return owner('/?tab=listings&subTab=photos');
+      case 'item_hidden':
+        return owner('/?tab=listings&subTab=products');
+      case 'verification_received':
+        return owner('/provider-onboarding/verify');
+      case 'review_published':
+      case 'saved_business_update': {
+        const businessId = job.context?.businessId as string | undefined;
+        return businessId
+          ? `/provider-details?id=${businessId}&mode=customer`
+          : '/?mode=customer';
+      }
+      case 'link_changed':
+        return owner(providerId ? `/provider-details?id=${providerId}` : '/');
       case 'women_led_approved':
       case 'shop_live':
       default:
@@ -797,6 +1094,15 @@ export class AutomationsService {
         templateBody: a.template.body,
         templateStatus: t ? t.status : 'missing',
         templateCategory: t?.category ?? null,
+        // An existing template with a different number of blanks can't be sent.
+        templateMatches: t ? bodyBlanks(t) === a.template.vars.length : true,
+        section:
+          a.section ??
+          (a.template.category === 'marketing'
+            ? 'asking'
+            : a.audience === 'customer'
+              ? 'customers'
+              : 'alerts'),
         enabled: !!row?.enabled,
         monthlyBudgetInr: row?.monthlyBudgetInr
           ? Number(row.monthlyBudgetInr)

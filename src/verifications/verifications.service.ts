@@ -3,12 +3,14 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Verification, Provider } from '../entities';
 import { CreateVerificationDto } from './dto/verification.dto';
+import { AutomationsService } from '../automations/automations.service';
 
 @Injectable()
 export class VerificationsService {
   constructor(
     @InjectRepository(Verification) private verRepo: Repository<Verification>,
     @InjectRepository(Provider) private providerRepo: Repository<Provider>,
+    private readonly automations: AutomationsService,
   ) {}
 
   async submit(userId: string, dto: CreateVerificationDto) {
@@ -21,7 +23,10 @@ export class VerificationsService {
       existing.ijamatDocUrl = dto.ijamatDocUrl ?? existing.ijamatDocUrl;
       existing.ijamatStatus = dto.ijamatDocUrl ? 'pending' : 'not_submitted';
       existing.status = 'in_review';
-      return this.verRepo.save(existing);
+      const saved = await this.verRepo.save(existing);
+      // WhatsApp "documents received" (when switched on).
+      void this.automations.onVerificationSubmitted(userId).catch(() => {});
+      return saved;
     }
 
     const verification = this.verRepo.create({
@@ -33,7 +38,9 @@ export class VerificationsService {
       ijamatStatus: dto.ijamatDocUrl ? 'pending' : 'not_submitted',
       status: 'in_review',
     });
-    return this.verRepo.save(verification);
+    const saved = await this.verRepo.save(verification);
+    void this.automations.onVerificationSubmitted(userId).catch(() => {});
+    return saved;
   }
 
   async getMyVerification(userId: string) {
