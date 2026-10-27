@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Logger, InternalServerErrorException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Not, Repository } from 'typeorm';
-import { Product, Provider, Review, Photo, ProviderCategory, ProviderOffer } from '../entities';
+import { Product, Provider, Review, Photo, ProviderCategory, ProviderOffer, SponsoredListing } from '../entities';
 import { CreateProductDto, UpdateProductDto } from './dto/product.dto';
 import { StorageService } from '../storage/storage.service';
 import { ContentSanitizerService } from '../common/content-sanitizer';
@@ -18,6 +18,7 @@ export class ProductsService {
     @InjectRepository(Photo) private photoRepo: Repository<Photo>,
     @InjectRepository(ProviderCategory) private providerCatRepo: Repository<ProviderCategory>,
     @InjectRepository(ProviderOffer) private offerRepo: Repository<ProviderOffer>,
+    @InjectRepository(SponsoredListing) private sponsorRepo: Repository<SponsoredListing>,
     private readonly storageService: StorageService,
     private readonly contentSanitizer: ContentSanitizerService,
   ) {}
@@ -160,7 +161,7 @@ export class ProductsService {
     const provider = product.provider;
 
     // Get provider photos, categories, review STATS (aggregated in SQL), and recent reviews
-    const [photos, providerCats, reviewStats, reviews, offers] = await Promise.all([
+    const [photos, providerCats, reviewStats, reviews, offers, activeSponsor] = await Promise.all([
       this.photoRepo.find({
         where: { providerId: provider.id },
         order: { displayOrder: 'ASC' },
@@ -193,6 +194,16 @@ export class ProductsService {
         .andWhere('o.ends_at > NOW()')
         .orderBy('o.ends_at', 'ASC')
         .getMany(),
+      // Same rule as the business page: a live, approved boost with budget left.
+      this.sponsorRepo
+        .createQueryBuilder('s')
+        .where('s.provider_id = :pid', { pid: provider.id })
+        .andWhere('s.is_active = true')
+        .andWhere('s.starts_at <= NOW()')
+        .andWhere('s.ends_at > NOW()')
+        .andWhere("(s.billing_mode = 'free' OR s.spent_amount < s.budget_amount)")
+        .andWhere("s.approval_status = 'approved'")
+        .getOne(),
     ]);
 
     // Related products: other active products from the same provider (hero first)
@@ -225,6 +236,7 @@ export class ProductsService {
         contactNumber: provider.contactNumber,
         isWomenLed: provider.isWomenLed,
         communityVerified: provider.communityVerified,
+        isSponsored: !!activeSponsor,
         photos: photos.map((p) => ({
           id: p.id,
           imageUrl: p.imageUrl,
