@@ -148,6 +148,9 @@ interface Lexicon {
   vocab: Vocabulary;
 }
 
+/** Rounds away float noise from SQL (0.9 * 0.8 = 0.7200000000000001) so equal matches tie. */
+const round3 = (n: number) => Math.round(n * 1000) / 1000;
+
 const EMPTY_LEXICON: Lexicon = {
   categories: [],
   childrenOf: new Map(),
@@ -155,10 +158,15 @@ const EMPTY_LEXICON: Lexicon = {
   vocab: { known: new Set(), targets: [] },
 };
 
-/** A candidate row with its relevance (match only) and score (relevance + quality). */
+/**
+ * A candidate row. `rel` is how well it matches (it decides the order);
+ * `quality` (rating, reviews, distance…) only orders equally good matches;
+ * `score` = rel + quality, reported as relevanceScore.
+ */
 interface Ranked {
   row: any;
   rel: number;
+  quality: number;
   score: number;
   sponsored: boolean;
 }
@@ -779,8 +787,10 @@ export class SearchService implements OnModuleInit {
   // ────────────────────────────────────────────────────────────
   // RANKING
   //
-  // relevance (how well it matches — dominant) + a small quality nudge
-  // (rating, reviews, verified, distance). Sponsored items are never sorted
+  // Relevance (how well it matches) decides the order; quality (rating,
+  // reviews, verified, distance) only orders results that match equally
+  // well — a 4.7★ IT shop must not pass marketing agencies on a
+  // "digital marketing" search. Sponsored items are never sorted
   // by money into unrelated results: a sponsor is pinned first only when it
   // matches the query and its targeting allows it.
   // ────────────────────────────────────────────────────────────
@@ -799,6 +809,7 @@ export class SearchService implements OnModuleInit {
   private bySponsorAuction = (a: Ranked, b: Ranked) =>
     (b.row.sponsor_priority ?? 0) - (a.row.sponsor_priority ?? 0) ||
     b.rel - a.rel ||
+    b.quality - a.quality ||
     parseFloat(b.row.cost_per_click ?? 0) - parseFloat(a.row.cost_per_click ?? 0);
 
   private sortRanked(list: Ranked[], sortBy: string, ratingOf: (r: any) => number | null) {
@@ -806,7 +817,7 @@ export class SearchService implements OnModuleInit {
     const dist = (x: Ranked) =>
       x.row.distance == null || x.row.geocode_precision === 'city' ? Infinity : parseFloat(x.row.distance);
     const cmp: Record<string, (a: Ranked, b: Ranked) => number> = {
-      relevance: (a, b) => b.score - a.score || dist(a) - dist(b),
+      relevance: (a, b) => b.rel - a.rel || b.quality - a.quality || dist(a) - dist(b),
       distance: (a, b) => statusRank(a) - statusRank(b) || dist(a) - dist(b) || b.score - a.score,
       rating: (a, b) =>
         statusRank(a) - statusRank(b) || (ratingOf(b.row) ?? -1) - (ratingOf(a.row) ?? -1) || b.score - a.score,
@@ -835,7 +846,7 @@ export class SearchService implements OnModuleInit {
         parseFloat(row.typo_score),
       );
       // Inside a category filter every listed business is relevant
-      const rel = textRel > 0 ? textRel : opts.categoryIds?.length ? 0.3 : 0;
+      const rel = round3(textRel > 0 ? textRel : opts.categoryIds?.length ? 0.3 : 0);
       if (rel <= 0) continue;
 
       const rating = row.avg_rating != null ? parseFloat(row.avg_rating) : 0;
@@ -848,7 +859,7 @@ export class SearchService implements OnModuleInit {
         (row.has_active_offer ? 0.01 : 0) +
         parseFloat(row.name_share ?? 0) * 0.05;
 
-      const ranked: Ranked = { row, rel, score: rel + quality, sponsored: false };
+      const ranked: Ranked = { row, rel, quality, score: rel + quality, sponsored: false };
       if (
         row.listing_id &&
         row.sponsor_geo_ok &&
@@ -881,7 +892,7 @@ export class SearchService implements OnModuleInit {
 
     for (const row of rows) {
       const nameScore = parseFloat(row.name_score);
-      const rel = Math.max(nameScore, parseFloat(row.body_score), parseFloat(row.cat_score));
+      const rel = round3(Math.max(nameScore, parseFloat(row.body_score), parseFloat(row.cat_score)));
       if (rel <= 0) continue;
 
       const rating = row.avg_rating != null ? parseFloat(row.avg_rating) : 0;
@@ -891,7 +902,7 @@ export class SearchService implements OnModuleInit {
         (row.provider_status === 'active' ? 0.01 : 0) +
         this.closeness(row.distance, opts.radius) * 0.03 +
         parseFloat(row.name_share ?? 0) * 0.05;
-      const ranked: Ranked = { row, rel, score: rel + quality, sponsored: false };
+      const ranked: Ranked = { row, rel, quality, score: rel + quality, sponsored: false };
       all.push(ranked);
 
       const productTargeted =
@@ -903,7 +914,9 @@ export class SearchService implements OnModuleInit {
         (productTargeted || this.targetingAllows(row.target_category_ids, relevantCategories, nameScore >= 0.75))
       ) {
         const best = bestSponsoredByProvider.get(row.provider_id);
-        if (!best || ranked.score > best.score) bestSponsoredByProvider.set(row.provider_id, ranked);
+        if (!best || ranked.rel > best.rel || (ranked.rel === best.rel && ranked.quality > best.quality)) {
+          bestSponsoredByProvider.set(row.provider_id, ranked);
+        }
       }
     }
 
