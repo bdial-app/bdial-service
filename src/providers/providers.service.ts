@@ -561,6 +561,7 @@ export class ProvidersService {
         .createQueryBuilder('o')
         .where('o.provider_id = :id', { id })
         .andWhere('o.is_active = true')
+        .andWhere("o.approval_status = 'approved'")
         .andWhere('o.starts_at <= NOW()')
         .andWhere('o.ends_at > NOW()')
         .orderBy('o.ends_at', 'ASC')

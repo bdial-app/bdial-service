@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Logger, InternalServerErrorException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Not, Repository } from 'typeorm';
-import { Product, Provider, Review, Photo, ProviderCategory } from '../entities';
+import { Product, Provider, Review, Photo, ProviderCategory, ProviderOffer } from '../entities';
 import { CreateProductDto, UpdateProductDto } from './dto/product.dto';
 import { StorageService } from '../storage/storage.service';
 import { ContentSanitizerService } from '../common/content-sanitizer';
@@ -17,6 +17,7 @@ export class ProductsService {
     @InjectRepository(Review) private reviewRepo: Repository<Review>,
     @InjectRepository(Photo) private photoRepo: Repository<Photo>,
     @InjectRepository(ProviderCategory) private providerCatRepo: Repository<ProviderCategory>,
+    @InjectRepository(ProviderOffer) private offerRepo: Repository<ProviderOffer>,
     private readonly storageService: StorageService,
     private readonly contentSanitizer: ContentSanitizerService,
   ) {}
@@ -159,7 +160,7 @@ export class ProductsService {
     const provider = product.provider;
 
     // Get provider photos, categories, review STATS (aggregated in SQL), and recent reviews
-    const [photos, providerCats, reviewStats, reviews] = await Promise.all([
+    const [photos, providerCats, reviewStats, reviews, offers] = await Promise.all([
       this.photoRepo.find({
         where: { providerId: provider.id },
         order: { displayOrder: 'ASC' },
@@ -182,6 +183,16 @@ export class ProductsService {
         order: { postedAt: 'DESC' },
         take: 10,
       }),
+      // The business's live, approved offers, so the item page can say a deal is on.
+      this.offerRepo
+        .createQueryBuilder('o')
+        .where('o.provider_id = :pid', { pid: provider.id })
+        .andWhere('o.is_active = true')
+        .andWhere("o.approval_status = 'approved'")
+        .andWhere('o.starts_at <= NOW()')
+        .andWhere('o.ends_at > NOW()')
+        .orderBy('o.ends_at', 'ASC')
+        .getMany(),
     ]);
 
     // Related products: other active products from the same provider (hero first)
@@ -226,6 +237,18 @@ export class ProductsService {
         })),
       },
       related,
+      activeOffers: offers.map((o) => ({
+        id: o.id,
+        providerId: o.providerId,
+        title: o.title,
+        description: o.description,
+        discountType: o.discountType,
+        discountValue: Number(o.discountValue),
+        minOrderAmount: o.minOrderAmount != null ? Number(o.minOrderAmount) : null,
+        maxDiscount: o.maxDiscount != null ? Number(o.maxDiscount) : null,
+        startsAt: o.startsAt,
+        endsAt: o.endsAt,
+      })),
       stats: {
         rating: Number(rating.toFixed(2)),
         reviewCount,
