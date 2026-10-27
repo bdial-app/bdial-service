@@ -42,6 +42,8 @@ export interface CatalogItem {
   views: number;
   distance: number | null;
   approximateLocation: boolean;
+  /** Set when a live boost placed it; taps are charged against this listing. */
+  sponsoredListingId?: string;
 }
 
 export interface CatalogShelf {
@@ -161,19 +163,37 @@ export class CatalogService {
       }
     }
 
-    // Each item appears on one shelf only; "for you" claims first.
+    // Paid placements are built per request so every serve is counted.
+    let sponsored: CatalogShelf | null = null;
+    try {
+      sponsored = await this.buildSponsoredShelf(type, dto.city, origin);
+    } catch (err) {
+      this.logger.warn(
+        `sponsored shelf failed: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+
+    // Each item appears on one shelf only; sponsors claim first, then "for you".
     const seen = new Set<string>();
-    const claim = (shelf: CatalogShelf | null): CatalogShelf | null => {
+    const claim = (
+      shelf: CatalogShelf | null,
+      min = MIN_SHELF,
+    ): CatalogShelf | null => {
       if (!shelf) return null;
       const items = shelf.items.filter((i) => !seen.has(i.id));
-      if (items.length < MIN_SHELF) return null;
+      if (items.length < min) return null;
       items.forEach((i) => seen.add(i.id));
       return { ...shelf, items };
     };
 
-    const shelves = [forYou, ...shared.shelves]
-      .map(claim)
-      .filter((s): s is CatalogShelf => s !== null);
+    // A sponsor pays for the slot, so even a single item gets its shelf.
+    const sponsoredShelf = claim(sponsored, 1);
+    const shelves = [
+      sponsoredShelf,
+      ...[forYou, ...shared.shelves].map((s) => claim(s)),
+    ].filter((s): s is CatalogShelf => s !== null);
+
+    if (sponsoredShelf) this.countSponsoredServes(sponsoredShelf.items);
 
     return {
       type,
@@ -348,6 +368,122 @@ export class CatalogService {
       seeAll: null,
       items: this.capPerSeller(items, SHELF_SIZE),
     };
+  }
+
+  /**
+   * Items from businesses with a live boost that reaches this customer: each
+   * sponsor's best two (photo, in the listing's target categories, then
+   * recommended), round-robin so every sponsor gets a front slot, auction
+   * order (priority, bid, then nearest) within a round.
+   */
+  private async buildSponsoredShelf(
+    type: ItemType,
+    city?: string,
+    origin?: { lat: number; lng: number },
+  ): Promise<CatalogShelf | null> {
+    if (!(await this.isSponsorshipsEnabled())) return null;
+
+    const cacheKey = `catalog:sponsored:${type}:${city?.toLowerCase() || ''}:${origin?.lat.toFixed(2) || ''}:${origin?.lng.toFixed(2) || ''}`;
+    let items = await this.cacheManager.get<CatalogItem[]>(cacheKey);
+    if (!items) {
+      items = await this.querySponsoredItems(type, city, origin);
+      await this.cacheManager.set(cacheKey, items, CatalogService.TTL_2MIN);
+    }
+    if (items.length === 0) return null;
+
+    return {
+      key: 'sponsored',
+      title: 'Sponsored',
+      subtitle:
+        type === 'service'
+          ? 'Services promoted by local businesses'
+          : 'Products promoted by local shops',
+      seeAll: null,
+      items,
+    };
+  }
+
+  private async querySponsoredItems(
+    type: ItemType,
+    city?: string,
+    origin?: { lat: number; lng: number },
+  ): Promise<CatalogItem[]> {
+    const params: unknown[] = [type, city?.trim() || null];
+    const distance = this.distanceSql(origin, params);
+    const inTarget = `(prod.category_id = ANY(sp.target_category_ids) OR prod.subcategory_id = ANY(sp.target_category_ids))`;
+
+    const rows: any[] = await this.dataSource.query(
+      `
+      WITH sponsor AS (
+        SELECT DISTINCT ON (sl.provider_id)
+          sl.provider_id, sl.id AS listing_id, sl.priority, sl.cost_per_click,
+          sl.target_category_ids, sl.target_cities, sl.target_radius
+        FROM sponsored_listings sl
+        WHERE sl.is_active = true
+          AND sl.starts_at <= NOW()
+          AND sl.ends_at >= NOW()
+          AND (sl.billing_mode = 'free' OR sl.spent_amount < sl.budget_amount)
+          AND sl.approval_status = 'approved'
+        ORDER BY sl.provider_id, sl.priority DESC, sl.cost_per_click DESC
+      ),
+      ranked AS (
+        SELECT ${CatalogService.ITEM_COLUMNS}, ${distance} AS distance,
+               sp.listing_id, sp.priority AS sponsor_priority, sp.cost_per_click AS sponsor_cpc,
+               ROW_NUMBER() OVER (
+                 PARTITION BY p.id
+                 ORDER BY (prod.photo_url IS NULL),
+                          (COALESCE(cardinality(sp.target_category_ids), 0) > 0 AND NOT COALESCE(${inTarget}, false)),
+                          ${CatalogService.RECOMMENDED_SCORE} DESC, prod.id
+               ) AS seller_rank
+          ${CatalogService.ITEM_FROM}
+          JOIN sponsor sp ON sp.provider_id = p.id
+         WHERE ${CatalogService.VISIBLE}
+           AND prod.product_type = $1
+           AND (COALESCE(cardinality(sp.target_cities), 0) = 0 OR $2::text IS NULL OR $2::text ILIKE ANY(sp.target_cities))
+           AND (sp.target_radius IS NULL OR ${origin ? `${distance} <= sp.target_radius` : 'true'})
+      )
+      SELECT * FROM ranked
+       WHERE seller_rank <= ${MAX_PER_SELLER}
+       ORDER BY seller_rank, sponsor_priority DESC, sponsor_cpc DESC, distance ASC NULLS LAST, id
+       LIMIT ${SHELF_SIZE}
+      `,
+      params,
+    );
+    return rows.map((r) => ({
+      ...this.mapItem(r),
+      sponsoredListingId: r.listing_id,
+    }));
+  }
+
+  /** Platform-wide sponsorships switch, cached 5 min. */
+  private async isSponsorshipsEnabled(): Promise<boolean> {
+    const cacheKey = 'setting:sponsorships_enabled';
+    let flag = await this.cacheManager.get<string>(cacheKey);
+    if (flag == null) {
+      const [row]: { value: string }[] = await this.dataSource.query(
+        `SELECT value FROM system_settings WHERE key = 'sponsorships_enabled'`,
+      );
+      flag = row?.value ?? 'false';
+      await this.cacheManager.set(cacheKey, flag, 5 * 60 * 1000);
+    }
+    return flag === 'true';
+  }
+
+  /**
+   * Count each served sponsor once. Views here are free; only taps (reported
+   * by the app through /explore/track) are charged.
+   */
+  private countSponsoredServes(items: CatalogItem[]): void {
+    const ids = [
+      ...new Set(items.map((i) => i.sponsoredListingId).filter(Boolean)),
+    ];
+    if (ids.length === 0) return;
+    this.dataSource
+      .query(
+        `UPDATE sponsored_listings SET impressions = impressions + 1 WHERE id = ANY($1::uuid[])`,
+        [ids],
+      )
+      .catch(() => {});
   }
 
   // ─── Browse grid ────────────────────────────────────────────────────
