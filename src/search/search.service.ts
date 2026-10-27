@@ -15,6 +15,15 @@ import { SearchSynonym } from '../entities/search-synonym.entity';
 import { CategoryPersonalizationService } from '../users/category-personalization.service';
 import { SearchQueryDto } from './dto/search-query.dto';
 import { SuggestionsQueryDto } from './dto/suggestions-query.dto';
+import {
+  ParsedQuery,
+  Vocabulary,
+  correctQuery,
+  matchesAll,
+  normalizeQuery,
+  parseQuery,
+  vocabularyWords,
+} from './search-query';
 
 // ────────────────────────────────────────────────────────────
 // Response interfaces
@@ -29,6 +38,8 @@ export interface SearchSuggestion {
   icon?: string;
   iconColor?: string;
   isSponsored?: boolean;
+  /** Present on sponsored rows — the client reports taps against it. */
+  sponsoredListingId?: string;
   hasActiveOffer?: boolean;
   productType?: 'product' | 'service';
 }
@@ -45,6 +56,7 @@ export interface ProviderSearchResult {
   isWomenLed: boolean;
   isFeatured: boolean;
   distance: number | null;
+  approximateLocation?: boolean;
   avgRating: number | null;
   reviewCount: number;
   categories: string | null;
@@ -70,7 +82,10 @@ export interface ProductSearchResult {
   providerCity: string;
   providerArea: string | null;
   distance: number | null;
+  approximateLocation?: boolean;
   relevanceScore: number;
+  isSponsored?: boolean;
+  sponsoredListingId?: string;
 }
 
 export interface CategorySearchResult {
@@ -79,6 +94,7 @@ export interface CategorySearchResult {
   slug: string;
   description: string | null;
   icon: string | null;
+  iconColor?: string | null;
   imageUrl: string | null;
   parentId: string | null;
   providerCount: number;
@@ -100,8 +116,51 @@ export interface SearchResponse {
   providers: { data: ProviderSearchResult[]; total: number };
   products: { data: ProductSearchResult[]; total: number };
   categories: { data: CategorySearchResult[]; total: number };
-  meta: { query: string; tookMs: number; totalResults: number; didYouMean?: string };
+  /** `correctedQuery` is set when a misspelling was fixed ("margetting" → "marketing"). */
+  meta: { query: string; tookMs: number; totalResults: number; didYouMean?: string; correctedQuery?: string };
   fallback?: SearchFallback;
+}
+
+// ────────────────────────────────────────────────────────────
+// Internal types
+// ────────────────────────────────────────────────────────────
+
+interface LexiconCategory {
+  id: string;
+  parentId: string | null;
+  name: string;
+  slug: string;
+  description: string | null;
+  icon: string | null;
+  iconColor: string | null;
+  imageUrl: string | null;
+  keywords: string[];
+  normName: string;
+  normKeywords: string[];
+  /** Businesses in this category or its sub-categories. */
+  providerCount: number;
+}
+
+interface Lexicon {
+  categories: LexiconCategory[];
+  childrenOf: Map<string, string[]>;
+  synonyms: Map<string, string[]>;
+  vocab: Vocabulary;
+}
+
+const EMPTY_LEXICON: Lexicon = {
+  categories: [],
+  childrenOf: new Map(),
+  synonyms: new Map(),
+  vocab: { known: new Set(), targets: [] },
+};
+
+/** A candidate row with its relevance (match only) and score (relevance + quality). */
+interface Ranked {
+  row: any;
+  rel: number;
+  score: number;
+  sponsored: boolean;
 }
 
 @Injectable()
@@ -277,6 +336,675 @@ export class SearchService implements OnModuleInit {
   }
 
   // ────────────────────────────────────────────────────────────
+  // LEXICON — categories, synonyms and vocabulary, cached in memory
+  // ────────────────────────────────────────────────────────────
+
+  private static readonly LEXICON_TTL_MS = 10 * 60_000;
+  private lexicon: { value: Lexicon; loadedAt: number } | null = null;
+  private lexiconLoad: Promise<Lexicon> | null = null;
+
+  private async getLexicon(): Promise<Lexicon> {
+    const fresh = this.lexicon && Date.now() - this.lexicon.loadedAt < SearchService.LEXICON_TTL_MS;
+    if (fresh) return this.lexicon!.value;
+    if (!this.lexiconLoad) {
+      this.lexiconLoad = this.loadLexicon()
+        .then((value) => {
+          this.lexicon = { value, loadedAt: Date.now() };
+          return value;
+        })
+        .catch((err) => {
+          this.logger.error('Failed to load search lexicon', err);
+          return this.lexicon?.value ?? EMPTY_LEXICON;
+        })
+        .finally(() => {
+          this.lexiconLoad = null;
+        });
+    }
+    // Serve the stale copy while a refresh is in flight
+    return this.lexicon?.value ?? this.lexiconLoad;
+  }
+
+  private async loadLexicon(): Promise<Lexicon> {
+    const [cats, counts, syns, names] = await Promise.all([
+      this.dataSource.query(`
+        SELECT id, parent_id, name, slug, description, icon, icon_color, image_url, keywords
+        FROM categories WHERE is_active = true
+      `),
+      // A category's count includes businesses listed under its sub-categories
+      this.dataSource.query(`
+        SELECT c.id, COUNT(DISTINCT pc.provider_id)::int AS cnt
+        FROM categories c
+        JOIN categories member ON member.id = c.id OR member.parent_id = c.id
+        JOIN provider_categories pc ON pc.category_id = member.id
+        JOIN providers p ON p.id = pc.provider_id AND p.status IN ('active', 'unverified')
+        GROUP BY c.id
+      `),
+      this.dataSource.query(`SELECT lower(term) AS term, lower(canonical_term) AS canonical FROM search_synonyms`),
+      this.dataSource.query(`
+        SELECT brand_name AS name FROM providers WHERE status IN ('active', 'unverified')
+        UNION ALL
+        SELECT name FROM products WHERE is_active = true
+      `),
+    ]);
+
+    const countById = new Map<string, number>(counts.map((r: any) => [r.id, r.cnt]));
+    const categories: LexiconCategory[] = cats.map((c: any) => ({
+      id: c.id,
+      parentId: c.parent_id,
+      name: c.name,
+      slug: c.slug,
+      description: c.description,
+      icon: c.icon,
+      iconColor: c.icon_color,
+      imageUrl: c.image_url,
+      keywords: c.keywords ?? [],
+      normName: normalizeQuery(c.name),
+      normKeywords: (c.keywords ?? []).map((k: string) => normalizeQuery(k)),
+      providerCount: countById.get(c.id) ?? 0,
+    }));
+
+    const childrenOf = new Map<string, string[]>();
+    for (const c of categories) {
+      if (!c.parentId) continue;
+      childrenOf.set(c.parentId, [...(childrenOf.get(c.parentId) ?? []), c.id]);
+    }
+
+    const synonyms = new Map<string, string[]>();
+    for (const s of syns) {
+      const term = normalizeQuery(s.term);
+      const canonical = normalizeQuery(s.canonical);
+      if (!term || !canonical || term === canonical) continue;
+      const list = synonyms.get(term) ?? [];
+      if (!list.includes(canonical)) list.push(canonical);
+      synonyms.set(term, list);
+    }
+
+    const known = new Set<string>();
+    const targets = new Set<string>();
+    for (const c of categories) {
+      for (const w of [...vocabularyWords(c.name), ...c.keywords.flatMap(vocabularyWords)]) {
+        known.add(w);
+        if (w.length >= 4) targets.add(w);
+      }
+      vocabularyWords(c.description).forEach((w) => known.add(w));
+    }
+    for (const [term, canonicals] of synonyms) {
+      for (const w of [...vocabularyWords(term), ...canonicals.flatMap(vocabularyWords)]) {
+        known.add(w);
+        if (w.length >= 4) targets.add(w);
+      }
+    }
+    for (const n of names) vocabularyWords(n.name).forEach((w) => known.add(w));
+
+    return { categories, childrenOf, synonyms, vocab: { known, targets: [...targets] } };
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // QUERY UNDERSTANDING
+  // ────────────────────────────────────────────────────────────
+
+  /** Spelling-correct the query and build its matcher. */
+  private async understand(q: string, asYouType = false) {
+    const lex = await this.getLexicon();
+    const corrected = correctQuery(normalizeQuery(q), lex.vocab, asYouType);
+    const pq = parseQuery(corrected ?? q, lex.synonyms, asYouType);
+    const literal = parseQuery(corrected ?? q, new Map(), asYouType);
+    return { lex, pq, corrected, intent: this.resolveIntent(pq, literal, lex) };
+  }
+
+  /**
+   * Which categories the query is about, scored 0–1. "digital marketing" →
+   * Digital Marketing & Advertising (name), SEO & Content Marketing
+   * (keyword) … When the user's own words name a parent category ("IT
+   * services"), its sub-categories count too. A parent reached only through a
+   * keyword or synonym ("plumber" → Home Services) does not pass it down —
+   * otherwise every pest-control firm under Home Services would match.
+   * @param literal the query without synonyms
+   */
+  private resolveIntent(pq: ParsedQuery, literal: ParsedQuery, lex: Lexicon): Map<string, number> {
+    const scores = new Map<string, number>();
+    if (pq.words.length === 0) return scores;
+
+    for (const c of lex.categories) {
+      let s = 0;
+      if (c.normName === pq.norm) s = 1.0;
+      else if (matchesAll(c.name, pq)) s = 0.9;
+      else if (c.normKeywords.includes(pq.norm)) s = 0.8;
+      else if (c.keywords.some((k) => matchesAll(k, pq))) s = 0.7;
+      else if (matchesAll(`${c.name} ${c.description ?? ''}`, pq)) s = 0.55;
+      if (s > 0) scores.set(c.id, s);
+    }
+
+    const byId = new Map(lex.categories.map((c) => [c.id, c]));
+    for (const [id, s] of [...scores]) {
+      const parent = byId.get(id)!;
+      if (parent.normName !== literal.norm && !matchesAll(parent.name, literal)) continue;
+      for (const childId of lex.childrenOf.get(id) ?? []) {
+        if ((scores.get(childId) ?? 0) < s * 0.9) scores.set(childId, s * 0.9);
+      }
+    }
+    return scores;
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // CANDIDATE QUERIES — every business / product that matches, with the
+  // signals needed to rank it. Ranking happens in rankProviders/rankProducts.
+  // ────────────────────────────────────────────────────────────
+
+  private static readonly CANDIDATE_CAP = 500;
+
+  /**
+   * Platform-wide sponsorships kill switch, cached for 5 min so the flag check
+   * doesn't cost a DB round trip per search.
+   */
+  private async isSponsorshipsEnabled(): Promise<boolean> {
+    const cacheKey = 'setting:sponsorships_enabled';
+    let flagValue = await this.cacheManager.get<string>(cacheKey);
+    if (flagValue == null) {
+      const row = await this.settingRepo.findOneBy({ key: 'sponsorships_enabled' });
+      flagValue = row?.value ?? 'false';
+      await this.cacheManager.set(cacheKey, flagValue, 5 * 60_000);
+    }
+    return flagValue === 'true';
+  }
+
+  private sqlBuilder(pq: ParsedQuery, intent: Map<string, number>, opts: { lat?: number; lng?: number; city?: string; sponsorshipsOn: boolean }) {
+    const params: any[] = [];
+    const p = (v: any) => {
+      params.push(v);
+      return `$${params.length}`;
+    };
+
+    const G = p(pq.groups);
+    const PS = p(pq.phraseSynonyms);
+    const PH = p(pq.phrase);
+    const N = p(pq.norm);
+    const IID = p([...intent.keys()]);
+    const ISC = p([...intent.values()]);
+    const hasGeo = opts.lat != null && opts.lng != null;
+    const LAT = hasGeo ? p(opts.lat) : null;
+    const LNG = hasGeo ? p(opts.lng) : null;
+    const CITY = opts.city ? p(opts.city) : null;
+
+    /** True when every query word starts a word in `expr` (or a phrase synonym matches). */
+    const allMatch = (expr: string) =>
+      `((cardinality(${G}::text[]) > 0 AND NOT EXISTS (SELECT 1 FROM unnest(${G}::text[]) g WHERE NOT (${expr} ~* g)))` +
+      ` OR (${PS}::text <> '' AND ${expr} ~* ${PS}::text))`;
+
+    /** Share of the query words found in `expr`, 0–1 — a tie-breaker when the name holds only some. */
+    const wordShare = (expr: string) =>
+      `(SELECT count(*) FROM unnest(${G}::text[]) g WHERE ${expr} ~* g)::float / GREATEST(cardinality(${G}::text[]), 1)`;
+
+    const normalized = (expr: string) => `btrim(regexp_replace(lower(${expr}), '[^[:alnum:]]+', ' ', 'g'))`;
+
+    /** Name match strength: exact > starts with the phrase > contains it > has all the words. */
+    const nameScore = (expr: string, exact: number, starts: number, contains: number, words: number) => `
+      CASE WHEN ${normalized(expr)} = ${N}::text THEN ${exact}
+           WHEN ${expr} ~* ('^' || ${PH}::text) THEN ${starts}
+           WHEN ${expr} ~* ${PH}::text THEN ${contains}
+           WHEN ${allMatch(expr)} THEN ${words}
+           ELSE 0 END`;
+
+    const dist = (alias: string) =>
+      hasGeo
+        ? `1.4 * 6371 * acos(LEAST(1.0, cos(radians(${LAT})) * cos(radians(${alias}.latitude)) * cos(radians(${alias}.longitude) - radians(${LNG})) + sin(radians(${LAT})) * sin(radians(${alias}.latitude))))`
+        : 'NULL::float';
+
+    const intentCte = `intent AS (SELECT * FROM unnest(${IID}::uuid[], ${ISC}::float8[]) AS t(id, score))`;
+
+    // One live listing per business — the one that wins its own auction.
+    const sponsorCte = `sponsor AS (
+      SELECT DISTINCT ON (sl.provider_id)
+        sl.provider_id, sl.id AS listing_id, sl.priority, sl.cost_per_click,
+        sl.target_category_ids, sl.target_cities, sl.target_radius
+      FROM sponsored_listings sl
+      WHERE ${opts.sponsorshipsOn ? 'true' : 'false'}
+        AND sl.is_active = true
+        AND sl.starts_at <= NOW()
+        AND sl.ends_at >= NOW()
+        AND (sl.billing_mode = 'free' OR sl.spent_amount < sl.budget_amount)
+        AND sl.approval_status = 'approved'
+      ORDER BY sl.provider_id, sl.priority DESC, sl.cost_per_click DESC
+    )`;
+
+    const sponsorGeoOk = (alias: string) => `(
+      sp.listing_id IS NOT NULL
+      AND (sp.target_cities IS NULL OR cardinality(sp.target_cities) = 0 OR ${CITY ? `${CITY}::text ILIKE ANY(sp.target_cities)` : 'true'})
+      AND (sp.target_radius IS NULL OR ${hasGeo ? `${dist(alias)} <= sp.target_radius` : 'true'})
+    )`;
+
+    return { params, p, N, allMatch, wordShare, nameScore, dist, intentCte, sponsorCte, sponsorGeoOk, hasGeo };
+  }
+
+  /** Geo / city scoping shared by provider and product candidates. */
+  private geoCondition(
+    b: ReturnType<SearchService['sqlBuilder']>,
+    alias: string,
+    opts: { lat?: number; lng?: number; radius: number; city?: string },
+  ): string | null {
+    if (b.hasGeo) {
+      const bbox = this.getBoundingBox(opts.lat!, opts.lng!, opts.radius);
+      const inRadius = `(${alias}.latitude IS NOT NULL AND ${alias}.longitude IS NOT NULL
+        AND ${alias}.latitude BETWEEN ${b.p(bbox.latMin)} AND ${b.p(bbox.latMax)}
+        AND ${alias}.longitude BETWEEN ${b.p(bbox.lngMin)} AND ${b.p(bbox.lngMax)}
+        AND ${b.dist(alias)} <= ${b.p(opts.radius)})`;
+      // Include businesses in the same city even when they have no coordinates
+      return opts.city ? `(${inRadius} OR ${alias}.city ILIKE ${b.p(`%${opts.city}%`)})` : inRadius;
+    }
+    if (opts.city) return `${alias}.city ILIKE ${b.p(`%${opts.city}%`)}`;
+    return null;
+  }
+
+  private async queryProviderCandidates(
+    pq: ParsedQuery,
+    intent: Map<string, number>,
+    opts: {
+      lat?: number;
+      lng?: number;
+      radius: number;
+      city?: string;
+      scopeToArea: boolean;
+      categoryIds?: string[];
+      minRating?: number;
+      verifiedOnly?: boolean;
+      womenLedOnly?: boolean;
+      sponsorshipsOn: boolean;
+    },
+  ): Promise<any[]> {
+    const b = this.sqlBuilder(pq, intent, opts);
+    const hasCategoryFilter = !!opts.categoryIds?.length;
+
+    const conditions = [`p.status IN ('active', 'unverified')`, `p.is_available = true`];
+    if (opts.scopeToArea) {
+      const geo = this.geoCondition(b, 'p', opts);
+      if (geo) conditions.push(geo);
+    }
+    if (hasCategoryFilter) {
+      const CIDS = b.p(opts.categoryIds);
+      conditions.push(`p.id IN (
+        SELECT pc.provider_id FROM provider_categories pc
+        WHERE pc.category_id = ANY(${CIDS}::uuid[])
+           OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id = ANY(${CIDS}::uuid[]))
+      )`);
+    } else {
+      conditions.push(`GREATEST(m.name_score, m.cat_score, m.body_score, m.product_score, m.typo_score) > 0`);
+    }
+    if (opts.minRating) conditions.push(`rs.avg_rating >= ${b.p(opts.minRating)}`);
+    if (opts.verifiedOnly) conditions.push(`p.status = 'active'`);
+    if (opts.womenLedOnly) conditions.push(`p.women_led_status = 'approved'`);
+
+    const body = `concat_ws(' ', p.brand_name, p.description, array_to_string(p.keywords, ' '), p.area, p.city, cn.categories)`;
+    const productBody = `concat_ws(' ', pr.name, array_to_string(pr.keywords, ' '), pr.description)`;
+    const { N } = b;
+
+    const sql = `
+      WITH ${b.intentCte},
+      ${b.sponsorCte},
+      offer AS (
+        SELECT DISTINCT ON (po.provider_id)
+          po.provider_id, po.title AS offer_title, po.discount_value, po.discount_type
+        FROM provider_offers po
+        WHERE po.is_active = true AND po.starts_at <= NOW() AND po.ends_at >= NOW()
+          AND po.approval_status = 'approved'
+        ORDER BY po.provider_id, po.discount_value DESC
+      )
+      SELECT
+        p.id, p.brand_name, p.description, p.profile_photo_url, p.banner_image_url,
+        p.city, p.area, p.status, p.women_led_status, p.is_featured, p.created_at,
+        p.geocode_precision,
+        ${b.dist('p')} AS distance,
+        rs.avg_rating,
+        COALESCE(rs.review_count, 0) AS review_count,
+        cn.categories,
+        ao.provider_id IS NOT NULL AS has_active_offer,
+        ao.offer_title, ao.discount_value, ao.discount_type,
+        sp.listing_id, sp.priority AS sponsor_priority, sp.cost_per_click, sp.target_category_ids,
+        ${b.sponsorGeoOk('p')} AS sponsor_geo_ok,
+        m.name_score, m.cat_score, m.body_score, m.product_score, m.typo_score,
+        ${b.wordShare('p.brand_name')} AS name_share
+      FROM providers p
+      LEFT JOIN provider_rating_stats rs ON rs.provider_id = p.id
+      LEFT JOIN offer ao ON ao.provider_id = p.id
+      LEFT JOIN sponsor sp ON sp.provider_id = p.id
+      LEFT JOIN LATERAL (
+        SELECT string_agg(DISTINCT c.name, ', ') AS categories
+        FROM provider_categories pc JOIN categories c ON c.id = pc.category_id
+        WHERE pc.provider_id = p.id
+      ) cn ON true
+      CROSS JOIN LATERAL (
+        SELECT
+          -- "contains" sits just under a named category (0.72): for "marketing",
+          -- agencies outrank "ENN Marketing" the pest-control firm
+          ${b.nameScore('p.brand_name', 1.0, 0.85, 0.62, 0.6)} AS name_score,
+          COALESCE((
+            SELECT MAX(i.score) FROM provider_categories pc2
+            JOIN intent i ON i.id = pc2.category_id
+            WHERE pc2.provider_id = p.id
+          ), 0) * 0.8 AS cat_score,
+          CASE WHEN ${b.allMatch(body)} THEN 0.5 ELSE 0 END AS body_score,
+          COALESCE((
+            SELECT MAX(CASE WHEN ${b.allMatch('pr.name')} THEN 0.6
+                            WHEN ${b.allMatch(productBody)} THEN 0.45
+                            ELSE 0 END)
+            FROM products pr WHERE pr.provider_id = p.id AND pr.is_active = true
+          ), 0) AS product_score,
+          CASE WHEN char_length(${N}::text) >= 4 AND similarity(p.brand_name, ${N}::text) >= 0.5
+               THEN 0.45 ELSE 0 END AS typo_score
+      ) m
+      WHERE ${conditions.join(' AND ')}
+      LIMIT ${SearchService.CANDIDATE_CAP}
+    `;
+
+    try {
+      return await this.dataSource.query(sql, b.params);
+    } catch (err) {
+      this.logger.error(`Provider candidates failed: ${err instanceof Error ? err.message : err}`);
+      return [];
+    }
+  }
+
+  private async queryProductCandidates(
+    pq: ParsedQuery,
+    intent: Map<string, number>,
+    opts: {
+      lat?: number;
+      lng?: number;
+      radius: number;
+      city?: string;
+      scopeToArea: boolean;
+      productType?: string;
+      sponsorshipsOn: boolean;
+    },
+  ): Promise<any[]> {
+    // Products are scoped by radius only (as before) — the city fallback is for businesses
+    const b = this.sqlBuilder(pq, intent, opts);
+
+    const conditions = [
+      `pr.is_active = true`,
+      `prov.status IN ('active', 'unverified')`,
+      `prov.is_available = true`,
+      `GREATEST(m.name_score, m.body_score, m.cat_score) > 0`,
+    ];
+    if (opts.scopeToArea && b.hasGeo) {
+      const geo = this.geoCondition(b, 'prov', { ...opts, city: undefined });
+      if (geo) conditions.push(geo);
+    }
+    if (opts.productType) conditions.push(`pr.product_type = ${b.p(opts.productType)}`);
+
+    const sql = `
+      WITH ${b.intentCte},
+      ${b.sponsorCte}
+      SELECT
+        pr.id, pr.name, pr.description, pr.price, pr.currency, pr.photo_url, pr.product_type,
+        pr.provider_id, pr.category_id, pr.subcategory_id, pr.created_at,
+        prov.brand_name AS provider_name, prov.city AS provider_city, prov.area AS provider_area,
+        prov.status AS provider_status, prov.geocode_precision,
+        ${b.dist('prov')} AS distance,
+        rs.avg_rating,
+        sp.listing_id, sp.priority AS sponsor_priority, sp.cost_per_click, sp.target_category_ids,
+        ${b.sponsorGeoOk('prov')} AS sponsor_geo_ok,
+        m.name_score, m.body_score, m.cat_score,
+        ${b.wordShare('pr.name')} AS name_share
+      FROM products pr
+      JOIN providers prov ON prov.id = pr.provider_id
+      LEFT JOIN provider_rating_stats rs ON rs.provider_id = prov.id
+      LEFT JOIN sponsor sp ON sp.provider_id = prov.id
+      CROSS JOIN LATERAL (
+        SELECT
+          ${b.nameScore('pr.name', 1.0, 0.9, 0.8, 0.75)} AS name_score,
+          CASE WHEN ${b.allMatch(`concat_ws(' ', pr.name, array_to_string(pr.keywords, ' '))`)} THEN 0.65
+               WHEN ${b.allMatch(`concat_ws(' ', pr.name, array_to_string(pr.keywords, ' '), pr.description)`)} THEN 0.5
+               ELSE 0 END AS body_score,
+          -- A product is specific: it inherits a category match only from a
+          -- specific (leaf) category the query names (> 0.8) — not from a
+          -- keyword, nor from a broad parent like "Sweets & Bakery"
+          COALESCE((
+            SELECT MAX(i.score) FROM intent i
+            WHERE i.id IN (pr.category_id, pr.subcategory_id) AND i.score > 0.8
+              AND NOT EXISTS (SELECT 1 FROM categories ch WHERE ch.parent_id = i.id AND ch.is_active = true)
+          ), 0) * 0.7 AS cat_score
+      ) m
+      WHERE ${conditions.join(' AND ')}
+      LIMIT ${SearchService.CANDIDATE_CAP}
+    `;
+
+    try {
+      return await this.dataSource.query(sql, b.params);
+    } catch (err) {
+      this.logger.error(`Product candidates failed: ${err instanceof Error ? err.message : err}`);
+      return [];
+    }
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // RANKING
+  //
+  // relevance (how well it matches — dominant) + a small quality nudge
+  // (rating, reviews, verified, distance). Sponsored items are never sorted
+  // by money into unrelated results: a sponsor is pinned first only when it
+  // matches the query and its targeting allows it.
+  // ────────────────────────────────────────────────────────────
+
+  private closeness(distance: any, radius: number): number {
+    if (distance == null) return 0;
+    return 1 - Math.min(parseFloat(distance) / radius, 1);
+  }
+
+  /** Sponsor targeting: untargeted, or targets one of the categories the query is about. */
+  private targetingAllows(targets: string[] | null, relevantCategories: Set<string>, strongTextMatch: boolean): boolean {
+    if (!targets || targets.length === 0) return true;
+    return strongTextMatch || targets.some((t) => relevantCategories.has(t));
+  }
+
+  private bySponsorAuction = (a: Ranked, b: Ranked) =>
+    (b.row.sponsor_priority ?? 0) - (a.row.sponsor_priority ?? 0) ||
+    b.rel - a.rel ||
+    parseFloat(b.row.cost_per_click ?? 0) - parseFloat(a.row.cost_per_click ?? 0);
+
+  private sortRanked(list: Ranked[], sortBy: string, ratingOf: (r: any) => number | null) {
+    const statusRank = (x: Ranked) => (x.row.status === 'active' || x.row.provider_status === 'active' ? 0 : 1);
+    const dist = (x: Ranked) =>
+      x.row.distance == null || x.row.geocode_precision === 'city' ? Infinity : parseFloat(x.row.distance);
+    const cmp: Record<string, (a: Ranked, b: Ranked) => number> = {
+      relevance: (a, b) => b.score - a.score || dist(a) - dist(b),
+      distance: (a, b) => statusRank(a) - statusRank(b) || dist(a) - dist(b) || b.score - a.score,
+      rating: (a, b) =>
+        statusRank(a) - statusRank(b) || (ratingOf(b.row) ?? -1) - (ratingOf(a.row) ?? -1) || b.score - a.score,
+      newest: (a, b) =>
+        statusRank(a) - statusRank(b) || new Date(b.row.created_at).getTime() - new Date(a.row.created_at).getTime(),
+    };
+    return list.sort(cmp[sortBy] ?? cmp.relevance);
+  }
+
+  private rankProviders(
+    rows: any[],
+    intent: Map<string, number>,
+    opts: { radius: number; sortBy: string; categoryIds?: string[] },
+  ): { sponsored: Ranked[]; organic: Ranked[] } {
+    const relevantCategories = new Set([...intent.keys(), ...(opts.categoryIds ?? [])]);
+    const sponsored: Ranked[] = [];
+    const organic: Ranked[] = [];
+
+    for (const row of rows) {
+      const nameScore = parseFloat(row.name_score);
+      const textRel = Math.max(
+        nameScore,
+        parseFloat(row.cat_score),
+        parseFloat(row.body_score),
+        parseFloat(row.product_score),
+        parseFloat(row.typo_score),
+      );
+      // Inside a category filter every listed business is relevant
+      const rel = textRel > 0 ? textRel : opts.categoryIds?.length ? 0.3 : 0;
+      if (rel <= 0) continue;
+
+      const rating = row.avg_rating != null ? parseFloat(row.avg_rating) : 0;
+      const reviews = parseInt(row.review_count, 10) || 0;
+      const quality =
+        (rating / 5) * 0.06 +
+        Math.min(Math.log(reviews + 1) / Math.log(50), 1) * 0.03 +
+        (row.status === 'active' ? 0.02 : 0) +
+        this.closeness(row.distance, opts.radius) * 0.04 +
+        (row.has_active_offer ? 0.01 : 0) +
+        parseFloat(row.name_share ?? 0) * 0.05;
+
+      const ranked: Ranked = { row, rel, score: rel + quality, sponsored: false };
+      if (
+        row.listing_id &&
+        row.sponsor_geo_ok &&
+        this.targetingAllows(row.target_category_ids, relevantCategories, nameScore >= 0.6)
+      ) {
+        ranked.sponsored = true;
+        sponsored.push(ranked);
+      } else {
+        organic.push(ranked);
+      }
+    }
+
+    sponsored.sort(this.bySponsorAuction);
+    this.sortRanked(organic, opts.sortBy, (r) => (r.avg_rating != null ? parseFloat(r.avg_rating) : null));
+    return { sponsored, organic };
+  }
+
+  /**
+   * Products & services. For each sponsored business, its single best-matching
+   * product/service is pinned first; its other matches rank organically.
+   */
+  private rankProducts(
+    rows: any[],
+    intent: Map<string, number>,
+    opts: { radius: number; sortBy: string },
+  ): { pinned: Ranked[]; organic: Ranked[] } {
+    const relevantCategories = new Set(intent.keys());
+    const bestSponsoredByProvider = new Map<string, Ranked>();
+    const all: Ranked[] = [];
+
+    for (const row of rows) {
+      const nameScore = parseFloat(row.name_score);
+      const rel = Math.max(nameScore, parseFloat(row.body_score), parseFloat(row.cat_score));
+      if (rel <= 0) continue;
+
+      const rating = row.avg_rating != null ? parseFloat(row.avg_rating) : 0;
+      const quality =
+        (row.photo_url ? 0.02 : 0) +
+        (rating / 5) * 0.03 +
+        (row.provider_status === 'active' ? 0.01 : 0) +
+        this.closeness(row.distance, opts.radius) * 0.03 +
+        parseFloat(row.name_share ?? 0) * 0.05;
+      const ranked: Ranked = { row, rel, score: rel + quality, sponsored: false };
+      all.push(ranked);
+
+      const productTargeted =
+        !!row.target_category_ids?.length &&
+        (row.target_category_ids.includes(row.category_id) || row.target_category_ids.includes(row.subcategory_id));
+      if (
+        row.listing_id &&
+        row.sponsor_geo_ok &&
+        (productTargeted || this.targetingAllows(row.target_category_ids, relevantCategories, nameScore >= 0.75))
+      ) {
+        const best = bestSponsoredByProvider.get(row.provider_id);
+        if (!best || ranked.score > best.score) bestSponsoredByProvider.set(row.provider_id, ranked);
+      }
+    }
+
+    const pinned = [...bestSponsoredByProvider.values()];
+    pinned.forEach((r) => (r.sponsored = true));
+    pinned.sort(this.bySponsorAuction);
+    const organic = all.filter((r) => !r.sponsored);
+    this.sortRanked(organic, opts.sortBy, (r) => (r.avg_rating != null ? parseFloat(r.avg_rating) : null));
+    return { pinned, organic };
+  }
+
+  /** Categories the query is about that actually have businesses, best first. */
+  private rankCategories(intent: Map<string, number>, lex: Lexicon): { cat: LexiconCategory; score: number }[] {
+    return lex.categories
+      .filter((c) => intent.has(c.id) && c.providerCount > 0)
+      .map((cat) => ({ cat, score: intent.get(cat.id)! }))
+      .sort((a, b) => b.score - a.score || b.cat.providerCount - a.cat.providerCount);
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // RESULT MAPPING
+  // ────────────────────────────────────────────────────────────
+
+  private toProviderResult(x: Ranked): ProviderSearchResult {
+    const r = x.row;
+    return {
+      id: r.id,
+      brandName: r.brand_name,
+      description: r.description,
+      profilePhotoUrl: r.profile_photo_url,
+      bannerImageUrl: r.banner_image_url,
+      city: r.city,
+      area: r.area,
+      status: r.status,
+      isWomenLed: r.women_led_status === 'approved',
+      isFeatured: r.is_featured,
+      distance: r.distance != null && r.geocode_precision !== 'city' ? parseFloat(parseFloat(r.distance).toFixed(2)) : null,
+      approximateLocation: r.geocode_precision === 'city',
+      avgRating: r.avg_rating != null ? parseFloat(parseFloat(r.avg_rating).toFixed(1)) : null,
+      reviewCount: parseInt(r.review_count, 10),
+      categories: r.categories,
+      relevanceScore: parseFloat(x.score.toFixed(3)),
+      isSponsored: x.sponsored,
+      ...(x.sponsored ? { sponsoredListingId: r.listing_id } : {}),
+      hasActiveOffer: !!r.has_active_offer,
+      offerTitle: r.offer_title || undefined,
+      discountValue: r.discount_value != null ? parseFloat(r.discount_value) : undefined,
+      discountType: r.discount_type || undefined,
+    };
+  }
+
+  private toProductResult(x: Ranked): ProductSearchResult {
+    const r = x.row;
+    return {
+      id: r.id,
+      name: r.name,
+      description: r.description,
+      price: r.price != null ? parseFloat(r.price) : null,
+      currency: r.currency,
+      photoUrl: r.photo_url,
+      productType: r.product_type || 'product',
+      providerId: r.provider_id,
+      providerName: r.provider_name,
+      providerCity: r.provider_city,
+      providerArea: r.provider_area,
+      distance: r.distance != null && r.geocode_precision !== 'city' ? parseFloat(parseFloat(r.distance).toFixed(2)) : null,
+      approximateLocation: r.geocode_precision === 'city',
+      relevanceScore: parseFloat(x.score.toFixed(3)),
+      isSponsored: x.sponsored,
+      ...(x.sponsored ? { sponsoredListingId: r.listing_id } : {}),
+    };
+  }
+
+  private toCategoryResult({ cat, score }: { cat: LexiconCategory; score: number }): CategorySearchResult {
+    return {
+      id: cat.id,
+      name: cat.name,
+      slug: cat.slug,
+      description: cat.description,
+      icon: cat.icon,
+      iconColor: cat.iconColor,
+      imageUrl: cat.imageUrl,
+      parentId: cat.parentId,
+      providerCount: cat.providerCount,
+      relevanceScore: score,
+    };
+  }
+
+  /**
+   * Search placements are charged per tap, not per view: count the serve so
+   * sponsors see their reach, but never add spend here.
+   */
+  private countSponsoredServes(listingIds: string[]): void {
+    const ids = [...new Set(listingIds.filter(Boolean))];
+    if (ids.length === 0) return;
+    this.dataSource
+      .query(`UPDATE sponsored_listings SET impressions = impressions + 1 WHERE id = ANY($1::uuid[])`, [ids])
+      .catch(() => {});
+  }
+
+  // ────────────────────────────────────────────────────────────
   // UNIFIED SEARCH
   // ────────────────────────────────────────────────────────────
 
@@ -308,103 +1036,118 @@ export class SearchService implements OnModuleInit {
     }
 
     const offset = (page - 1) * limit;
-    const hasGeo = lat != null && lng != null;
-
-    // Expand query with fuzzy synonyms before building tsquery
-    const expandedQ = await this.expandQuery(q);
-    const prefixTsQuery = this.buildPrefixTsQuery(expandedQ);
-
-    // Run searches in parallel based on type
-    const searchProducts = type === 'all' || type === 'products' || type === 'services';
-    const productTypeFilter = type === 'products' ? 'product' : type === 'services' ? 'service' : undefined;
     const isFirstPage = page === 1;
-    const isAllOrProviders = type === 'all' || type === 'providers';
+    const { lex, pq, corrected, intent } = await this.understand(q);
+    const sponsorshipsOn = await this.isSponsorshipsEnabled();
 
-    const [providers, products, categories, sponsored, deals, topRated] = await Promise.all([
-      isAllOrProviders
+    // A query of only punctuation has nothing to match on
+    const searchable = pq.words.length > 0;
+    const wantProviders = searchable && (type === 'all' || type === 'providers');
+    const wantProducts = searchable && (type === 'all' || type === 'products' || type === 'services');
+    const wantCategories = searchable && (type === 'all' || type === 'categories');
+    const productType = type === 'products' ? 'product' : type === 'services' ? 'service' : undefined;
+
+    const [providerRows, productRows] = await Promise.all([
+      wantProviders
         ? this.withTimeout(
-            this.searchProviders(expandedQ, prefixTsQuery, { lat, lng, radius, offset, limit, categoryIds, sortBy, minRating, city, hasGeo, verifiedOnly, womenLedOnly }),
-            { data: [], total: 0 },
-            'searchProviders',
-          )
-        : Promise.resolve({ data: [], total: 0 }),
-      searchProducts
-        ? this.withTimeout(
-            this.searchProducts(expandedQ, prefixTsQuery, { lat, lng, radius, offset, limit: type === 'all' ? 5 : limit, hasGeo, productType: productTypeFilter }),
-            { data: [], total: 0 },
-            'searchProducts',
-          )
-        : Promise.resolve({ data: [], total: 0 }),
-      type === 'all' || type === 'categories'
-        ? this.withTimeout(
-            this.searchCategories(expandedQ, prefixTsQuery, { offset, limit: type === 'all' ? 5 : limit }),
-            { data: [], total: 0 },
-            'searchCategories',
-          )
-        : Promise.resolve({ data: [], total: 0 }),
-      // Prioritized sections — only on page 1 of all/providers
-      isAllOrProviders && isFirstPage
-        ? this.withTimeout(
-            this.getMatchingSponsoredProviders(expandedQ, prefixTsQuery, lat, lng, city, categoryIds),
+            this.queryProviderCandidates(pq, intent, { lat, lng, radius, city, scopeToArea: true, categoryIds, minRating, verifiedOnly, womenLedOnly, sponsorshipsOn }),
             [],
-            'sponsoredProviders',
+            'providerCandidates',
           )
         : Promise.resolve([]),
-      isAllOrProviders && isFirstPage
+      wantProducts
         ? this.withTimeout(
-            this.getDealsProviders(expandedQ, prefixTsQuery, { lat, lng, radius, city, hasGeo, categoryIds }),
+            this.queryProductCandidates(pq, intent, { lat, lng, radius, city, scopeToArea: true, productType, sponsorshipsOn }),
             [],
-            'dealsProviders',
-          )
-        : Promise.resolve([]),
-      isAllOrProviders && isFirstPage
-        ? this.withTimeout(
-            this.getTopRatedProviders(expandedQ, prefixTsQuery, { lat, lng, radius, city, hasGeo, categoryIds }),
-            [],
-            'topRatedProviders',
+            'productCandidates',
           )
         : Promise.resolve([]),
     ]);
 
-    // Remove sponsored/deals/topRated IDs from main provider list to avoid duplicates
-    if (isFirstPage && isAllOrProviders) {
-      const featuredIds = new Set([
-        ...sponsored.map(s => s.id),
-        ...deals.map(d => d.id),
-        ...topRated.map(t => t.id),
-      ]);
-      providers.data = providers.data.filter(p => !featuredIds.has(p.id));
+    // ── Businesses ──
+    const rankedProviders = this.rankProviders(providerRows, intent, { radius, sortBy, categoryIds });
+    let sponsoredRanked: Ranked[] = [];
+    let dealsRanked: Ranked[] = [];
+    let topRatedRanked: Ranked[] = [];
+    let providerList: Ranked[];
+
+    if (type === 'all') {
+      // Highlight strips are derived from the full match list so the paged
+      // organic list stays stable across pages; they're returned on page 1.
+      sponsoredRanked = rankedProviders.sponsored;
+      dealsRanked = rankedProviders.organic
+        .filter((x) => x.row.has_active_offer)
+        .sort((a, b) => parseFloat(b.row.discount_value ?? 0) - parseFloat(a.row.discount_value ?? 0) || b.score - a.score)
+        .slice(0, 5);
+      const inDeals = new Set(dealsRanked.map((x) => x.row.id));
+      topRatedRanked = rankedProviders.organic
+        .filter((x) => !inDeals.has(x.row.id) && parseFloat(x.row.avg_rating ?? 0) >= 4 && parseInt(x.row.review_count, 10) >= 3)
+        .sort((a, b) => parseFloat(b.row.avg_rating) - parseFloat(a.row.avg_rating) || parseInt(b.row.review_count, 10) - parseInt(a.row.review_count, 10))
+        .slice(0, 5);
+      const highlighted = new Set([...inDeals, ...topRatedRanked.map((x) => x.row.id)]);
+      providerList = rankedProviders.organic.filter((x) => !highlighted.has(x.row.id));
+    } else {
+      // Businesses tab: matching sponsors first, then everything else
+      providerList = [...rankedProviders.sponsored, ...rankedProviders.organic];
     }
+
+    const providerPage = providerList.slice(offset, offset + limit);
+    const [sponsored, deals, topRated, providerData] = await Promise.all(
+      [isFirstPage ? sponsoredRanked : [], isFirstPage ? dealsRanked : [], isFirstPage ? topRatedRanked : [], providerPage].map(
+        (list) => this.badges.attach(list.map((x) => this.toProviderResult(x))),
+      ),
+    );
+    const providers = { data: providerData, total: providerList.length };
+
+    // ── Products & services ──
+    const rankedProducts = this.rankProducts(productRows, intent, { radius, sortBy });
+    const productList = [...rankedProducts.pinned, ...rankedProducts.organic];
+    const productLimit = type === 'all' ? 5 : limit;
+    const productPage = productList.slice(offset, offset + productLimit);
+    const products = { data: productPage.map((x) => this.toProductResult(x)), total: productList.length };
+
+    // ── Categories ──
+    const categoryList = wantCategories ? this.rankCategories(intent, lex) : [];
+    const categoryLimit = type === 'all' ? 5 : limit;
+    const categories = {
+      data: categoryList.slice(offset, offset + categoryLimit).map((c) => this.toCategoryResult(c)),
+      total: categoryList.length,
+    };
 
     const totalResults = providers.total + products.total + categories.total;
 
-    // "Did you mean?" when results are few
     let didYouMean: string | undefined;
-    if (totalResults < 5) {
+    if (!corrected && totalResults < 5) {
       didYouMean = await this.getDidYouMean(q);
     }
 
     // Fallback strategy when zero results
     let fallback: SearchFallback | undefined;
-    if (totalResults === 0 && isFirstPage) {
-      fallback = await this.buildFallback(q, expandedQ, prefixTsQuery, { lat, lng, radius, city, hasGeo });
+    if (totalResults === 0 && sponsored.length === 0 && isFirstPage) {
+      fallback = await this.buildFallback(q, pq.norm, this.buildPrefixTsQuery(pq.norm), { lat, lng, radius, city, hasGeo: lat != null && lng != null });
     }
 
     const tookMs = Date.now() - start;
 
-    // Log search (fire and forget)
     this.logSearch(q, userId, totalResults, lat, lng, city).catch(() => {});
 
-    // Log category interaction for personalization (fire and forget)
     if (userId) {
-      this.logSearchCategoryInteraction(userId, q, categoryIds).catch(() => {});
+      const queryCategories = categoryIds?.length
+        ? categoryIds
+        : categoryList.filter((c) => c.score >= 0.7).slice(0, 5).map((c) => c.cat.id);
+      this.logSearchCategoryInteraction(userId, q, queryCategories).catch(() => {});
     }
 
-    // Track search appearances for analytics (fire and forget)
-    const allProviderIds = [...sponsored.map(s => s.id), ...deals.map(d => d.id), ...topRated.map(t => t.id), ...providers.data.map(p => p.id)];
-    if (allProviderIds.length > 0) {
-      this.logSearchAppearances(allProviderIds, userId, q).catch(() => {});
+    const shownProviderIds = [...sponsored, ...deals, ...topRated, ...providers.data].map((p) => p.id);
+    if (shownProviderIds.length > 0) {
+      this.logSearchAppearances(shownProviderIds, userId, q).catch(() => {});
     }
+
+    this.countSponsoredServes([
+      ...sponsored.map((s) => s.sponsoredListingId!),
+      ...providers.data.filter((p) => p.isSponsored).map((p) => p.sponsoredListingId!),
+      ...products.data.filter((p) => p.isSponsored).map((p) => p.sponsoredListingId!),
+    ]);
 
     const response: SearchResponse = {
       sponsored,
@@ -413,7 +1156,13 @@ export class SearchService implements OnModuleInit {
       providers,
       products,
       categories,
-      meta: { query: q, tookMs, totalResults: totalResults + sponsored.length + deals.length + topRated.length, ...(didYouMean ? { didYouMean } : {}) },
+      meta: {
+        query: q,
+        tookMs,
+        totalResults: totalResults + sponsored.length + deals.length + topRated.length,
+        ...(corrected ? { correctedQuery: corrected } : {}),
+        ...(didYouMean ? { didYouMean } : {}),
+      },
       ...(fallback ? { fallback } : {}),
     };
 
@@ -424,1107 +1173,109 @@ export class SearchService implements OnModuleInit {
   }
 
   // ────────────────────────────────────────────────────────────
-  // PROVIDER SEARCH (optimized with matview + improved ranking)
-  // ────────────────────────────────────────────────────────────
-
-  private async searchProviders(
-    q: string,
-    prefixTsQuery: string,
-    opts: {
-      lat?: number;
-      lng?: number;
-      radius: number;
-      offset: number;
-      limit: number;
-      categoryIds?: string[];
-      sortBy: string;
-      minRating?: number;
-      city?: string;
-      hasGeo: boolean;
-      verifiedOnly?: boolean;
-      womenLedOnly?: boolean;
-    },
-  ): Promise<{ data: ProviderSearchResult[]; total: number }> {
-    const allParams: any[] = [q];
-    const hasCategoryFilter = opts.categoryIds && opts.categoryIds.length > 0;
-
-    // $2 = prefix tsquery for search_vector matching
-    allParams.push(prefixTsQuery);
-
-    // Distance expression
-    let distExpr = 'NULL';
-    if (opts.hasGeo) {
-      distExpr = `1.4 * 6371 * acos(LEAST(1.0, cos(radians($3)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians($4)) + sin(radians($3)) * sin(radians(p.latitude))))`;
-      allParams.push(opts.lat, opts.lng);
-    }
-
-    let pi = allParams.length + 1;
-
-    // Build WHERE conditions
-    const conditions: string[] = [
-      `p.status IN ('active', 'unverified')`,
-      `p.is_available = true`,
-    ];
-
-    if (opts.hasGeo && opts.city) {
-      // Include providers within geo radius OR in the same city (even without coordinates)
-      const bbox = this.getBoundingBox(opts.lat!, opts.lng!, opts.radius);
-      conditions.push(`(
-        (p.latitude IS NOT NULL AND p.longitude IS NOT NULL
-         AND p.latitude BETWEEN $${pi} AND $${pi + 1}
-         AND p.longitude BETWEEN $${pi + 2} AND $${pi + 3}
-         AND ${distExpr} <= $${pi + 4})
-        OR p.city ILIKE $${pi + 5}
-      )`);
-      allParams.push(bbox.latMin, bbox.latMax, bbox.lngMin, bbox.lngMax, opts.radius, `%${opts.city}%`);
-      pi += 6;
-    } else if (opts.hasGeo) {
-      conditions.push(`p.latitude IS NOT NULL`);
-      conditions.push(`p.longitude IS NOT NULL`);
-      const bbox = this.getBoundingBox(opts.lat!, opts.lng!, opts.radius);
-      conditions.push(`p.latitude BETWEEN $${pi} AND $${pi + 1}`);
-      conditions.push(`p.longitude BETWEEN $${pi + 2} AND $${pi + 3}`);
-      allParams.push(bbox.latMin, bbox.latMax, bbox.lngMin, bbox.lngMax);
-      pi += 4;
-      conditions.push(`${distExpr} <= $${pi}`);
-      allParams.push(opts.radius);
-      pi++;
-    } else if (opts.city) {
-      conditions.push(`p.city ILIKE $${pi}`);
-      allParams.push(`%${opts.city}%`);
-      pi++;
-    }
-
-    if (hasCategoryFilter) {
-      const catPlaceholders = opts.categoryIds!.map((_, idx) => `$${pi + idx}`);
-      conditions.push(
-        `p.id IN (
-          SELECT pc.provider_id FROM provider_categories pc
-          WHERE pc.category_id IN (${catPlaceholders.join(',')})
-             OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id IN (${catPlaceholders.join(',')}))
-        )`,
-      );
-      allParams.push(...opts.categoryIds!);
-      pi += opts.categoryIds!.length;
-    }
-
-    if (opts.minRating) {
-      conditions.push(`rs.avg_rating >= $${pi}`);
-      allParams.push(opts.minRating);
-      pi++;
-    }
-
-    // NEW: verifiedOnly and womenLedOnly filters
-    if (opts.verifiedOnly) {
-      conditions.push(`p.status = 'active'`);
-    }
-
-    if (opts.womenLedOnly) {
-      conditions.push(`p.women_led_status = 'approved'`);
-    }
-
-    // When filtering by category, don't require text match
-    if (!hasCategoryFilter) {
-      conditions.push(`(
-        ($2 <> '' AND p.search_vector @@ to_tsquery('english', $2))
-        OR similarity(p.brand_name, $1) > 0.1
-        OR p.brand_name ILIKE $1 || '%'
-        OR p.brand_name ILIKE '%' || $1 || '%'
-        OR EXISTS (
-          SELECT 1 FROM provider_categories pc3
-          JOIN categories c3 ON c3.id = pc3.category_id
-          WHERE pc3.provider_id = p.id
-          AND (c3.name ILIKE '%' || $1 || '%' OR EXISTS (SELECT 1 FROM unnest(c3.keywords) kw WHERE kw ILIKE '%' || $1 || '%'))
-        )
-      )`);
-    }
-
-    const whereClause = conditions.join(' AND ');
-
-    // Build sort
-    let orderClause: string;
-    switch (opts.sortBy) {
-      case 'distance':
-        orderClause = opts.hasGeo
-          ? `CASE WHEN p.status = 'active' THEN 0 ELSE 1 END ASC, CASE WHEN p.geocode_precision = 'city' THEN 1 ELSE 0 END ASC, distance ASC NULLS LAST`
-          : `CASE WHEN p.status = 'active' THEN 0 ELSE 1 END ASC, relevance_score DESC`;
-        break;
-      case 'rating':
-        orderClause = `CASE WHEN p.status = 'active' THEN 0 ELSE 1 END ASC, avg_rating DESC NULLS LAST, relevance_score DESC`;
-        break;
-      case 'newest':
-        orderClause = `CASE WHEN p.status = 'active' THEN 0 ELSE 1 END ASC, p.created_at DESC`;
-        break;
-      default: // relevance
-        orderClause = `CASE WHEN p.status = 'active' THEN 0 ELSE 1 END ASC, relevance_score DESC, distance ASC NULLS LAST`;
-        break;
-    }
-
-    const radiusParam = opts.hasGeo ? opts.radius : 25;
-
-    // OPTIMIZED: Uses materialized view instead of inline CTE for reviews
-    // IMPROVED: Better relevance scoring with review_count popularity signal + distance boost + category match
-    const sql = `
-      WITH cat_names AS (
-        SELECT pc.provider_id, string_agg(DISTINCT c.name, ', ') AS categories
-        FROM provider_categories pc JOIN categories c ON c.id = pc.category_id
-        GROUP BY pc.provider_id
-      ),
-      matched_categories AS (
-        SELECT id FROM categories
-        WHERE is_active = true AND (
-          ($2 <> '' AND search_vector @@ to_tsquery('english', $2))
-          OR similarity(name, $1) > 0.3
-          OR name ILIKE '%' || $1 || '%'
-          OR EXISTS (SELECT 1 FROM unnest(keywords) kw WHERE kw ILIKE '%' || $1 || '%' OR similarity(kw, $1) > 0.3)
-        )
-      ),
-      active_offers AS (
-        SELECT DISTINCT ON (po.provider_id)
-          po.provider_id,
-          po.title AS offer_title,
-          po.discount_value,
-          po.discount_type
-        FROM provider_offers po
-        WHERE po.is_active = true AND po.starts_at <= NOW() AND po.ends_at >= NOW()
-        ORDER BY po.provider_id, po.discount_value DESC
-      ),
-      active_sponsorships AS (
-        SELECT DISTINCT sl.provider_id
-        FROM sponsored_listings sl
-        WHERE sl.is_active = true
-          AND sl.starts_at <= NOW()
-          AND sl.ends_at >= NOW()
-          AND (sl.billing_mode = 'free' OR sl.spent_amount < sl.budget_amount)
-          AND sl.approval_status = 'approved'
-      ),
-      search_results AS (
-        SELECT
-          p.id,
-          p.brand_name,
-          p.description,
-          p.profile_photo_url,
-          p.banner_image_url,
-          p.city,
-          p.area,
-          p.status,
-          p.is_women_led,
-          p.women_led_status,
-          p.is_featured,
-          p.created_at,
-          ${distExpr} AS distance,
-          p.geocode_precision AS geocode_precision,
-          rs.avg_rating,
-          COALESCE(rs.review_count, 0) AS review_count,
-          cn.categories,
-          ao.provider_id IS NOT NULL AS has_active_offer,
-          ao.offer_title,
-          ao.discount_value,
-          ao.discount_type,
-          asp.provider_id IS NOT NULL AS is_sponsored,
-          (
-            CASE WHEN $2 <> '' THEN COALESCE(ts_rank_cd(p.search_vector, to_tsquery('english', $2), 32), 0) * 0.22 ELSE 0 END +
-            COALESCE(similarity(p.brand_name, $1), 0) * 0.08 +
-            CASE WHEN EXISTS (
-              SELECT 1 FROM provider_categories pc2
-              WHERE pc2.provider_id = p.id AND pc2.category_id IN (SELECT id FROM matched_categories)
-            ) THEN 0.12 ELSE 0 END +
-            CASE WHEN ao.provider_id IS NOT NULL THEN 0.13 ELSE 0 END +
-            CASE WHEN asp.provider_id IS NOT NULL THEN 0.08 ELSE 0 END +
-            COALESCE(rs.avg_rating / 5.0, 0) * 0.13 +
-            LEAST(COALESCE(LOG(rs.review_count + 1) / LOG(50), 0), 1.0) * 0.07 +
-            CASE WHEN ${distExpr} IS NOT NULL THEN (1.0 - LEAST(${distExpr} / ${radiusParam}::float, 1.0)) * 0.15 ELSE 0 END +
-            CASE WHEN p.is_featured THEN 0.02 ELSE 0 END +
-            CASE WHEN p.status = 'active' THEN 0.02 ELSE 0 END +
-            CASE WHEN p.updated_at > NOW() - INTERVAL '30 days' THEN 0.01 ELSE 0 END +
-            CASE WHEN p.women_led_status = 'approved' THEN 0.03 ELSE 0 END
-          ) AS relevance_score,
-          COUNT(*) OVER() AS total_count
-        FROM providers p
-        LEFT JOIN provider_rating_stats rs ON rs.provider_id = p.id
-        LEFT JOIN cat_names cn ON cn.provider_id = p.id
-        LEFT JOIN active_offers ao ON ao.provider_id = p.id
-        LEFT JOIN active_sponsorships asp ON asp.provider_id = p.id
-        WHERE ${whereClause}
-        ORDER BY ${orderClause}
-        LIMIT $${pi} OFFSET $${pi + 1}
-      )
-      SELECT * FROM search_results
-    `;
-
-    allParams.push(opts.limit, opts.offset);
-
-    this.logger.debug(`Provider search SQL params: ${JSON.stringify({ q, categoryIds: opts.categoryIds, paramCount: allParams.length, hasCategoryFilter })}`);
-
-    try {
-      const rows = await this.dataSource.query(sql, allParams);
-      const total = rows.length > 0 ? parseInt(rows[0].total_count, 10) : 0;
-
-      return {
-        data: await this.badges.attach(rows.map((r: any) => ({
-          id: r.id,
-          brandName: r.brand_name,
-          description: r.description,
-          profilePhotoUrl: r.profile_photo_url,
-          bannerImageUrl: r.banner_image_url,
-          city: r.city,
-          area: r.area,
-          status: r.status,
-          isWomenLed: r.women_led_status === 'approved',
-          isFeatured: r.is_featured,
-          distance: r.distance != null && r.geocode_precision !== 'city' ? parseFloat(parseFloat(r.distance).toFixed(2)) : null,
-          approximateLocation: r.geocode_precision === 'city',
-          avgRating: r.avg_rating != null ? parseFloat(parseFloat(r.avg_rating).toFixed(1)) : null,
-          reviewCount: parseInt(r.review_count, 10),
-          categories: r.categories,
-          relevanceScore: parseFloat(parseFloat(r.relevance_score).toFixed(3)),
-          isSponsored: r.is_sponsored || false,
-          hasActiveOffer: r.has_active_offer || false,
-          offerTitle: r.offer_title || null,
-          discountValue: r.discount_value != null ? parseFloat(r.discount_value) : null,
-          discountType: r.discount_type || null,
-        }))),
-        total,
-      };
-    } catch (err) {
-      this.logger.error(`Provider search failed: ${err instanceof Error ? err.message : err}`);
-      this.logger.debug(`Failed SQL params: ${JSON.stringify(allParams.map((p, i) => `$${i+1}=${typeof p === 'object' ? JSON.stringify(p) : p}`))}`);
-      return { data: [], total: 0 };
-    }
-  }
-
-  // ────────────────────────────────────────────────────────────
-  // DEALS / OFFERS SECTION — providers with active discounts
-  // ────────────────────────────────────────────────────────────
-
-  private async getDealsProviders(
-    q: string,
-    prefixTsQuery: string,
-    opts: { lat?: number; lng?: number; radius: number; city?: string; hasGeo: boolean; categoryIds?: string[] },
-  ): Promise<ProviderSearchResult[]> {
-    try {
-      const allParams: any[] = [q, prefixTsQuery];
-      let distExpr = 'NULL';
-
-      if (opts.hasGeo) {
-        distExpr = `1.4 * 6371 * acos(LEAST(1.0, cos(radians($3)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians($4)) + sin(radians($3)) * sin(radians(p.latitude))))`;
-        allParams.push(opts.lat, opts.lng);
-      }
-
-      let pi = allParams.length + 1;
-      const conditions: string[] = [
-        `p.status IN ('active', 'unverified')`,
-        `p.is_available = true`,
-        `po.is_active = true`,
-        `po.starts_at <= NOW()`,
-        `po.ends_at >= NOW()`,
-      ];
-
-      if (opts.hasGeo && opts.city) {
-        // Include providers within geo radius OR in the same city (even without coordinates)
-        const bbox = this.getBoundingBox(opts.lat!, opts.lng!, opts.radius);
-        conditions.push(`(
-          (p.latitude IS NOT NULL AND p.longitude IS NOT NULL
-           AND p.latitude BETWEEN $${pi} AND $${pi + 1}
-           AND p.longitude BETWEEN $${pi + 2} AND $${pi + 3}
-           AND ${distExpr} <= $${pi + 4})
-          OR p.city ILIKE $${pi + 5}
-        )`);
-        allParams.push(bbox.latMin, bbox.latMax, bbox.lngMin, bbox.lngMax, opts.radius, `%${opts.city}%`);
-        pi += 6;
-      } else if (opts.hasGeo) {
-        conditions.push(`p.latitude IS NOT NULL`, `p.longitude IS NOT NULL`);
-        const bbox = this.getBoundingBox(opts.lat!, opts.lng!, opts.radius);
-        conditions.push(`p.latitude BETWEEN $${pi} AND $${pi + 1}`);
-        conditions.push(`p.longitude BETWEEN $${pi + 2} AND $${pi + 3}`);
-        allParams.push(bbox.latMin, bbox.latMax, bbox.lngMin, bbox.lngMax);
-        pi += 4;
-        conditions.push(`${distExpr} <= $${pi}`);
-        allParams.push(opts.radius);
-        pi++;
-      } else if (opts.city) {
-        conditions.push(`p.city ILIKE $${pi}`);
-        allParams.push(`%${opts.city}%`);
-        pi++;
-      }
-
-      const hasCategoryFilter = opts.categoryIds && opts.categoryIds.length > 0;
-      if (hasCategoryFilter) {
-        const catPlaceholders = opts.categoryIds!.map((_, idx) => `$${pi + idx}`);
-        conditions.push(`p.id IN (
-          SELECT pc.provider_id FROM provider_categories pc
-          WHERE pc.category_id IN (${catPlaceholders.join(',')})
-             OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id IN (${catPlaceholders.join(',')}))
-        )`);
-        allParams.push(...opts.categoryIds!);
-        pi += opts.categoryIds!.length;
-      }
-
-      // Text match (skip if category filter)
-      if (!hasCategoryFilter) {
-        conditions.push(`(
-          ($2 <> '' AND p.search_vector @@ to_tsquery('english', $2))
-          OR similarity(p.brand_name, $1) > 0.1
-          OR p.brand_name ILIKE '%' || $1 || '%'
-          OR EXISTS (
-            SELECT 1 FROM provider_categories pc3
-            JOIN categories c3 ON c3.id = pc3.category_id
-            WHERE pc3.provider_id = p.id
-            AND (c3.name ILIKE '%' || $1 || '%' OR EXISTS (SELECT 1 FROM unnest(c3.keywords) kw WHERE kw ILIKE '%' || $1 || '%'))
-          )
-        )`);
-      }
-
-      const sql = `
-        SELECT DISTINCT ON (p.id)
-          p.id, p.brand_name, p.description, p.profile_photo_url, p.banner_image_url,
-          p.city, p.area, p.status, p.is_women_led, p.is_featured,
-          ${distExpr} AS distance,
-          p.geocode_precision AS geocode_precision,
-          rs.avg_rating, COALESCE(rs.review_count, 0) AS review_count,
-          (SELECT string_agg(DISTINCT c.name, ', ') FROM provider_categories pc JOIN categories c ON c.id = pc.category_id WHERE pc.provider_id = p.id) AS categories,
-          po.title AS offer_title, po.discount_value, po.discount_type,
-          po.discount_value AS sort_discount
-        FROM providers p
-        JOIN provider_offers po ON po.provider_id = p.id
-        LEFT JOIN provider_rating_stats rs ON rs.provider_id = p.id
-        WHERE ${conditions.join(' AND ')}
-        ORDER BY p.id, po.discount_value DESC
-      `;
-
-      // Wrap to re-sort by discount
-      const wrapSql = `
-        SELECT * FROM (${sql}) sub
-        ORDER BY sort_discount DESC NULLS LAST
-        LIMIT 5
-      `;
-
-      const rows = await this.dataSource.query(wrapSql, allParams);
-
-      return rows.map((r: any) => ({
-        id: r.id,
-        brandName: r.brand_name,
-        description: r.description,
-        profilePhotoUrl: r.profile_photo_url,
-        bannerImageUrl: r.banner_image_url,
-        city: r.city,
-        area: r.area,
-        status: r.status,
-        isWomenLed: r.is_women_led,
-        isFeatured: r.is_featured,
-        distance: r.distance != null && r.geocode_precision !== 'city' ? parseFloat(parseFloat(r.distance).toFixed(2)) : null,
-        approximateLocation: r.geocode_precision === 'city',
-        avgRating: r.avg_rating != null ? parseFloat(parseFloat(r.avg_rating).toFixed(1)) : null,
-        reviewCount: parseInt(r.review_count, 10),
-        categories: r.categories,
-        relevanceScore: 0.9,
-        hasActiveOffer: true,
-        offerTitle: r.offer_title,
-        discountValue: r.discount_value != null ? parseFloat(r.discount_value) : null,
-        discountType: r.discount_type,
-      }));
-    } catch (err) {
-      this.logger.error(`Deals search failed: ${err instanceof Error ? err.message : err}`);
-      return [];
-    }
-  }
-
-  // ────────────────────────────────────────────────────────────
-  // TOP RATED SECTION — 4+ star providers with 3+ reviews
-  // ────────────────────────────────────────────────────────────
-
-  private async getTopRatedProviders(
-    q: string,
-    prefixTsQuery: string,
-    opts: { lat?: number; lng?: number; radius: number; city?: string; hasGeo: boolean; categoryIds?: string[] },
-  ): Promise<ProviderSearchResult[]> {
-    try {
-      const allParams: any[] = [q, prefixTsQuery];
-      let distExpr = 'NULL';
-
-      if (opts.hasGeo) {
-        distExpr = `1.4 * 6371 * acos(LEAST(1.0, cos(radians($3)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians($4)) + sin(radians($3)) * sin(radians(p.latitude))))`;
-        allParams.push(opts.lat, opts.lng);
-      }
-
-      let pi = allParams.length + 1;
-      const conditions: string[] = [
-        `p.status IN ('active', 'unverified')`,
-        `rs.avg_rating >= 4.0`,
-        `rs.review_count >= 3`,
-      ];
-
-      if (opts.hasGeo && opts.city) {
-        // Include providers within geo radius OR in the same city (even without coordinates)
-        const bbox = this.getBoundingBox(opts.lat!, opts.lng!, opts.radius);
-        conditions.push(`(
-          (p.latitude IS NOT NULL AND p.longitude IS NOT NULL
-           AND p.latitude BETWEEN $${pi} AND $${pi + 1}
-           AND p.longitude BETWEEN $${pi + 2} AND $${pi + 3}
-           AND ${distExpr} <= $${pi + 4})
-          OR p.city ILIKE $${pi + 5}
-        )`);
-        allParams.push(bbox.latMin, bbox.latMax, bbox.lngMin, bbox.lngMax, opts.radius, `%${opts.city}%`);
-        pi += 6;
-      } else if (opts.hasGeo) {
-        conditions.push(`p.latitude IS NOT NULL`, `p.longitude IS NOT NULL`);
-        const bbox = this.getBoundingBox(opts.lat!, opts.lng!, opts.radius);
-        conditions.push(`p.latitude BETWEEN $${pi} AND $${pi + 1}`);
-        conditions.push(`p.longitude BETWEEN $${pi + 2} AND $${pi + 3}`);
-        allParams.push(bbox.latMin, bbox.latMax, bbox.lngMin, bbox.lngMax);
-        pi += 4;
-        conditions.push(`${distExpr} <= $${pi}`);
-        allParams.push(opts.radius);
-        pi++;
-      } else if (opts.city) {
-        conditions.push(`p.city ILIKE $${pi}`);
-        allParams.push(`%${opts.city}%`);
-        pi++;
-      }
-
-      const hasCategoryFilter = opts.categoryIds && opts.categoryIds.length > 0;
-      if (hasCategoryFilter) {
-        const catPlaceholders = opts.categoryIds!.map((_, idx) => `$${pi + idx}`);
-        conditions.push(`p.id IN (
-          SELECT pc.provider_id FROM provider_categories pc
-          WHERE pc.category_id IN (${catPlaceholders.join(',')})
-             OR pc.category_id IN (SELECT cc.id FROM categories cc WHERE cc.parent_id IN (${catPlaceholders.join(',')}))
-        )`);
-        allParams.push(...opts.categoryIds!);
-        pi += opts.categoryIds!.length;
-      }
-
-      if (!hasCategoryFilter) {
-        conditions.push(`(
-          ($2 <> '' AND p.search_vector @@ to_tsquery('english', $2))
-          OR similarity(p.brand_name, $1) > 0.1
-          OR p.brand_name ILIKE '%' || $1 || '%'
-          OR EXISTS (
-            SELECT 1 FROM provider_categories pc3
-            JOIN categories c3 ON c3.id = pc3.category_id
-            WHERE pc3.provider_id = p.id
-            AND (c3.name ILIKE '%' || $1 || '%' OR EXISTS (SELECT 1 FROM unnest(c3.keywords) kw WHERE kw ILIKE '%' || $1 || '%'))
-          )
-        )`);
-      }
-
-      allParams.push(5); // limit
-
-      const sql = `
-        SELECT
-          p.id, p.brand_name, p.description, p.profile_photo_url, p.banner_image_url,
-          p.city, p.area, p.status, p.is_women_led, p.is_featured,
-          ${distExpr} AS distance,
-          p.geocode_precision AS geocode_precision,
-          rs.avg_rating, rs.review_count,
-          (SELECT string_agg(DISTINCT c.name, ', ') FROM provider_categories pc JOIN categories c ON c.id = pc.category_id WHERE pc.provider_id = p.id) AS categories
-        FROM providers p
-        JOIN provider_rating_stats rs ON rs.provider_id = p.id
-        WHERE ${conditions.join(' AND ')}
-        ORDER BY rs.avg_rating DESC, rs.review_count DESC
-        LIMIT $${pi}
-      `;
-
-      const rows = await this.dataSource.query(sql, allParams);
-
-      return rows.map((r: any) => ({
-        id: r.id,
-        brandName: r.brand_name,
-        description: r.description,
-        profilePhotoUrl: r.profile_photo_url,
-        bannerImageUrl: r.banner_image_url,
-        city: r.city,
-        area: r.area,
-        status: r.status,
-        isWomenLed: r.is_women_led,
-        isFeatured: r.is_featured,
-        distance: r.distance != null && r.geocode_precision !== 'city' ? parseFloat(parseFloat(r.distance).toFixed(2)) : null,
-        approximateLocation: r.geocode_precision === 'city',
-        avgRating: r.avg_rating != null ? parseFloat(parseFloat(r.avg_rating).toFixed(1)) : null,
-        reviewCount: parseInt(r.review_count, 10),
-        categories: r.categories,
-        relevanceScore: 0.95,
-      }));
-    } catch (err) {
-      this.logger.error(`Top rated search failed: ${err instanceof Error ? err.message : err}`);
-      return [];
-    }
-  }
-
-  // ────────────────────────────────────────────────────────────
-  // SPONSORED PROVIDERS IN SEARCH RESULTS
-  // ────────────────────────────────────────────────────────────
-
-  /**
-   * Platform-wide sponsorships kill switch, cached for 5 min so the flag check
-   * doesn't cost a DB round trip per search.
-   */
-  private async isSponsorshipsEnabled(): Promise<boolean> {
-    const cacheKey = 'setting:sponsorships_enabled';
-    let flagValue = await this.cacheManager.get<string>(cacheKey);
-    if (flagValue == null) {
-      const row = await this.settingRepo.findOneBy({ key: 'sponsorships_enabled' });
-      flagValue = row?.value ?? 'false';
-      await this.cacheManager.set(cacheKey, flagValue, 5 * 60_000);
-    }
-    return flagValue === 'true';
-  }
-
-  private async getMatchingSponsoredProviders(
-    q: string,
-    prefixTsQuery: string,
-    lat?: number,
-    lng?: number,
-    city?: string,
-    categoryIds?: string[],
-  ): Promise<ProviderSearchResult[]> {
-    try {
-      if (!(await this.isSponsorshipsEnabled())) return [];
-
-      // 1. Resolve which categories match the query
-      let matchedCatIds: string[];
-
-      if (categoryIds && categoryIds.length > 0) {
-        matchedCatIds = categoryIds;
-      } else {
-        const catMatchSql = `
-          SELECT id FROM categories
-          WHERE is_active = true AND (
-            ($2 <> '' AND search_vector @@ to_tsquery('english', $2))
-            OR similarity(name, $1) > 0.3
-            OR name ILIKE '%' || $1 || '%'
-            OR EXISTS (SELECT 1 FROM unnest(keywords) kw WHERE kw ILIKE '%' || $1 || '%' OR similarity(kw, $1) > 0.3)
-          )
-        `;
-        const matchedCats: { id: string }[] = await this.dataSource.query(catMatchSql, [q, prefixTsQuery]);
-        if (matchedCats.length === 0) return [];
-        matchedCatIds = matchedCats.map((c) => c.id);
-      }
-
-      // 2. Fetch active sponsored listings targeting those categories
-      const hasGeo = lat != null && lng != null;
-      let distExpr = 'NULL';
-      const params: any[] = [matchedCatIds];
-      let pi = 2;
-
-      if (hasGeo) {
-        distExpr = `1.4 * 6371 * acos(LEAST(1.0, cos(radians($${pi})) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians($${pi + 1})) + sin(radians($${pi})) * sin(radians(p.latitude))))`;
-        params.push(lat, lng);
-        pi += 2;
-      }
-
-      const cityCondition = city
-        ? `AND (sl.target_cities IS NULL OR $${pi} = ANY(sl.target_cities))`
-        : '';
-      if (city) {
-        params.push(city);
-        pi++;
-      }
-
-      const radiusCondition = hasGeo
-        ? `AND (sl.target_radius IS NULL OR ${distExpr} <= sl.target_radius)`
-        : '';
-
-      const sql = `
-        SELECT
-          p.id,
-          p.brand_name,
-          p.description,
-          p.profile_photo_url,
-          p.banner_image_url,
-          p.city,
-          p.area,
-          p.status,
-          p.is_women_led,
-          p.is_featured,
-          ${distExpr} AS distance,
-          p.geocode_precision AS geocode_precision,
-          sl.id AS sponsored_listing_id,
-          sl.cost_per_click,
-          rs.avg_rating,
-          COALESCE(rs.review_count, 0) AS review_count,
-          (SELECT string_agg(DISTINCT c.name, ', ') FROM provider_categories pc JOIN categories c ON c.id = pc.category_id WHERE pc.provider_id = p.id) AS categories
-        FROM sponsored_listings sl
-        JOIN providers p ON p.id = sl.provider_id
-        LEFT JOIN provider_rating_stats rs ON rs.provider_id = p.id
-        WHERE sl.is_active = true
-          AND sl.starts_at <= NOW()
-          AND sl.ends_at >= NOW()
-          AND (sl.billing_mode = 'free' OR sl.spent_amount < sl.budget_amount)
-          AND sl.approval_status = 'approved'
-          AND p.status IN ('active', 'unverified')
-          -- A listing with explicit category targeting matches on that; an
-          -- untargeted one (the default for admin-granted placements) matches on
-          -- the provider's own categories. Without the second branch,
-          -- NULL && array is NULL and untargeted boosts never appear in search.
-          AND (
-            sl.target_category_ids && $1::uuid[]
-            OR (
-              sl.target_category_ids IS NULL
-              AND EXISTS (
-                SELECT 1 FROM provider_categories pc
-                WHERE pc.provider_id = p.id AND pc.category_id = ANY($1::uuid[])
-              )
-            )
-          )
-          ${cityCondition}
-          ${radiusCondition}
-        ORDER BY sl.priority DESC, sl.cost_per_click DESC, RANDOM()
-        LIMIT 3
-      `;
-
-      const rows = await this.dataSource.query(sql, params);
-
-      // 3. Track impressions; charge cost_per_impression on paid placements only
-      // (budget-guarded, fire and forget). Complimentary ones never accrue spend.
-      for (const r of rows) {
-        this.dataSource.query(
-          `UPDATE sponsored_listings
-             SET impressions = impressions + 1,
-                 spent_amount = CASE WHEN billing_mode = 'free' THEN spent_amount ELSE spent_amount + cost_per_impression END
-           WHERE id = $1
-             AND is_active = true
-             AND (billing_mode = 'free' OR spent_amount + cost_per_impression <= budget_amount)
-             AND ends_at > NOW()`,
-          [r.sponsored_listing_id],
-        ).catch(() => {});
-      }
-
-      return rows.map((r: any) => ({
-        id: r.id,
-        brandName: r.brand_name,
-        description: r.description,
-        profilePhotoUrl: r.profile_photo_url,
-        bannerImageUrl: r.banner_image_url,
-        city: r.city,
-        area: r.area,
-        status: r.status,
-        isWomenLed: r.is_women_led,
-        isFeatured: r.is_featured,
-        distance: r.distance != null && r.geocode_precision !== 'city' ? parseFloat(parseFloat(r.distance).toFixed(2)) : null,
-        approximateLocation: r.geocode_precision === 'city',
-        avgRating: r.avg_rating != null ? parseFloat(parseFloat(r.avg_rating).toFixed(1)) : null,
-        reviewCount: parseInt(r.review_count, 10),
-        categories: r.categories,
-        relevanceScore: 1.0,
-        isSponsored: true,
-        sponsoredListingId: r.sponsored_listing_id,
-      }));
-    } catch (err) {
-      this.logger.error(`Sponsored search failed: ${err instanceof Error ? err.message : err}`);
-      return [];
-    }
-  }
-
-  // ────────────────────────────────────────────────────────────
-  // PRODUCT SEARCH
-  // ────────────────────────────────────────────────────────────
-
-  private async searchProducts(
-    q: string,
-    prefixTsQuery: string,
-    opts: { lat?: number; lng?: number; radius: number; offset: number; limit: number; hasGeo: boolean; productType?: string },
-  ): Promise<{ data: ProductSearchResult[]; total: number }> {
-    const allParams: any[] = [q, prefixTsQuery];
-
-    let distExpr = 'NULL';
-    if (opts.hasGeo) {
-      distExpr = `1.4 * 6371 * acos(LEAST(1.0, cos(radians($3)) * cos(radians(prov.latitude)) * cos(radians(prov.longitude) - radians($4)) + sin(radians($3)) * sin(radians(prov.latitude))))`;
-      allParams.push(opts.lat, opts.lng);
-    }
-
-    let pi = allParams.length + 1;
-    const conditions: string[] = [
-      `prod.is_active = true`,
-      `prov.status IN ('active', 'unverified')`,
-    ];
-
-    if (opts.hasGeo) {
-      conditions.push(`prov.latitude IS NOT NULL`);
-      conditions.push(`prov.longitude IS NOT NULL`);
-      // Bounding-box pre-filter
-      const bbox = this.getBoundingBox(opts.lat!, opts.lng!, opts.radius);
-      conditions.push(`prov.latitude BETWEEN $${pi} AND $${pi + 1}`);
-      conditions.push(`prov.longitude BETWEEN $${pi + 2} AND $${pi + 3}`);
-      allParams.push(bbox.latMin, bbox.latMax, bbox.lngMin, bbox.lngMax);
-      pi += 4;
-      conditions.push(`${distExpr} <= $${pi}`);
-      allParams.push(opts.radius);
-      pi++;
-    }
-
-    if (opts.productType) {
-      conditions.push(`prod.product_type = $${pi}`);
-      allParams.push(opts.productType);
-      pi++;
-    }
-
-    const whereClause = conditions.join(' AND ');
-
-    const sql = `
-      SELECT
-        prod.id,
-        prod.name,
-        prod.description,
-        prod.price,
-        prod.currency,
-        prod.photo_url,
-        prod.product_type,
-        prod.provider_id,
-        prov.brand_name AS provider_name,
-        prov.city AS provider_city,
-        prov.area AS provider_area,
-        ${distExpr} AS distance,
-        (
-          CASE WHEN $2 <> '' THEN COALESCE(ts_rank_cd(prod.search_vector, to_tsquery('english', $2), 32), 0) * 0.6 ELSE 0 END +
-          COALESCE(similarity(prod.name, $1), 0) * 0.4
-        ) AS relevance_score,
-        COUNT(*) OVER() AS total_count
-      FROM products prod
-      JOIN providers prov ON prov.id = prod.provider_id
-      WHERE ${whereClause}
-        AND (
-          ($2 <> '' AND prod.search_vector @@ to_tsquery('english', $2))
-          OR similarity(prod.name, $1) > 0.15
-          OR prod.name ILIKE '%' || $1 || '%'
-          OR EXISTS (
-            SELECT 1 FROM provider_categories pc
-            JOIN categories c ON c.id = pc.category_id
-            WHERE pc.provider_id = prod.provider_id
-            AND (c.search_vector @@ to_tsquery('english', $2) OR c.name ILIKE '%' || $1 || '%' OR EXISTS (SELECT 1 FROM unnest(c.keywords) kw WHERE kw ILIKE '%' || $1 || '%'))
-          )
-          OR EXISTS (
-            SELECT 1 FROM categories c2
-            WHERE (c2.id = prod.category_id OR c2.id = prod.subcategory_id)
-            AND (c2.name ILIKE '%' || $1 || '%' OR EXISTS (SELECT 1 FROM unnest(c2.keywords) kw WHERE kw ILIKE '%' || $1 || '%'))
-          )
-          OR EXISTS (SELECT 1 FROM unnest(prod.keywords) kw WHERE kw ILIKE '%' || $1 || '%')
-        )
-      ORDER BY relevance_score DESC, distance ASC NULLS LAST
-      LIMIT $${pi} OFFSET $${pi + 1}
-    `;
-
-    allParams.push(opts.limit, opts.offset);
-
-    try {
-      const rows = await this.dataSource.query(sql, allParams);
-      const total = rows.length > 0 ? parseInt(rows[0].total_count, 10) : 0;
-
-      return {
-        data: rows.map((r: any) => ({
-          id: r.id,
-          name: r.name,
-          description: r.description,
-          price: r.price != null ? parseFloat(r.price) : null,
-          currency: r.currency,
-          photoUrl: r.photo_url,
-          productType: r.product_type || 'product',
-          providerId: r.provider_id,
-          providerName: r.provider_name,
-          providerCity: r.provider_city,
-          providerArea: r.provider_area,
-          distance: r.distance != null && r.geocode_precision !== 'city' ? parseFloat(parseFloat(r.distance).toFixed(2)) : null,
-          approximateLocation: r.geocode_precision === 'city',
-          relevanceScore: parseFloat(parseFloat(r.relevance_score).toFixed(3)),
-        })),
-        total,
-      };
-    } catch (err) {
-      this.logger.error('Product search failed', err);
-      return { data: [], total: 0 };
-    }
-  }
-
-  // ────────────────────────────────────────────────────────────
-  // CATEGORY SEARCH
-  // ────────────────────────────────────────────────────────────
-
-  private async searchCategories(
-    q: string,
-    prefixTsQuery: string,
-    opts: { offset: number; limit: number },
-  ): Promise<{ data: CategorySearchResult[]; total: number }> {
-    const sql = `
-      WITH cat_counts AS (
-        SELECT category_id, COUNT(DISTINCT provider_id) AS provider_count
-        FROM provider_categories GROUP BY category_id
-      )
-      SELECT
-        c.id,
-        c.name,
-        c.slug,
-        c.description,
-        c.icon,
-        c.image_url,
-        c.parent_id,
-        COALESCE(cc.provider_count, 0) AS provider_count,
-        (
-          CASE WHEN $2 <> '' THEN COALESCE(ts_rank_cd(c.search_vector, to_tsquery('english', $2)), 0) * 0.5 ELSE 0 END +
-          COALESCE(similarity(c.name, $1), 0) * 0.5
-        ) AS relevance_score,
-        COUNT(*) OVER() AS total_count
-      FROM categories c
-      LEFT JOIN cat_counts cc ON cc.category_id = c.id
-      WHERE c.is_active = true
-        AND (
-          ($2 <> '' AND c.search_vector @@ to_tsquery('english', $2))
-          OR similarity(c.name, $1) > 0.15
-          OR c.name ILIKE '%' || $1 || '%'
-          OR EXISTS (SELECT 1 FROM unnest(c.keywords) kw WHERE kw ILIKE '%' || $1 || '%' OR similarity(kw, $1) > 0.3)
-        )
-      ORDER BY relevance_score DESC
-      LIMIT $3 OFFSET $4
-    `;
-
-    try {
-      const rows = await this.dataSource.query(sql, [q, prefixTsQuery, opts.limit, opts.offset]);
-      const total = rows.length > 0 ? parseInt(rows[0].total_count, 10) : 0;
-
-      return {
-        data: rows.map((r: any) => ({
-          id: r.id,
-          name: r.name,
-          slug: r.slug,
-          description: r.description,
-          icon: r.icon,
-          imageUrl: r.image_url,
-          parentId: r.parent_id,
-          providerCount: parseInt(r.provider_count, 10),
-          relevanceScore: parseFloat(parseFloat(r.relevance_score).toFixed(3)),
-        })),
-        total,
-      };
-    } catch (err) {
-      this.logger.error('Category search failed', err);
-      return { data: [], total: 0 };
-    }
-  }
-
-  // ────────────────────────────────────────────────────────────
   // AUTOCOMPLETE SUGGESTIONS (cached)
+  //
+  // Same matching and sponsor rules as the full search. Sponsors that match
+  // lead their section and carry a Sponsored tag. Nothing is charged here —
+  // the dropdown re-queries on every keystroke; taps are charged by the client.
   // ────────────────────────────────────────────────────────────
 
   async getSuggestions(dto: SuggestionsQueryDto): Promise<SearchSuggestion[]> {
     const { q, lat, lng, limit = 8 } = dto;
-    const hasGeo = lat != null && lng != null;
 
-    // Check cache
-    const cacheKey = this.buildCacheKey('suggestions', { q: q.toLowerCase().trim(), lat, lng, limit });
+    const cacheKey = this.buildCacheKey('suggestions', { q: q.toLowerCase(), lat, lng, limit });
     const cached = await this.cacheManager.get<SearchSuggestion[]>(cacheKey);
     if (cached) return cached;
 
-    // Expand query with synonyms for better suggestions
-    const expandedQ = await this.expandQuery(q);
+    const { lex, pq, intent } = await this.understand(q, true);
+    if (pq.words.length === 0) return [];
+    const sponsorshipsOn = await this.isSponsorshipsEnabled();
+    const radius = 25;
 
-    const [providerSuggs, productSuggs, categorySuggs] = await Promise.all([
-      this.getProviderSuggestions(expandedQ, hasGeo, lat, lng, Math.ceil(limit * 0.5)),
-      this.getProductSuggestions(expandedQ, Math.ceil(limit * 0.3)),
-      this.getCategorySuggestions(expandedQ, Math.ceil(limit * 0.2)),
+    const [providerRows, productRows] = await Promise.all([
+      this.withTimeout(
+        this.queryProviderCandidates(pq, intent, { lat, lng, radius, scopeToArea: false, sponsorshipsOn }),
+        [],
+        'providerSuggestions',
+        2000,
+      ),
+      this.withTimeout(
+        this.queryProductCandidates(pq, intent, { lat, lng, radius, scopeToArea: false, sponsorshipsOn }),
+        [],
+        'productSuggestions',
+        2000,
+      ),
     ]);
 
-    const all = [...providerSuggs, ...productSuggs, ...categorySuggs];
-    const result = all.slice(0, limit);
+    const rankedProviders = this.rankProviders(providerRows, intent, { radius, sortBy: 'relevance' });
+    const rankedProducts = this.rankProducts(productRows, intent, { radius, sortBy: 'relevance' });
+    const providers = [...rankedProviders.sponsored, ...rankedProviders.organic];
+    const products = [...rankedProducts.pinned, ...rankedProducts.organic];
+    const categories = this.rankCategories(intent, lex).filter((c) => c.score >= 0.55);
 
-    // Cache for 120 seconds
-    await this.cacheManager.set(cacheKey, result, 120_000);
-    return result;
-  }
+    // Share the slots: up to 2 categories, the rest split between businesses
+    // and products/services, with either side taking what the other can't use.
+    const catCount = Math.min(categories.length, 2, Math.max(limit - 2, 1));
+    const rest = limit - catCount;
+    let providerCount = Math.min(providers.length, Math.ceil(rest / 2));
+    const productCount = Math.min(products.length, rest - providerCount);
+    providerCount = Math.min(providers.length, rest - productCount);
 
-  private async getProviderSuggestions(
-    q: string,
-    hasGeo: boolean,
-    lat?: number,
-    lng?: number,
-    limit = 4,
-  ): Promise<SearchSuggestion[]> {
-    const prefixTsQuery = this.buildPrefixTsQuery(q);
-    let distExpr = 'NULL';
-    const params: any[] = [q, prefixTsQuery];
-    if (hasGeo) {
-      distExpr = `1.4 * 6371 * acos(LEAST(1.0, cos(radians($3)) * cos(radians(p.latitude)) * cos(radians(p.longitude) - radians($4)) + sin(radians($3)) * sin(radians(p.latitude))))`;
-      params.push(lat, lng);
-    }
+    const categorySuggs: SearchSuggestion[] = categories.slice(0, catCount).map(({ cat }) => ({
+      text: cat.name,
+      type: 'category' as const,
+      id: cat.id,
+      subtitle: `${cat.providerCount} ${cat.providerCount === 1 ? 'business' : 'businesses'}`,
+      imageUrl: cat.imageUrl || undefined,
+      icon: cat.icon || undefined,
+      iconColor: cat.iconColor || undefined,
+    }));
 
-    const pi = params.length + 1;
-
-    const sql = `
-      SELECT
-        p.id,
-        p.brand_name,
-        p.profile_photo_url,
-        cn.categories,
-        ${distExpr} AS distance,
-        rs.avg_rating,
-        GREATEST(
-          similarity(p.brand_name, $1),
-          CASE WHEN $2 <> '' AND to_tsvector('english', COALESCE(p.brand_name, '') || ' ' || COALESCE(p.description, '')) @@ to_tsquery('english', $2)
-               THEN 0.5 ELSE 0 END
-        ) AS sim,
-        CASE WHEN EXISTS (
-          SELECT 1 FROM sponsored_listings sl
-          WHERE sl.provider_id = p.id
-            AND sl.is_active = true
-            AND sl.starts_at <= NOW()
-            AND sl.ends_at >= NOW()
-            AND (sl.billing_mode = 'free' OR sl.spent_amount < sl.budget_amount)
-            AND sl.approval_status = 'approved'
-        ) THEN true ELSE false END AS is_sponsored,
-        CASE WHEN EXISTS (
-          SELECT 1 FROM provider_offers po
-          WHERE po.provider_id = p.id
-            AND po.is_active = true
-            AND po.starts_at <= NOW()
-            AND po.ends_at >= NOW()
-            AND po.approval_status = 'approved'
-        ) THEN true ELSE false END AS has_active_offer
-      FROM providers p
-      LEFT JOIN LATERAL (
-        SELECT string_agg(DISTINCT c.name, ', ') AS categories
-        FROM provider_categories pc JOIN categories c ON c.id = pc.category_id
-        WHERE pc.provider_id = p.id
-      ) cn ON true
-      LEFT JOIN (
-        SELECT rv.provider_id, AVG(rv.star_rating)::numeric(2,1) AS avg_rating, COUNT(*)::int AS review_count
-        FROM reviews rv WHERE rv.status = 'active' GROUP BY rv.provider_id
-      ) rs ON rs.provider_id = p.id
-      WHERE p.status IN ('active', 'unverified')
-        AND (
-          ($2 <> '' AND to_tsvector('english', COALESCE(p.brand_name, '') || ' ' || COALESCE(p.description, '')) @@ to_tsquery('english', $2))
-          OR similarity(p.brand_name, $1) > 0.06
-          OR p.brand_name ILIKE $1 || '%'
-          OR p.brand_name ILIKE '%' || $1 || '%'
-        )
-      ORDER BY
-        CASE WHEN lower(p.brand_name) = lower($1) THEN 0
-             WHEN lower(p.brand_name) LIKE lower($1) || '%' THEN 1
-             ELSE 2 END,
-        is_sponsored DESC,
-        has_active_offer DESC,
-        sim DESC,
-        distance ASC NULLS LAST
-      LIMIT $${pi}
-    `;
-    params.push(limit);
-
-    try {
-      const rows = await this.dataSource.query(sql, params);
-      return rows.map((r: any) => ({
+    const providerSuggs: SearchSuggestion[] = providers.slice(0, providerCount).map((x) => {
+      const r = x.row;
+      return {
         text: r.brand_name,
         type: 'provider' as const,
         id: r.id,
         subtitle: [
           r.categories,
           r.avg_rating ? `★ ${parseFloat(r.avg_rating).toFixed(1)}` : null,
-          r.distance != null ? `${parseFloat(r.distance).toFixed(1)} km` : null,
+          r.distance != null && r.geocode_precision !== 'city' ? `${parseFloat(r.distance).toFixed(1)} km` : null,
         ].filter(Boolean).join(' · '),
-        imageUrl: r.profile_photo_url,
-        isSponsored: r.is_sponsored || false,
-        hasActiveOffer: r.has_active_offer || false,
-      }));
-    } catch {
-      return [];
-    }
-  }
+        imageUrl: r.profile_photo_url || undefined,
+        isSponsored: x.sponsored,
+        ...(x.sponsored ? { sponsoredListingId: r.listing_id } : {}),
+        hasActiveOffer: !!r.has_active_offer,
+      };
+    });
 
-  private async getProductSuggestions(q: string, limit = 3): Promise<SearchSuggestion[]> {
-    const prefixTsQuery = this.buildPrefixTsQuery(q);
-    const sql = `
-      SELECT
-        prod.id,
-        prod.name,
-        prod.photo_url,
-        prod.price,
-        prod.currency,
-        prod.product_type,
-        prov.brand_name AS provider_name,
-        GREATEST(
-          similarity(prod.name, $1),
-          CASE WHEN $2 <> '' AND to_tsvector('english', prod.name || ' ' || COALESCE(prod.description, '')) @@ to_tsquery('english', $2)
-               THEN 0.5 ELSE 0 END
-        ) AS sim
-      FROM products prod
-      JOIN providers prov ON prov.id = prod.provider_id
-      WHERE prod.is_active = true
-        AND prov.status IN ('active', 'unverified')
-        AND (
-          ($2 <> '' AND to_tsvector('english', prod.name || ' ' || COALESCE(prod.description, '')) @@ to_tsquery('english', $2))
-          OR similarity(prod.name, $1) > 0.08
-          OR prod.name ILIKE $1 || '%'
-          OR prod.name ILIKE '%' || $1 || '%'
-        )
-      ORDER BY
-        CASE WHEN lower(prod.name) LIKE lower($1) || '%' THEN 0 ELSE 1 END,
-        sim DESC
-      LIMIT $3
-    `;
-
-    try {
-      const rows = await this.dataSource.query(sql, [q, prefixTsQuery, limit]);
-      return rows.map((r: any) => ({
+    const productSuggs: SearchSuggestion[] = products.slice(0, productCount).map((x) => {
+      const r = x.row;
+      return {
         text: r.name,
         type: 'product' as const,
         id: r.id,
-        subtitle: [r.provider_name, r.price != null ? `${r.currency} ${r.price}` : null]
-          .filter(Boolean)
-          .join(' · '),
-        imageUrl: r.photo_url,
+        subtitle: [r.provider_name, r.price != null ? `${r.currency} ${parseFloat(r.price)}` : null].filter(Boolean).join(' · '),
+        imageUrl: r.photo_url || undefined,
         productType: r.product_type || 'product',
-      }));
-    } catch {
-      return [];
-    }
-  }
+        isSponsored: x.sponsored,
+        ...(x.sponsored ? { sponsoredListingId: r.listing_id } : {}),
+      };
+    });
 
-  private async getCategorySuggestions(q: string, limit = 2): Promise<SearchSuggestion[]> {
-    const prefixTsQuery = this.buildPrefixTsQuery(q);
-    const sql = `
-      SELECT
-        c.id,
-        c.name,
-        c.icon,
-        c.icon_color,
-        c.image_url,
-        COALESCE(cc.cnt, 0) AS provider_count,
-        GREATEST(
-          similarity(c.name, $1),
-          CASE WHEN $2 <> '' AND c.search_vector @@ to_tsquery('english', $2)
-               THEN 0.5 ELSE 0 END
-        ) AS sim
-      FROM categories c
-      LEFT JOIN (
-        SELECT category_id, COUNT(DISTINCT provider_id) AS cnt
-        FROM provider_categories GROUP BY category_id
-      ) cc ON cc.category_id = c.id
-      WHERE c.is_active = true
-        AND (
-          ($2 <> '' AND c.search_vector @@ to_tsquery('english', $2))
-          OR similarity(c.name, $1) > 0.08
-          OR c.name ILIKE $1 || '%'
-          OR c.name ILIKE '%' || $1 || '%'
-          OR EXISTS (
-            SELECT 1 FROM unnest(c.keywords) kw WHERE kw ILIKE '%' || $1 || '%' OR similarity(kw, $1) > 0.3
-          )
-        )
-      ORDER BY
-        CASE WHEN lower(c.name) LIKE lower($1) || '%' THEN 0 ELSE 1 END,
-        sim DESC
-      LIMIT $3
-    `;
+    // Section order follows the query: a clear category ("digital marketing")
+    // leads with the category; otherwise whichever side matched better leads.
+    const strongCategory = categories.length > 0 && categories[0].score >= 0.9;
+    const topOrganic = (list: Ranked[]) => list.find((x) => !x.sponsored)?.rel ?? 0;
+    const productsFirst = topOrganic(rankedProducts.organic) > topOrganic(rankedProviders.organic);
+    const result = [
+      ...(strongCategory ? categorySuggs : []),
+      ...(productsFirst ? [...productSuggs, ...providerSuggs] : [...providerSuggs, ...productSuggs]),
+      ...(strongCategory ? [] : categorySuggs),
+    ];
 
-    try {
-      const rows = await this.dataSource.query(sql, [q, prefixTsQuery, limit]);
-      return rows.map((r: any) => ({
-        text: r.name,
-        type: 'category' as const,
-        id: r.id,
-        subtitle: `${r.provider_count} providers`,
-        imageUrl: r.image_url || null,
-        icon: r.icon || null,
-        iconColor: r.icon_color || null,
-      }));
-    } catch {
-      return [];
-    }
+    await this.cacheManager.set(cacheKey, result, 120_000);
+    return result;
   }
 
   // ────────────────────────────────────────────────────────────
@@ -1852,43 +1603,6 @@ export class SearchService implements OnModuleInit {
     const words = sanitized.split(/\s+/).filter(Boolean);
     if (words.length === 0) return '';
     return words.map((w) => `${w}:*`).join(' & ');
-  }
-
-  // IMPROVED: Fuzzy synonym matching instead of exact-only
-  private async expandQuery(q: string): Promise<string> {
-    try {
-      const words = q.toLowerCase().trim().split(/\s+/).filter(Boolean);
-      if (words.length === 0) return q;
-      const terms = [q.toLowerCase().trim(), ...words];
-
-      // Try exact match first (fast path)
-      const exactRows: { canonical_term: string }[] = await this.dataSource.query(
-        `SELECT DISTINCT canonical_term FROM search_synonyms WHERE lower(term) = ANY($1)`,
-        [terms],
-      );
-
-      let expansions: string[] = exactRows.map((r) => r.canonical_term);
-
-      // If no exact match, try fuzzy trigram matching (catches misspellings)
-      if (expansions.length === 0) {
-        const fuzzyRows: { canonical_term: string }[] = await this.dataSource.query(
-          `SELECT DISTINCT ON (canonical_term) canonical_term, MAX(similarity(lower(term), t.token)) AS sim
-           FROM search_synonyms, unnest($1::text[]) AS t(token)
-           WHERE similarity(lower(term), t.token) > 0.3
-           GROUP BY canonical_term
-           ORDER BY canonical_term, sim DESC
-           LIMIT 5`,
-          [terms],
-        );
-        expansions = fuzzyRows.map((r) => r.canonical_term);
-      }
-
-      const filtered = expansions.filter((t) => !q.toLowerCase().includes(t.toLowerCase()));
-      if (filtered.length === 0) return q;
-      return `${q} ${filtered.join(' ')}`;
-    } catch {
-      return q;
-    }
   }
 
   private async getDidYouMean(q: string): Promise<string | undefined> {
