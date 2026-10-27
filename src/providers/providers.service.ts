@@ -825,8 +825,47 @@ export class ProvidersService {
       qb.andWhere('provider.createdAt >= NOW() - INTERVAL :sinceDays', { sinceDays: `${dto.sinceDays} days` });
     }
 
-    // Add a computed column to rank verified (active) above unverified
-    qb.addSelect("CASE WHEN provider.status = 'active' THEN 0 ELSE 1 END", 'status_rank');
+    // Category pages: a business with a live boost that targets this category
+    // (or is untargeted — it's already filtered to the category) leads the
+    // list with a Sponsored tag. Counted as a serve; charged only on tap.
+    let sponsoredExpr = 'false';
+    if (categoryIds?.length && (await this.areBoostsEnabled())) {
+      qb.leftJoin(
+        (sub) => sub
+          .select('sl.provider_id', 'provider_id')
+          .addSelect('sl.id', 'listing_id')
+          .addSelect('sl.target_category_ids', 'target_category_ids')
+          .addSelect('sl.target_cities', 'target_cities')
+          .addSelect('sl.target_radius', 'target_radius')
+          .from('sponsored_listings', 'sl')
+          .where('sl.is_active = true')
+          .andWhere("sl.approval_status = 'approved'")
+          .andWhere('sl.starts_at <= NOW() AND sl.ends_at >= NOW()')
+          .andWhere("(sl.billing_mode = 'free' OR sl.spent_amount < sl.budget_amount)")
+          .distinctOn(['sl.provider_id'])
+          .orderBy('sl.provider_id')
+          .addOrderBy('sl.priority', 'DESC')
+          .addOrderBy('sl.cost_per_click', 'DESC'),
+        'sp',
+        'sp.provider_id = provider.id',
+      );
+      sponsoredExpr = `(sp.listing_id IS NOT NULL
+        AND (sp.target_category_ids IS NULL OR cardinality(sp.target_category_ids) = 0
+             OR sp.target_category_ids && CAST(:sponsorCategoryIds AS uuid[])
+             OR sp.target_category_ids && ARRAY(SELECT sc.id FROM categories sc WHERE sc.parent_id = ANY(CAST(:sponsorCategoryIds AS uuid[]))))
+        AND (sp.target_cities IS NULL OR cardinality(sp.target_cities) = 0 ${city ? 'OR :sponsorCity ILIKE ANY(sp.target_cities)' : 'OR true'})
+        AND (sp.target_radius IS NULL ${hasLocation ? `OR ${haversine} <= sp.target_radius` : 'OR true'}))`;
+      qb.setParameter('sponsorCategoryIds', categoryIds);
+      if (city) qb.setParameter('sponsorCity', city);
+      qb.addSelect(`CASE WHEN ${sponsoredExpr} THEN sp.listing_id END`, 'sponsored_listing_id');
+    }
+
+    // Add a computed column to rank verified (active) above unverified —
+    // and matching sponsors above both
+    qb.addSelect(
+      `CASE WHEN ${sponsoredExpr} THEN -1 WHEN provider.status = 'active' THEN 0 ELSE 1 END`,
+      'status_rank',
+    );
 
     // Sort - verified (active) providers always rank above unverified
     if (hasLocation) {
@@ -883,11 +922,24 @@ export class ProvidersService {
       rating: raw[i]?.avg_rating ? parseFloat(parseFloat(raw[i].avg_rating).toFixed(1)) : null,
       reviewCount: parseInt(raw[i]?.review_count ?? '0', 10),
       services: raw[i]?.services || null,
+      isSponsored: !!raw[i]?.sponsored_listing_id,
+      sponsoredListingId: (raw[i]?.sponsored_listing_id as string | undefined) ?? undefined,
       roadDistance: null as string | null,
       roadDistanceMeters: null as number | null,
       travelTime: null as string | null,
       travelTimeSeconds: null as number | null,
     }));
+
+    const servedListingIds = data.map((p) => p.sponsoredListingId).filter(Boolean);
+    if (servedListingIds.length > 0) {
+      this.sponsorRepo
+        .createQueryBuilder()
+        .update(SponsoredListing)
+        .set({ impressions: () => 'impressions + 1' })
+        .where('id IN (:...ids)', { ids: servedListingIds })
+        .execute()
+        .catch(() => {});
+    }
 
     // Enrich with Distance Matrix (road distance + travel time) — only when coordinates are available
     if (hasLocation) {
