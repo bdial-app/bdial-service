@@ -2,7 +2,6 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { RazorpayProvider } from './razorpay.provider';
 import { PaymentService } from './payment.service';
-import { LeadWalletService } from './lead-wallet.service';
 import { AppleVerifyService } from './apple-verify.service';
 import { PaymentController } from './payment.controller';
 import { AdminPaymentController } from './admin-payment.controller';
@@ -35,17 +34,8 @@ import { NotificationsModule } from '../notifications/notifications.module';
     ]),
     NotificationsModule,
   ],
-  controllers: [
-    PaymentController,
-    AdminPaymentController,
-    PaymentWebhookController,
-  ],
-  providers: [
-    RazorpayProvider,
-    PaymentService,
-    AppleVerifyService,
-    LeadWalletService,
-  ],
-  exports: [PaymentService, LeadWalletService],
+  controllers: [PaymentController, AdminPaymentController, PaymentWebhookController],
+  providers: [RazorpayProvider, PaymentService, AppleVerifyService],
+  exports: [PaymentService],
 })
 export class PaymentModule {}
