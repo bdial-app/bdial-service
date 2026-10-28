@@ -505,31 +505,6 @@ export class NotificationTemplateService {
         isActive: true,
         defaultRoute: '/?tab=listings&subTab=deals',
       },
-      // ─── Lead Wallet (owner) ───
-      {
-        slug: 'lead_wallet_low',
-        name: 'Lead Wallet running low',
-        description: 'Owner: wallet below one hot lead after spending (once a week)',
-        type: 'provider_status',
-        titleTemplate: '💳 Your Lead Wallet is at ₹{{balance}}',
-        bodyTemplate: 'Top up ₹{{price}} and get ₹{{credit}} — reach new hot leads before other businesses do.',
-        variables: ['balance', 'price', 'credit'],
-        category: 'transactional',
-        isActive: true,
-        defaultRoute: '/?tab=analytics',
-      },
-      {
-        slug: 'new_hot_leads',
-        name: 'New hot leads',
-        description: 'Owner, 11:30 AM: 2+ new hot/warm leads not yet unlocked',
-        type: 'provider_status',
-        titleTemplate: '🔥 {{count}} new hot leads for {{brandName}}',
-        bodyTemplate: '{{line}}',
-        variables: ['count', 'brandName', 'line'],
-        category: 'marketing',
-        isActive: true,
-        defaultRoute: '/?tab=analytics',
-      },
       // ─── Chat (owner) ───
       {
         slug: 'chat_unanswered',
