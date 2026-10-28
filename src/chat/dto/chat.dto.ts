@@ -10,6 +10,9 @@ import {
   Min,
   Max,
   IsDateString,
+  IsBoolean,
+  IsArray,
+  ArrayMaxSize,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type, Transform } from 'class-transformer';
@@ -90,10 +93,14 @@ export class SendMessageDto {
   @MaxLength(4000)
   content?: string;
 
-  @ApiPropertyOptional({ enum: ['text', 'image', 'enquiry', 'quote_request'], default: 'text' })
+  @ApiPropertyOptional({
+    enum: ['text', 'image', 'enquiry', 'quote_request', 'file', 'product', 'deal'],
+    default: 'text',
+    description: 'file: { url, storageKey, fileName, size } · product: { productId } · deal: { offerId } — product and deal are filled in by the server',
+  })
   @IsOptional()
-  @IsEnum(['text', 'image', 'enquiry', 'quote_request'])
-  messageType?: 'text' | 'image' | 'enquiry' | 'quote_request' = 'text';
+  @IsEnum(['text', 'image', 'enquiry', 'quote_request', 'file', 'product', 'deal'])
+  messageType?: 'text' | 'image' | 'enquiry' | 'quote_request' | 'file' | 'product' | 'deal' = 'text';
 
   @ApiPropertyOptional({ description: 'Rich metadata (image url, product info, etc.)' })
   @IsOptional()
@@ -142,4 +149,19 @@ export class TypingDto {
   @ApiProperty()
   @IsNotEmpty()
   isTyping: boolean;
+}
+
+export class MuteConversationDto {
+  @ApiProperty()
+  @IsBoolean()
+  muted: boolean;
+}
+
+export class QuickRepliesDto {
+  @ApiProperty({ type: [String], maxItems: 12 })
+  @IsArray()
+  @ArrayMaxSize(12)
+  @IsString({ each: true })
+  @MaxLength(300, { each: true })
+  replies: string[];
 }

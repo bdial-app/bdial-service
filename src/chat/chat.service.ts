@@ -377,7 +377,97 @@ export class ChatService {
         providerId: otherProvider?.id || null,
       },
       myRole: myP?.role || null,
+      isMuted: !!myP?.isMuted,
+      // What a customer sees about the business in the chat header.
+      business: otherProvider ? await this.businessTrust(otherProvider) : null,
     };
+  }
+
+  private replyTimeCache = new Map<string, { at: number; minutes: number | null }>();
+
+  /**
+   * How quickly a business usually answers: the median time from a
+   * customer's message to its next reply, over the last 60 days (needs 3+
+   * answered messages). Cached an hour.
+   */
+  async replyMinutes(ownerUserId: string): Promise<number | null> {
+    const hit = this.replyTimeCache.get(ownerUserId);
+    if (hit && Date.now() - hit.at < 60 * 60 * 1000) return hit.minutes;
+    const [r] = await this.messageRepo.manager.query(
+      `WITH m AS (
+         SELECT m.conversation_id, m.created_at, (m.sender_id = $1) AS mine,
+                lag(m.sender_id = $1) OVER (PARTITION BY m.conversation_id ORDER BY m.created_at) AS prev_mine
+           FROM messages m
+           JOIN conversation_participants cp
+             ON cp.conversation_id = m.conversation_id AND cp.user_id = $1 AND cp.role = 'provider'
+          WHERE m.created_at > now() - interval '60 days' AND m.deleted_at IS NULL AND m.message_type <> 'system'
+       ),
+       asks AS (
+         SELECT conversation_id, created_at FROM m WHERE NOT mine AND (prev_mine IS NULL OR prev_mine)
+       )
+       SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM r.created_at - a.created_at)) AS median_s,
+              count(*)::int AS n
+         FROM asks a
+         CROSS JOIN LATERAL (
+           SELECT created_at FROM m
+            WHERE m.conversation_id = a.conversation_id AND m.mine AND m.created_at > a.created_at
+            ORDER BY created_at LIMIT 1
+         ) r`,
+      [ownerUserId],
+    );
+    const minutes = r && r.n >= 3 && r.median_s != null ? Math.max(1, Math.round(Number(r.median_s) / 60)) : null;
+    this.replyTimeCache.set(ownerUserId, { at: Date.now(), minutes });
+    return minutes;
+  }
+
+  private async businessTrust(provider: Provider) {
+    const [stats] = await this.messageRepo.manager.query(
+      `SELECT COALESCE(AVG(star_rating), 0)::float AS rating, count(*)::int AS reviews
+         FROM reviews WHERE provider_id = $1 AND status = 'active'`,
+      [provider.id],
+    );
+    return {
+      verified: provider.status === 'active',
+      rating: stats ? Math.round(Number(stats.rating) * 10) / 10 : 0,
+      reviewCount: stats?.reviews ?? 0,
+      replyMinutes: await this.replyMinutes(provider.userId),
+    };
+  }
+
+  // ─────────────────────────────────────────────
+  // MUTE · QUICK REPLIES
+  // ─────────────────────────────────────────────
+
+  async setMuted(userId: string, conversationId: string, muted: boolean) {
+    const me = await this.assertParticipant(userId, conversationId);
+    await this.participantRepo.update(me.id, { isMuted: muted });
+    return { muted };
+  }
+
+  private static readonly STARTER_REPLIES = [
+    "Yes, it's available 👍",
+    'The price is ₹',
+    'Thank you! We will get back to you shortly.',
+    'You can visit us any time during our working hours.',
+  ];
+
+  async getQuickReplies(userId: string) {
+    const provider = await this.providerRepo.findOne({ where: { userId } });
+    if (!provider) throw new ForbiddenException('Only a business has quick replies');
+    return { replies: provider.chatQuickReplies ?? ChatService.STARTER_REPLIES };
+  }
+
+  async setQuickReplies(userId: string, replies: string[]) {
+    const provider = await this.providerRepo.findOne({ where: { userId } });
+    if (!provider) throw new ForbiddenException('Only a business has quick replies');
+    const clean = replies.map((r) => r.trim()).filter(Boolean).slice(0, 12);
+    for (const r of clean) {
+      if (this.contentSanitizer.check(r).flagged) {
+        throw new BadRequestException('A reply contains inappropriate language. Please revise it.');
+      }
+    }
+    await this.providerRepo.update(provider.id, { chatQuickReplies: clean });
+    return { replies: clean };
   }
 
   /**
@@ -511,6 +601,25 @@ export class ChatService {
       throw new BadRequestException('Message content is required for text messages');
     }
 
+    // Product and deal cards are built from the business's own records, so a
+    // card always shows the real name, price and terms.
+    if (dto.messageType === 'product' || dto.messageType === 'deal') {
+      if (participant.role !== 'provider') {
+        throw new ForbiddenException('Only the business can share its products and deals');
+      }
+      dto = { ...dto, ...(await this.buildCard(userId, dto)) };
+    } else if (dto.messageType === 'file') {
+      const url = dto.metadata?.url;
+      if (typeof url !== 'string' || !url) throw new BadRequestException('File missing');
+      const fileName = String(dto.metadata?.fileName || 'Document.pdf').slice(0, 120);
+      dto = {
+        ...dto,
+        // The caption rides in metadata; content is what older apps show.
+        metadata: { ...dto.metadata, fileName, caption: dto.content || null },
+        content: `📄 ${fileName}`,
+      };
+    }
+
     // Content moderation: check message text for profanity
     if (dto.content) {
       const check = this.contentSanitizer.check(dto.content);
@@ -598,9 +707,9 @@ export class ChatService {
           role: op.role,
         });
 
-        // Send push notification to offline/background users
+        // Send push notification to offline/background users (not to a muted chat)
         const notificationType = dto.messageType === 'enquiry' ? 'new_enquiry' : 'chat_message';
-        this.notificationDispatch.sendToUser(
+        if (!op.isMuted) this.notificationDispatch.sendToUser(
           op.userId,
           notificationType as any,
           sender.name,
@@ -908,7 +1017,65 @@ export class ChatService {
     if (dto.messageType === 'image') return '📷 Photo';
     if (dto.messageType === 'enquiry') return '📋 Enquiry';
     if (dto.messageType === 'quote_request') return '💰 Quote Request';
+    // Text, and the file/product/deal cards' one-line text.
     return dto.content?.substring(0, 100) || '';
+  }
+
+  /** A product or deal card from the sender's own business. */
+  private async buildCard(
+    userId: string,
+    dto: SendMessageDto,
+  ): Promise<{ content: string; metadata: Record<string, any> }> {
+    const provider = await this.providerRepo.findOne({ where: { userId } });
+    if (!provider) throw new ForbiddenException('Business not found');
+    const q = this.messageRepo.manager;
+
+    if (dto.messageType === 'product') {
+      const [p] = await q.query(
+        `SELECT id, slug, name, price, currency, photo_url, photo_urls, product_type
+           FROM products WHERE id = $1 AND provider_id = $2 AND is_active = true`,
+        [dto.metadata?.productId, provider.id],
+      );
+      if (!p) throw new NotFoundException('Product not found');
+      const price = p.price != null ? Number(p.price) : null;
+      return {
+        content: `${p.product_type === 'service' ? '🛠️' : '📦'} ${p.name}${price != null ? ` — ₹${price.toLocaleString('en-IN')}` : ''}`,
+        metadata: {
+          productId: p.id,
+          productSlug: p.slug,
+          providerSlug: provider.slug,
+          productName: p.name,
+          productImage: p.photo_url || (Array.isArray(p.photo_urls) ? p.photo_urls[0] : null) || null,
+          productPrice: price,
+          currency: p.currency || 'INR',
+          productType: p.product_type === 'service' ? 'service' : 'product',
+        },
+      };
+    }
+
+    const [o] = await q.query(
+      `SELECT id, title, description, discount_type, discount_value, min_order_amount, ends_at
+         FROM provider_offers
+        WHERE id = $1 AND provider_id = $2 AND is_active = true
+          AND approval_status = 'approved' AND ends_at > now()`,
+      [dto.metadata?.offerId, provider.id],
+    );
+    if (!o) throw new NotFoundException('That deal has ended or isn\'t live');
+    const value = Number(o.discount_value);
+    const headline = o.discount_type === 'percentage' ? `${value}% OFF` : `₹${value.toLocaleString('en-IN')} OFF`;
+    return {
+      content: `🏷️ ${headline} — ${o.title}`,
+      metadata: {
+        offerId: o.id,
+        providerId: provider.id,
+        title: o.title,
+        description: o.description,
+        discountType: o.discount_type,
+        discountValue: value,
+        minOrderAmount: o.min_order_amount != null ? Number(o.min_order_amount) : null,
+        endsAt: o.ends_at,
+      },
+    };
   }
 
   // ─────────────────────────────────────────────

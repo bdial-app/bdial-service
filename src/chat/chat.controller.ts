@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Patch,
+  Put,
   Body,
   Param,
   Query,
@@ -29,6 +30,8 @@ import {
   GetMessagesQueryDto,
   MarkReadDto,
   TypingDto,
+  MuteConversationDto,
+  QuickRepliesDto,
 } from './dto/chat.dto';
 import { UPLOAD_LIMITS } from '../common/image-processor';
 
@@ -63,6 +66,28 @@ export class ChatController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.chatService.getConversationDetail(req.user.id, id);
+  }
+
+  @Patch('conversations/:id/mute')
+  @ApiOperation({ summary: 'Mute or unmute push notifications for one conversation' })
+  setMuted(
+    @Request() req,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: MuteConversationDto,
+  ) {
+    return this.chatService.setMuted(req.user.id, id, dto.muted);
+  }
+
+  @Get('quick-replies')
+  @ApiOperation({ summary: "The business's saved chat replies" })
+  getQuickReplies(@Request() req) {
+    return this.chatService.getQuickReplies(req.user.id);
+  }
+
+  @Put('quick-replies')
+  @ApiOperation({ summary: "Save the business's chat replies (up to 12)" })
+  setQuickReplies(@Request() req, @Body() dto: QuickRepliesDto) {
+    return this.chatService.setQuickReplies(req.user.id, dto.replies);
   }
 
   @Get('conversations/:id/customer')

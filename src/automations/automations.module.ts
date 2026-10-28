@@ -12,6 +12,7 @@ import { AutomationsController } from './automations.controller';
 import { AutomationsService } from './automations.service';
 import { EngagementPushService } from './engagement-push.service';
 import { DealPushService } from './deal-push.service';
+import { ChatPushService } from './chat-push.service';
 import { NotificationsModule } from '../notifications/notifications.module';
 
 /** Global so chat, reviews, admin and payments can schedule messages. */
@@ -35,6 +36,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     AutomationCronService,
     EngagementPushService,
     DealPushService,
+    ChatPushService,
   ],
   exports: [AutomationsService],
 })
