@@ -24,6 +24,7 @@ import {
   parseQuery,
   vocabularyWords,
 } from './search-query';
+import { tierRank } from '../providers/deal-rules';
 
 // ────────────────────────────────────────────────────────────
 // Response interfaces
@@ -64,6 +65,7 @@ export interface ProviderSearchResult {
   isSponsored?: boolean;
   sponsoredListingId?: string;
   hasActiveOffer?: boolean;
+  offerId?: string;
   offerTitle?: string;
   discountValue?: number;
   discountType?: string;
@@ -86,6 +88,12 @@ export interface ProductSearchResult {
   relevanceScore: number;
   isSponsored?: boolean;
   sponsoredListingId?: string;
+  /** The business behind it has a live offer. */
+  hasActiveOffer?: boolean;
+  offerId?: string;
+  offerTitle?: string;
+  discountType?: string;
+  discountValue?: number;
 }
 
 export interface CategorySearchResult {
@@ -581,7 +589,18 @@ export class SearchService implements OnModuleInit {
       AND (sp.target_radius IS NULL OR ${hasGeo ? `${dist(alias)} <= sp.target_radius` : 'true'})
     )`;
 
-    return { params, p, N, allMatch, wordShare, nameScore, dist, intentCte, sponsorCte, sponsorGeoOk, hasGeo };
+    // Each business's live, approved offer: a paid one first, then the biggest.
+    const offerCte = `offer AS (
+      SELECT DISTINCT ON (po.provider_id)
+        po.provider_id, po.id AS offer_id, po.title AS offer_title, po.discount_value, po.discount_type,
+        po.tier AS offer_tier, po.ends_at AS offer_ends_at, po.min_order_amount AS offer_min_order
+      FROM provider_offers po
+      WHERE po.is_active = true AND po.starts_at <= NOW() AND po.ends_at >= NOW()
+        AND po.approval_status = 'approved'
+      ORDER BY po.provider_id, (po.tier = 'free'), po.discount_value DESC
+    )`;
+
+    return { params, p, N, allMatch, wordShare, nameScore, dist, intentCte, sponsorCte, offerCte, sponsorGeoOk, hasGeo };
   }
 
   /** Geo / city scoping shared by provider and product candidates. */
@@ -648,14 +667,7 @@ export class SearchService implements OnModuleInit {
     const sql = `
       WITH ${b.intentCte},
       ${b.sponsorCte},
-      offer AS (
-        SELECT DISTINCT ON (po.provider_id)
-          po.provider_id, po.title AS offer_title, po.discount_value, po.discount_type
-        FROM provider_offers po
-        WHERE po.is_active = true AND po.starts_at <= NOW() AND po.ends_at >= NOW()
-          AND po.approval_status = 'approved'
-        ORDER BY po.provider_id, po.discount_value DESC
-      )
+      ${b.offerCte}
       SELECT
         p.id, p.brand_name, p.description, p.profile_photo_url, p.banner_image_url,
         p.city, p.area, p.status, p.women_led_status, p.is_featured, p.created_at,
@@ -665,7 +677,8 @@ export class SearchService implements OnModuleInit {
         COALESCE(rs.review_count, 0) AS review_count,
         cn.categories,
         ao.provider_id IS NOT NULL AS has_active_offer,
-        ao.offer_title, ao.discount_value, ao.discount_type,
+        ao.offer_id, ao.offer_title, ao.discount_value, ao.discount_type,
+        ao.offer_tier, ao.offer_ends_at, ao.offer_min_order,
         sp.listing_id, sp.priority AS sponsor_priority, sp.cost_per_click, sp.target_category_ids,
         ${b.sponsorGeoOk('p')} AS sponsor_geo_ok,
         m.name_score, m.cat_score, m.body_score, m.product_score, m.typo_score,
@@ -741,7 +754,8 @@ export class SearchService implements OnModuleInit {
 
     const sql = `
       WITH ${b.intentCte},
-      ${b.sponsorCte}
+      ${b.sponsorCte},
+      ${b.offerCte}
       SELECT
         pr.id, pr.name, pr.description, pr.price, pr.currency, pr.photo_url, pr.product_type,
         pr.provider_id, pr.category_id, pr.subcategory_id, pr.created_at,
@@ -751,12 +765,16 @@ export class SearchService implements OnModuleInit {
         rs.avg_rating,
         sp.listing_id, sp.priority AS sponsor_priority, sp.cost_per_click, sp.target_category_ids,
         ${b.sponsorGeoOk('prov')} AS sponsor_geo_ok,
+        ao.provider_id IS NOT NULL AS has_active_offer,
+        ao.offer_id, ao.offer_title, ao.discount_value, ao.discount_type,
+        ao.offer_tier, ao.offer_ends_at, ao.offer_min_order,
         m.name_score, m.body_score, m.cat_score,
         ${b.wordShare('pr.name')} AS name_share
       FROM products pr
       JOIN providers prov ON prov.id = pr.provider_id
       LEFT JOIN provider_rating_stats rs ON rs.provider_id = prov.id
       LEFT JOIN sponsor sp ON sp.provider_id = prov.id
+      LEFT JOIN offer ao ON ao.provider_id = prov.id
       CROSS JOIN LATERAL (
         SELECT
           ${b.nameScore('pr.name', 1.0, 0.9, 0.8, 0.75)} AS name_score,
@@ -812,12 +830,33 @@ export class SearchService implements OnModuleInit {
     b.quality - a.quality ||
     parseFloat(b.row.cost_per_click ?? 0) - parseFloat(a.row.cost_per_click ?? 0);
 
+  /**
+   * Match groups. A live deal lifts a result to the top of its own group
+   * (paid deals above free ones) but never past a better-matching group, and
+   * an exact name match always stays on top.
+   */
+  private matchBand = (rel: number) => (rel >= 0.95 ? 3 : rel >= 0.75 ? 2 : rel >= 0.55 ? 1 : 0);
+  private dealRank = (x: Ranked) => (x.row.has_active_offer ? tierRank(x.row.offer_tier) : 0);
+
+  /** What a deal is worth to the customer, as a percentage; a flat amount against its minimum order. */
+  private dealValue(row: any): number {
+    const v = parseFloat(row.discount_value ?? 0);
+    if (row.discount_type === 'percentage') return v;
+    const minOrder = parseFloat(row.offer_min_order ?? 0);
+    return minOrder > 0 ? (v / minOrder) * 100 : Math.min(v / 20, 30);
+  }
+
   private sortRanked(list: Ranked[], sortBy: string, ratingOf: (r: any) => number | null) {
     const statusRank = (x: Ranked) => (x.row.status === 'active' || x.row.provider_status === 'active' ? 0 : 1);
     const dist = (x: Ranked) =>
       x.row.distance == null || x.row.geocode_precision === 'city' ? Infinity : parseFloat(x.row.distance);
     const cmp: Record<string, (a: Ranked, b: Ranked) => number> = {
-      relevance: (a, b) => b.rel - a.rel || b.quality - a.quality || dist(a) - dist(b),
+      relevance: (a, b) =>
+        this.matchBand(b.rel) - this.matchBand(a.rel) ||
+        this.dealRank(b) - this.dealRank(a) ||
+        b.rel - a.rel ||
+        b.quality - a.quality ||
+        dist(a) - dist(b),
       distance: (a, b) => statusRank(a) - statusRank(b) || dist(a) - dist(b) || b.score - a.score,
       rating: (a, b) =>
         statusRank(a) - statusRank(b) || (ratingOf(b.row) ?? -1) - (ratingOf(a.row) ?? -1) || b.score - a.score,
@@ -901,6 +940,7 @@ export class SearchService implements OnModuleInit {
         (rating / 5) * 0.03 +
         (row.provider_status === 'active' ? 0.01 : 0) +
         this.closeness(row.distance, opts.radius) * 0.03 +
+        (row.has_active_offer ? 0.01 : 0) +
         parseFloat(row.name_share ?? 0) * 0.05;
       const ranked: Ranked = { row, rel, quality, score: rel + quality, sponsored: false };
       all.push(ranked);
@@ -964,6 +1004,7 @@ export class SearchService implements OnModuleInit {
       hasActiveOffer: !!r.has_active_offer,
       offerTitle: r.offer_title || undefined,
       discountValue: r.discount_value != null ? parseFloat(r.discount_value) : undefined,
+      offerId: r.offer_id || undefined,
       discountType: r.discount_type || undefined,
     };
   }
@@ -987,6 +1028,10 @@ export class SearchService implements OnModuleInit {
       relevanceScore: parseFloat(x.score.toFixed(3)),
       isSponsored: x.sponsored,
       ...(x.sponsored ? { sponsoredListingId: r.listing_id } : {}),
+      hasActiveOffer: !!r.has_active_offer,
+      ...(r.has_active_offer
+        ? { offerId: r.offer_id, offerTitle: r.offer_title, discountType: r.discount_type, discountValue: parseFloat(r.discount_value) }
+        : {}),
     };
   }
 
@@ -1088,9 +1133,21 @@ export class SearchService implements OnModuleInit {
       // Highlight strips are derived from the full match list so the paged
       // organic list stays stable across pages; they're returned on page 1.
       sponsoredRanked = rankedProviders.sponsored;
+      // Deals that match well (at least 60% of the best result): match group,
+      // paid before free, best value to the customer, ending soonest, nearest.
+      const topRel = Math.max(0, ...rankedProviders.organic.map((x) => x.rel));
+      const endsAt = (x: Ranked) => new Date(x.row.offer_ends_at ?? 8.64e15).getTime();
+      const near = (x: Ranked) => (x.row.distance == null ? Infinity : parseFloat(x.row.distance));
       dealsRanked = rankedProviders.organic
-        .filter((x) => x.row.has_active_offer)
-        .sort((a, b) => parseFloat(b.row.discount_value ?? 0) - parseFloat(a.row.discount_value ?? 0) || b.score - a.score)
+        .filter((x) => x.row.has_active_offer && x.rel >= topRel * 0.6)
+        .sort(
+          (a, b) =>
+            this.matchBand(b.rel) - this.matchBand(a.rel) ||
+            this.dealRank(b) - this.dealRank(a) ||
+            this.dealValue(b.row) - this.dealValue(a.row) ||
+            endsAt(a) - endsAt(b) ||
+            near(a) - near(b),
+        )
         .slice(0, 5);
       const inDeals = new Set(dealsRanked.map((x) => x.row.id));
       topRatedRanked = rankedProviders.organic

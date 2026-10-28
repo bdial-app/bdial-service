@@ -63,4 +63,12 @@ export class CreateOfferDto {
   @IsInt()
   @Min(1)
   usageLimit?: number;
+
+  @ApiPropertyOptional({
+    enum: ['free', 'paid'],
+    description: 'free: up to 5 days from the free quota · paid: up to 15 days, needs a completed deal payment. Plan subscribers get a plan deal either way.',
+  })
+  @IsOptional()
+  @IsEnum(['free', 'paid'])
+  tier?: 'free' | 'paid';
 }

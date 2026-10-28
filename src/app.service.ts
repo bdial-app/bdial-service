@@ -66,6 +66,7 @@ export class AppService {
       'lead_apple_product_soft',
       'lead_apple_product_cold',
       'deal_apple_product',
+      'deal_extension_apple_product',
     ];
     const settings = await this.settingRepo.find({ where: { key: In(monetizationKeys) } });
     const config: Record<string, any> = {};
@@ -91,6 +92,7 @@ export class AppService {
       config['lead_apple_product_soft'],
       config['lead_apple_product_cold'],
       config['deal_apple_product'],
+      config['deal_extension_apple_product'],
     ].filter((v): v is string => typeof v === 'string' && v.trim().length > 0);
 
     try {
@@ -123,7 +125,7 @@ export class AppService {
       },
       freeQuotas: {
         leadsPerMonth: config['free_lead_quota_monthly'] ?? 5,
-        dealsLifetime: config['free_deal_quota_lifetime'] ?? 3,
+        dealsLifetime: config['free_deal_quota_lifetime'] ?? 2,
       },
       flags: {
         leadsMonetizationEnabled: flag('leads_monetization_enabled', false),
