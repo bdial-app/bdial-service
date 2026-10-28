@@ -380,6 +380,121 @@ export class ChatService {
     };
   }
 
+  /**
+   * The customer a business is chatting with: who they are on Tijarah and
+   * their history with this business. Phone and email follow the leads rule:
+   * shown only once this business has unlocked them as a lead.
+   */
+  async getCustomerProfile(userId: string, conversationId: string) {
+    await this.assertParticipant(userId, conversationId);
+    const participants = await this.participantRepo.find({ where: { conversationId } });
+    const me = participants.find((p) => p.userId === userId);
+    const other = participants.find((p) => p.userId && p.userId !== userId);
+    if (me?.role !== 'provider' || !other?.userId || other.role === 'provider') {
+      throw new ForbiddenException('Only a business can view the customer it is chatting with');
+    }
+    const provider = await this.providerRepo.findOne({ where: { userId } });
+    const customer = await this.userRepo.findOne({ where: { id: other.userId } });
+    if (!provider || !customer) throw new NotFoundException('Customer not found');
+
+    const q = this.messageRepo.manager;
+    const [verified, convs, asked, saved, review, reviewsWritten, lead] = await Promise.all([
+      q.query(`SELECT 1 FROM verifications WHERE user_id = $1 AND aadhaar_status = 'approved' LIMIT 1`, [customer.id]),
+      // Every conversation between this customer and this business.
+      q.query(
+        `SELECT count(*)::int AS n, min(c.created_at) AS first_at
+           FROM conversations c
+          WHERE EXISTS (SELECT 1 FROM conversation_participants a WHERE a.conversation_id = c.id AND a.user_id = $1)
+            AND EXISTS (SELECT 1 FROM conversation_participants b WHERE b.conversation_id = c.id AND b.user_id = $2)`,
+        [customer.id, userId],
+      ),
+      // What they asked about: enquiry cards and product chats with this business.
+      q.query(
+        `SELECT DISTINCT ON (name) name, product_id, at FROM (
+           SELECT m.metadata->>'productName' AS name, m.metadata->>'productId' AS product_id, m.created_at AS at
+             FROM messages m JOIN conversations c ON c.id = m.conversation_id
+            WHERE m.sender_id = $1 AND m.message_type = 'enquiry' AND m.deleted_at IS NULL
+              AND EXISTS (SELECT 1 FROM conversation_participants b WHERE b.conversation_id = c.id AND b.user_id = $2)
+           UNION ALL
+           SELECT c.context_title, c.context_id::text, c.created_at
+             FROM conversations c
+            WHERE c.context_type = 'product' AND c.context_title IS NOT NULL
+              AND EXISTS (SELECT 1 FROM conversation_participants a WHERE a.conversation_id = c.id AND a.user_id = $1)
+              AND EXISTS (SELECT 1 FROM conversation_participants b WHERE b.conversation_id = c.id AND b.user_id = $2)
+         ) x WHERE name IS NOT NULL
+         ORDER BY name, at DESC
+         LIMIT 8`,
+        [customer.id, userId],
+      ),
+      q.query(
+        `SELECT 1 FROM saved_items WHERE user_id = $1 AND item_type = 'provider' AND item_id = $2 LIMIT 1`,
+        [customer.id, provider.id],
+      ),
+      q.query(
+        `SELECT star_rating, review_text, posted_at FROM reviews
+          WHERE reviewer_id = $1 AND provider_id = $2 AND status = 'active' LIMIT 1`,
+        [customer.id, provider.id],
+      ),
+      q.query(`SELECT count(*)::int AS n FROM reviews WHERE reviewer_id = $1 AND status = 'active'`, [customer.id]),
+      q.query(
+        `SELECT id, tier, score, source, search_query, products_viewed, is_unlocked, first_seen_at
+           FROM provider_leads WHERE provider_id = $1 AND user_id = $2
+          ORDER BY is_unlocked DESC, score DESC, last_seen_at DESC LIMIT 1`,
+        [provider.id, customer.id],
+      ),
+    ]);
+
+    const l = lead[0];
+    const viewedIds: string[] = l?.products_viewed ?? [];
+    const viewed: { id: string; name: string }[] = viewedIds.length
+      ? await q.query(
+          `SELECT id, name FROM products WHERE id = ANY($1::uuid[]) AND provider_id = $2 LIMIT 6`,
+          [viewedIds, provider.id],
+        )
+      : [];
+    const unlocked = !!l?.is_unlocked;
+
+    return {
+      userId: customer.id,
+      name: customer.name || 'Customer',
+      memberSince: customer.createdAt,
+      lastSeenAt: customer.lastSeenAt,
+      verified: verified.length > 0,
+      reviewsWritten: reviewsWritten[0]?.n ?? 0,
+      withYou: {
+        firstContactAt: convs[0]?.first_at ?? null,
+        conversations: convs[0]?.n ?? 0,
+        askedAbout: asked
+          .sort((a: any, b: any) => new Date(b.at).getTime() - new Date(a.at).getTime())
+          .map((r: any) => ({ name: r.name as string, productId: (r.product_id as string) || null })),
+        savedYou: saved.length > 0,
+        review: review[0]
+          ? { rating: Number(review[0].star_rating), text: review[0].review_text as string | null, postedAt: review[0].posted_at }
+          : null,
+      },
+      lead: l
+        ? {
+            id: l.id as string,
+            tier: l.tier as 'hot' | 'warm' | 'soft' | 'cold',
+            score: Number(l.score),
+            source: l.source as string | null,
+            searchQuery: l.search_query as string | null,
+            productsViewed: viewed,
+            isUnlocked: unlocked,
+          }
+        : null,
+      // The leads rule: contact details only for an unlocked lead.
+      contact: unlocked
+        ? {
+            phone: customer.mobileNumber,
+            email: customer.email || customer.googleEmail || null,
+            city: customer.city,
+            area: customer.area,
+          }
+        : null,
+    };
+  }
+
   // ─────────────────────────────────────────────
   // MESSAGES
   // ─────────────────────────────────────────────

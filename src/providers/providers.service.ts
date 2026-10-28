@@ -28,6 +28,7 @@ import { CreateSponsorshipDto, UpdateSponsorshipDto } from './dto/sponsorship.dt
 import { ContentSanitizerService } from '../common/content-sanitizer';
 import { compressImage, compressImages } from '../common/image-processor';
 import { WebsiteMetaService } from './website-meta.service';
+import { capEnd, DAY_MS, type DealTier, loadDealRules, maxDaysFor } from './deal-rules';
 
 @Injectable()
 export class ProvidersService {
@@ -867,44 +868,62 @@ export class ProvidersService {
       `CASE WHEN ${sponsoredExpr} THEN -1 WHEN provider.status = 'active' THEN 0 ELSE 1 END`,
       'status_rank',
     );
+    // Within each of those, a live deal leads: paid deals, then free ones.
+    qb.addSelect(
+      `COALESCE((SELECT MIN(CASE WHEN po.tier = 'free' THEN 1 ELSE 0 END)
+                   FROM provider_offers po
+                  WHERE po.provider_id = provider.id AND po.is_active = true
+                    AND po.approval_status = 'approved'
+                    AND po.starts_at <= NOW() AND po.ends_at > NOW()), 2)`,
+      'deal_rank',
+    );
 
     // Sort - verified (active) providers always rank above unverified
     if (hasLocation) {
       if (sortBy === 'distance') {
         qb.orderBy('status_rank', 'ASC')
+          .addOrderBy('deal_rank', 'ASC')
           .addOrderBy('distance', 'ASC');
       } else if (sortBy === 'newest') {
         qb.orderBy('status_rank', 'ASC')
+          .addOrderBy('deal_rank', 'ASC')
           .addOrderBy('provider.createdAt', 'DESC');
       } else if (sortBy === 'rating') {
         qb.orderBy('status_rank', 'ASC')
+          .addOrderBy('deal_rank', 'ASC')
           .addOrderBy('avg_rating', 'DESC', 'NULLS LAST')
           .addOrderBy('distance', 'ASC');
       } else if (sortBy === 'reviews') {
         qb.orderBy('status_rank', 'ASC')
+          .addOrderBy('deal_rank', 'ASC')
           .addOrderBy('review_count', 'DESC', 'NULLS LAST')
           .addOrderBy('avg_rating', 'DESC', 'NULLS LAST')
           .addOrderBy('distance', 'ASC');
       } else {
         qb.orderBy('status_rank', 'ASC')
+          .addOrderBy('deal_rank', 'ASC')
           .addOrderBy('distance', 'ASC');
       }
     } else {
       // No location — cannot sort by distance; use featured → newest fallback
       if (sortBy === 'rating') {
         qb.orderBy('status_rank', 'ASC')
+          .addOrderBy('deal_rank', 'ASC')
           .addOrderBy('avg_rating', 'DESC', 'NULLS LAST')
           .addOrderBy('provider.isFeatured', 'DESC');
       } else if (sortBy === 'newest') {
         qb.orderBy('status_rank', 'ASC')
+          .addOrderBy('deal_rank', 'ASC')
           .addOrderBy('provider.createdAt', 'DESC');
       } else if (sortBy === 'reviews') {
         qb.orderBy('status_rank', 'ASC')
+          .addOrderBy('deal_rank', 'ASC')
           .addOrderBy('review_count', 'DESC', 'NULLS LAST')
           .addOrderBy('avg_rating', 'DESC', 'NULLS LAST');
       } else {
         // distance / relevance — fall back to featured → newest
         qb.orderBy('status_rank', 'ASC')
+          .addOrderBy('deal_rank', 'ASC')
           .addOrderBy('provider.isFeatured', 'DESC')
           .addOrderBy('provider.createdAt', 'DESC');
       }
@@ -1273,8 +1292,12 @@ export class ProvidersService {
       }
     }
 
-    if (new Date(dto.endsAt) <= new Date(dto.startsAt)) {
+    const startsAt = new Date(dto.startsAt);
+    if (new Date(dto.endsAt) <= startsAt) {
       throw new BadRequestException('End date must be after start date');
+    }
+    if (startsAt.getTime() > Date.now() + 30 * DAY_MS) {
+      throw new BadRequestException('A deal can be scheduled to start up to 30 days ahead.');
     }
 
     // ─── Deal limits (subscription-aware) ────────────────────────────
@@ -1282,25 +1305,24 @@ export class ProvidersService {
       where: { providerId: provider.id, status: 'active' },
       relations: ['plan'],
     });
+    const monetizationOn = (await this.dealSetting('deals_monetization_enabled', 'false')) === 'true';
+    const rules = await loadDealRules((k, f) => this.dealSetting(k, f));
 
-    let maxTotalDeals = 5;
-    let maxActiveDeals = 3;
-
-    if (subscription?.plan) {
-      maxTotalDeals = subscription.plan.maxTotalDeals;
-      maxActiveDeals = subscription.plan.maxActiveDeals;
-    }
-
-    // Unlimited (-1) bypasses checks
-    if (maxTotalDeals !== -1) {
-      const totalOffers = await this.offerRepo.count({ where: { providerId: provider.id } });
-      if (totalOffers >= maxTotalDeals) {
-        throw new ForbiddenException(
-          `You have reached the maximum of ${maxTotalDeals} deals. Please upgrade your plan to create more.`,
-        );
+    // Without monetization the old lifetime cap still applies; with it, paid
+    // deals are unlimited and only live slots are capped.
+    if (!monetizationOn) {
+      const maxTotalDeals = subscription?.plan ? subscription.plan.maxTotalDeals : 5;
+      if (maxTotalDeals !== -1) {
+        const totalOffers = await this.offerRepo.count({ where: { providerId: provider.id } });
+        if (totalOffers >= maxTotalDeals) {
+          throw new ForbiddenException(
+            `You have reached the maximum of ${maxTotalDeals} deals. Please upgrade your plan to create more.`,
+          );
+        }
       }
     }
 
+    const maxActiveDeals = subscription?.plan ? subscription.plan.maxActiveDeals : 3;
     if (maxActiveDeals !== -1) {
       const now = new Date();
       const activeCount = await this.offerRepo
@@ -1317,30 +1339,91 @@ export class ProvidersService {
       }
     }
 
-    // Increment free deals counter if within free quota
-    const freeQuotaSetting = await this.settingRepo?.findOneBy({ key: 'free_deal_quota_lifetime' });
-    const freeQuota = freeQuotaSetting ? parseInt(freeQuotaSetting.value, 10) : 3;
-    if (provider.freeDealsCreated < freeQuota) {
-      provider.freeDealsCreated += 1;
-      await this.providerRepo.save(provider);
-    }
+    // ─── Which kind of deal this is ──────────────────────────────────
+    const freeQuota = parseInt(
+      provider.womenLedStatus === 'approved'
+        ? await this.dealSetting('women_led_free_deals_lifetime', '5')
+        : await this.dealSetting('free_deal_quota_lifetime', '2'),
+      10,
+    );
+    const freeLeft = freeQuota - provider.freeDealsCreated;
 
-    const offer = this.offerRepo.create({
-      providerId: provider.id,
-      title: dto.title,
-      description: dto.description ?? null,
-      discountType: dto.discountType,
-      discountValue: dto.discountValue,
-      minOrderAmount: dto.minOrderAmount ?? null,
-      maxDiscount: dto.maxDiscount ?? null,
-      startsAt: new Date(dto.startsAt),
-      endsAt: new Date(dto.endsAt),
-      usageLimit: dto.usageLimit ?? null,
-      isActive: true,
-      approvalStatus: 'approved' as const,
+    return this.dataSource.transaction(async (m) => {
+      // A deal bought but not yet published (older apps pay first, then create).
+      const unusedPayment = async () => {
+        const [row] = await m.query(
+          `SELECT id FROM payments
+            WHERE provider_id = $1 AND type = 'deal_creation' AND status = 'succeeded'
+              AND COALESCE(metadata->>'purpose', 'create') = 'create'
+              AND metadata->>'offerId' IS NULL
+            ORDER BY created_at
+            LIMIT 1
+            FOR UPDATE SKIP LOCKED`,
+          [provider.id],
+        );
+        return (row?.id as string | undefined) ?? null;
+      };
+
+      let tier: DealTier;
+      let paymentId: string | null = null;
+      if (!monetizationOn) {
+        tier = 'free';
+      } else if (subscription?.plan) {
+        tier = 'plan';
+      } else if (dto.tier === 'paid' || (!dto.tier && (paymentId = await unusedPayment()))) {
+        paymentId = paymentId ?? (await unusedPayment());
+        if (!paymentId) {
+          throw new ForbiddenException('Complete the payment to publish a 15-day deal.');
+        }
+        tier = 'paid';
+      } else if (freeLeft > 0) {
+        tier = 'free';
+      } else {
+        throw new ForbiddenException(
+          `Your ${freeQuota} free deals are used. Publish this one as a 15-day deal.`,
+        );
+      }
+
+      // Nothing to sell when monetization is off, so deals get the long limit.
+      const days = monetizationOn ? maxDaysFor(tier, rules) : rules.paidMaxDays;
+
+      if (tier === 'free' && freeLeft > 0) {
+        await m.increment(Provider, { id: provider.id }, 'freeDealsCreated', 1);
+      }
+
+      const offer = await m.save(
+        m.create(ProviderOffer, {
+          providerId: provider.id,
+          title: dto.title,
+          description: dto.description ?? null,
+          discountType: dto.discountType,
+          discountValue: dto.discountValue,
+          minOrderAmount: dto.minOrderAmount ?? null,
+          maxDiscount: dto.maxDiscount ?? null,
+          startsAt,
+          endsAt: capEnd(startsAt, new Date(dto.endsAt), days),
+          usageLimit: dto.usageLimit ?? null,
+          isActive: true,
+          approvalStatus: 'approved' as const,
+          tier,
+          daysAllowed: days,
+        }),
+      );
+
+      if (paymentId) {
+        await m.query(
+          `UPDATE payments SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('offerId', $2::text)
+            WHERE id = $1`,
+          [paymentId, offer.id],
+        );
+      }
+      return offer;
     });
+  }
 
-    return this.offerRepo.save(offer);
+  private async dealSetting(key: string, fallback: string): Promise<string> {
+    const row = await this.settingRepo.findOneBy({ key });
+    return row?.value ?? fallback;
   }
 
   async getOfferLimits(userId: string) {
@@ -1374,13 +1457,34 @@ export class ProvidersService {
       planName = subscription.plan.name;
     }
 
+    const monetizationOn = (await this.dealSetting('deals_monetization_enabled', 'false')) === 'true';
+    const rules = await loadDealRules((k, f) => this.dealSetting(k, f));
+    const freeQuota = parseInt(
+      provider.womenLedStatus === 'approved'
+        ? await this.dealSetting('women_led_free_deals_lifetime', '5')
+        : await this.dealSetting('free_deal_quota_lifetime', '2'),
+      10,
+    );
+    const freeRemaining = Math.max(0, freeQuota - provider.freeDealsCreated);
+    // With monetization on, paid deals have no lifetime cap.
+    if (monetizationOn && !subscription?.plan) maxTotalDeals = -1;
+
     return {
       totalDeals: totalOffers,
       maxTotalDeals,
       activeDeals: activeCount,
       maxActiveDeals,
-      requiresPayment: totalOffers >= maxTotalDeals,
+      requiresPayment: monetizationOn
+        ? !subscription?.plan && freeRemaining <= 0
+        : maxTotalDeals !== -1 && totalOffers >= maxTotalDeals,
       currentPlan: planName,
+      monetizationEnabled: monetizationOn,
+      freeQuota,
+      freeRemaining,
+      freeMaxDays: monetizationOn ? rules.freeMaxDays : rules.paidMaxDays,
+      paidMaxDays: rules.paidMaxDays,
+      extensionDays: rules.extensionDays,
+      extensionPrice: rules.extensionPrice,
     };
   }
 
@@ -1388,10 +1492,28 @@ export class ProvidersService {
     const provider = await this.providerRepo.findOneBy({ userId });
     if (!provider) throw new NotFoundException('Provider not found');
 
-    return this.offerRepo.find({
+    const offers = await this.offerRepo.find({
       where: { providerId: provider.id },
       order: { createdAt: 'DESC' },
     });
+    if (offers.length === 0) return offers;
+
+    // How each deal did: people who saw it and people who tapped it.
+    const stats: { entity_id: string; views: string; taps: string }[] = await this.dataSource.query(
+      `SELECT entity_id,
+              count(*) FILTER (WHERE event_type = 'impression') AS views,
+              count(*) FILTER (WHERE event_type = 'click') AS taps
+         FROM ad_events
+        WHERE entity_type = 'provider_offer' AND entity_id = ANY($1::uuid[])
+        GROUP BY entity_id`,
+      [offers.map((o) => o.id)],
+    );
+    const byId = new Map(stats.map((r) => [r.entity_id, r]));
+    return offers.map((o) => ({
+      ...o,
+      views: Number(byId.get(o.id)?.views ?? 0),
+      taps: Number(byId.get(o.id)?.taps ?? 0),
+    }));
   }
 
   async updateOffer(userId: string, offerId: string, dto: UpdateOfferDto) {
@@ -1416,13 +1538,21 @@ export class ProvidersService {
       }
     }
 
-    if (dto.startsAt || dto.endsAt) {
-      const startsAt = dto.startsAt ? new Date(dto.startsAt) : offer.startsAt;
-      const endsAt = dto.endsAt ? new Date(dto.endsAt) : offer.endsAt;
-      if (endsAt <= startsAt) {
-        throw new BadRequestException('End date must be after start date');
+    // Once a deal is live its start can't move — that would stretch its run.
+    const now = new Date();
+    let startsAt = offer.startsAt;
+    if (dto.startsAt && offer.startsAt > now) {
+      startsAt = new Date(dto.startsAt);
+      if (startsAt.getTime() > now.getTime() + 30 * DAY_MS) {
+        throw new BadRequestException('A deal can be scheduled to start up to 30 days ahead.');
       }
     }
+    let endsAt = dto.endsAt ? new Date(dto.endsAt) : offer.endsAt;
+    if (endsAt <= startsAt) {
+      throw new BadRequestException('End date must be after start date');
+    }
+    // A longer run is bought with an extension, not an edit.
+    if (offer.daysAllowed) endsAt = capEnd(startsAt, endsAt, offer.daysAllowed);
 
     Object.assign(offer, {
       ...(dto.title !== undefined && { title: dto.title }),
@@ -1431,8 +1561,8 @@ export class ProvidersService {
       ...(dto.discountValue !== undefined && { discountValue: dto.discountValue }),
       ...(dto.minOrderAmount !== undefined && { minOrderAmount: dto.minOrderAmount }),
       ...(dto.maxDiscount !== undefined && { maxDiscount: dto.maxDiscount }),
-      ...(dto.startsAt !== undefined && { startsAt: new Date(dto.startsAt) }),
-      ...(dto.endsAt !== undefined && { endsAt: new Date(dto.endsAt) }),
+      startsAt,
+      endsAt,
       ...(dto.usageLimit !== undefined && { usageLimit: dto.usageLimit }),
     });
 

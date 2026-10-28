@@ -65,6 +65,16 @@ export class ChatController {
     return this.chatService.getConversationDetail(req.user.id, id);
   }
 
+  @Get('conversations/:id/customer')
+  @ApiOperation({ summary: 'The customer a business is chatting with, and their history with it' })
+  @ApiResponse({ status: 200, description: 'Customer profile' })
+  getCustomerProfile(
+    @Request() req,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.chatService.getCustomerProfile(req.user.id, id);
+  }
+
   // ─── Messages ────────────────────────────────
 
   @Get('conversations/:id/messages')

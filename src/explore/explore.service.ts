@@ -369,8 +369,10 @@ export class ExploreService {
       qb.andWhere('p.city ILIKE :city', { city: `%${city}%` });
     }
 
-    if (hasLocation) qb.orderBy("CASE WHEN p.geocode_precision = 'city' THEN 1 ELSE 0 END", 'ASC').addOrderBy('distance', 'ASC');
-    else qb.orderBy('o.discount_value', 'DESC');
+    // Paid deals lead the rail; then nearest, or ending soonest without a location.
+    qb.orderBy("CASE WHEN o.tier = 'free' THEN 1 ELSE 0 END", 'ASC');
+    if (hasLocation) qb.addOrderBy("CASE WHEN p.geocode_precision = 'city' THEN 1 ELSE 0 END", 'ASC').addOrderBy('distance', 'ASC');
+    else qb.addOrderBy('o.ends_at', 'ASC');
 
     qb.limit(8);
 
@@ -533,10 +535,12 @@ export class ExploreService {
         qb.orderBy('o.ends_at', 'ASC');
         break;
       case 'distance':
+        // Paid deals first among equals, as everywhere deals are listed.
+        qb.orderBy("CASE WHEN o.tier = 'free' THEN 1 ELSE 0 END", 'ASC');
         if (hasLocation) {
-          qb.orderBy("CASE WHEN p.geocode_precision = 'city' THEN 1 ELSE 0 END", 'ASC').addOrderBy('distance', 'ASC');
+          qb.addOrderBy("CASE WHEN p.geocode_precision = 'city' THEN 1 ELSE 0 END", 'ASC').addOrderBy('distance', 'ASC');
         } else {
-          qb.orderBy('o.discount_value', 'DESC');
+          qb.addOrderBy('o.discount_value', 'DESC');
         }
         break;
       case 'newest':
@@ -544,7 +548,7 @@ export class ExploreService {
         break;
       case 'discount':
       default:
-        qb.orderBy('o.discount_value', 'DESC');
+        qb.orderBy("CASE WHEN o.tier = 'free' THEN 1 ELSE 0 END", 'ASC').addOrderBy('o.discount_value', 'DESC').addOrderBy('o.ends_at', 'ASC');
         break;
     }
 

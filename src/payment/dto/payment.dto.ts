@@ -103,6 +103,24 @@ export class CreateDealCreationCheckoutDto {
   @IsOptional()
   @IsEnum(['razorpay', 'apple'])
   gateway?: 'razorpay' | 'apple';
+
+  @ApiPropertyOptional({
+    enum: ['create', 'extend', 'upgrade'],
+    description: 'create: a new 15-day deal · extend: add 15 days to a paid deal · upgrade: turn a free deal into a 15-day deal',
+  })
+  @IsOptional()
+  @IsEnum(['create', 'extend', 'upgrade'])
+  purpose?: 'create' | 'extend' | 'upgrade';
+
+  @ApiPropertyOptional({ description: 'The deal to extend or upgrade' })
+  @IsOptional()
+  @IsUUID()
+  offerId?: string;
+
+  @ApiPropertyOptional({ enum: ['paid'], description: 'Buy a 15-day deal even while free deals remain' })
+  @IsOptional()
+  @IsEnum(['paid'])
+  tier?: 'paid';
 }
 
 /**

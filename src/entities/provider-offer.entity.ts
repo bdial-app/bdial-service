@@ -58,6 +58,17 @@ export class ProviderOffer {
   @Column({ name: 'usage_limit', type: 'int', nullable: true })
   usageLimit: number | null;
 
+  /** free: up to 5 days · paid: bought, up to 15 days, extendable · plan: included in a subscription. */
+  @Column({ type: 'varchar', length: 10, default: 'free' })
+  tier: 'free' | 'paid' | 'plan';
+
+  /** Longest it may run (start to end), extensions included. Null on deals made before limits. */
+  @Column({ name: 'days_allowed', type: 'int', nullable: true })
+  daysAllowed: number | null;
+
+  @Column({ type: 'int', default: 0 })
+  extensions: number;
+
   @Column({
     name: 'approval_status',
     type: 'enum',

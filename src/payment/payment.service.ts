@@ -23,6 +23,7 @@ import { Voucher } from '../entities/voucher.entity';
 import { VoucherRedemption } from '../entities/voucher-redemption.entity';
 import { SystemSetting } from '../entities/system-setting.entity';
 import { ProviderOffer } from '../entities/provider-offer.entity';
+import { DAY_MS, daysBetween, loadDealRules } from '../providers/deal-rules';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { AppleVerifyService } from './apple-verify.service';
 import {
@@ -1560,7 +1561,44 @@ export class PaymentService {
       await this.recordVoucherRedemption(payment);
     }
 
-    this.logger.log(`Deal creation payment fulfilled: ${payment.id}`);
+    // A new deal is published by the app and claims this payment then.
+    // Extensions and upgrades change an existing deal here, once.
+    const fresh = await this.paymentRepo.findOneBy({ id: payment.id });
+    const meta = fresh?.metadata ?? payment.metadata ?? {};
+    if (
+      (meta.purpose === 'extend' || meta.purpose === 'upgrade') &&
+      meta.offerId &&
+      !meta.appliedAt
+    ) {
+      const offer = await this.offerRepo.findOneBy({ id: meta.offerId });
+      if (offer) {
+        const rules = await loadDealRules((k, f) => this.getSetting(k, f));
+        const now = new Date();
+        if (meta.purpose === 'extend') {
+          // From today if it already ended, else from its current end.
+          const from = offer.endsAt > now ? offer.endsAt : now;
+          offer.endsAt = new Date(
+            from.getTime() + rules.extensionDays * DAY_MS,
+          );
+          offer.extensions += 1;
+        } else {
+          offer.tier = 'paid';
+          const from = offer.startsAt > now ? offer.startsAt : now;
+          const target = new Date(from.getTime() + rules.paidMaxDays * DAY_MS);
+          if (target > offer.endsAt) offer.endsAt = target;
+        }
+        offer.isActive = true;
+        offer.daysAllowed = daysBetween(offer.startsAt, offer.endsAt);
+        await this.offerRepo.save(offer);
+        await this.paymentRepo.update(payment.id, {
+          metadata: { ...meta, appliedAt: now.toISOString() } as any,
+        });
+      }
+    }
+
+    this.logger.log(
+      `Deal ${meta.purpose ?? 'creation'} payment fulfilled: ${payment.id}`,
+    );
 
     const provider = await this.providerRepo.findOneBy({
       id: payment.providerId,
@@ -1569,7 +1607,12 @@ export class PaymentService {
       this.notificationDispatch
         .sendTemplated(provider.userId, 'payment_success', {
           amount: `₹${payment.amount}`,
-          description: 'Deal Creation',
+          description:
+            meta.purpose === 'extend'
+              ? 'Deal extended 15 days'
+              : meta.purpose === 'upgrade'
+                ? 'Deal upgraded to 15 days'
+                : 'Deal Creation',
         })
         .catch(() => {});
     }
@@ -1766,6 +1809,24 @@ export class PaymentService {
       return { requiresPayment: false, method: 'free' };
     }
 
+    const purpose = dto.purpose ?? 'create';
+    if (purpose !== 'create') {
+      // Extending or upgrading an existing deal is always a purchase.
+      if (!dto.offerId) throw new BadRequestException('Which deal?');
+      const offer = await this.offerRepo.findOneBy({ id: dto.offerId });
+      if (!offer || offer.providerId !== provider.id)
+        throw new NotFoundException('Deal not found');
+      if (purpose === 'extend' && offer.tier === 'free') {
+        throw new BadRequestException(
+          "Free deals can't be extended. Make it a 15-day deal instead.",
+        );
+      }
+      if (purpose === 'upgrade' && offer.tier !== 'free') {
+        throw new BadRequestException('This is already a 15-day deal.');
+      }
+      return this.createDealPayment(provider, dto, purpose);
+    }
+
     const subscription = await this.subscriptionRepo.findOne({
       where: { providerId: provider.id, status: 'active' },
       relations: ['plan'],
@@ -1795,11 +1856,12 @@ export class PaymentService {
     const dealQuotaKey = isWomenLedApprovedDeal
       ? 'women_led_free_deals_lifetime'
       : 'free_deal_quota_lifetime';
-    const dealQuotaDefault = isWomenLedApprovedDeal ? '5' : '3';
+    const dealQuotaDefault = isWomenLedApprovedDeal ? '5' : '2';
     const freeQuotaStr = await this.getSetting(dealQuotaKey, dealQuotaDefault);
     const freeQuota = parseInt(freeQuotaStr, 10);
 
-    if (provider.freeDealsCreated < freeQuota) {
+    // Choosing a 15-day deal is a purchase even while free (5-day) deals remain.
+    if (dto.tier !== 'paid' && provider.freeDealsCreated < freeQuota) {
       return {
         requiresPayment: false,
         method: 'free_quota',
@@ -1807,13 +1869,35 @@ export class PaymentService {
       };
     }
 
+    return this.createDealPayment(provider, dto, 'create');
+  }
+
+  /** A deal purchase: a new 15-day deal, an upgrade from free, or an extension. */
+  private async createDealPayment(
+    provider: Provider,
+    dto: CreateDealCreationCheckoutDto,
+    purpose: 'create' | 'extend' | 'upgrade',
+  ) {
+    const subscription = await this.subscriptionRepo.findOne({
+      where: { providerId: provider.id, status: 'active' },
+      relations: ['plan'],
+    });
     const isGrowthSubscriber = subscription?.plan?.slug === 'growth';
     const priceKey = isGrowthSubscriber
       ? 'deal_creation_price_discounted'
       : 'deal_creation_price';
     const defaultPrice = isGrowthSubscriber ? '79' : '149';
-    const priceStr = await this.getSetting(priceKey, defaultPrice);
-    let amount = parseFloat(priceStr);
+    // Extending adds 15 days at its own (lower) price; creating and upgrading cost a deal.
+    let amount =
+      purpose === 'extend'
+        ? parseFloat(await this.getSetting('deal_extension_price', '74'))
+        : parseFloat(await this.getSetting(priceKey, defaultPrice));
+    const description =
+      purpose === 'extend'
+        ? 'Deal Extension'
+        : purpose === 'upgrade'
+          ? 'Deal Upgrade'
+          : 'Deal Creation';
     let discountAmount = 0;
     let voucherId: string | null = null;
 
@@ -1836,7 +1920,11 @@ export class PaymentService {
       status: 'pending',
       type: 'deal_creation' as any,
       paymentGateway: 'razorpay',
-      metadata: { dealData: dto.dealData },
+      metadata: {
+        dealData: dto.dealData,
+        purpose,
+        ...(dto.offerId ? { offerId: dto.offerId } : {}),
+      },
       voucherId,
       discountAmount,
     });
@@ -1855,10 +1943,15 @@ export class PaymentService {
     // iOS → Apple IAP: return the deal-creation Apple product id for StoreKit
     // instead of a Razorpay order. Fulfilment happens in verifyAppleConsumable.
     if (dto.gateway === 'apple') {
-      const appleProductId = await this.resolveAppleProductId('deal_creation');
+      const appleProductId =
+        purpose === 'extend'
+          ? (await this.getSetting('deal_extension_apple_product', '')) || null
+          : await this.resolveAppleProductId('deal_creation');
       if (!appleProductId)
         throw new BadRequestException(
-          'Apple product not configured for deal creation',
+          purpose === 'extend'
+            ? 'Extending a deal on iPhone is coming soon.'
+            : 'Apple product not configured for deal creation',
         );
       await this.paymentRepo.update(payment.id, {
         metadata: { ...payment.metadata, appleProductId } as any,
@@ -1871,7 +1964,7 @@ export class PaymentService {
         appleProductId,
         paymentId: payment.id,
         price: amount,
-        description: 'Deal Creation',
+        description,
       } as any;
     }
 
@@ -1899,7 +1992,7 @@ export class PaymentService {
       currency: 'INR',
       paymentId: payment.id,
       keyId: this.config.get<string>('RAZORPAY_KEY_ID'),
-      description: 'Deal Creation',
+      description,
       price: amount,
       discounted: isGrowthSubscriber,
       prefill: await this.getPrefillData(provider),
@@ -1971,8 +2064,15 @@ export class PaymentService {
     const monetizationEnabled =
       (await this.getSetting('deals_monetization_enabled', 'false')) === 'true';
     const freeQuota = parseInt(
-      await this.getSetting('free_deal_quota_lifetime', '3'),
+      provider.womenLedStatus === 'approved'
+        ? await this.getSetting('women_led_free_deals_lifetime', '5')
+        : await this.getSetting('free_deal_quota_lifetime', '2'),
       10,
+    );
+    const rules = await loadDealRules((k, f) => this.getSetting(k, f));
+    const extensionAppleProduct = await this.getSetting(
+      'deal_extension_apple_product',
+      '',
     );
 
     const subscription = await this.subscriptionRepo.findOne({
@@ -2004,6 +2104,12 @@ export class PaymentService {
       isProSubscriber,
       isGrowthSubscriber,
       currentPlan: subscription?.plan?.slug || 'free',
+      freeMaxDays: rules.freeMaxDays,
+      paidMaxDays: rules.paidMaxDays,
+      extensionDays: rules.extensionDays,
+      extensionPrice: rules.extensionPrice,
+      /** iOS needs an Apple product to sell an extension. */
+      extensionOnApple: !!extensionAppleProduct,
     };
   }
 
