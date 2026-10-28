@@ -8,7 +8,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { createHmac, timingSafeEqual } from 'crypto';
 import Razorpay from 'razorpay';
@@ -1531,10 +1531,19 @@ export class PaymentService {
   }
 
   private async fulfillLeadUnlockPayment(payment: Payment) {
-    const leadId = payment.metadata?.leadId;
-    if (!leadId) return;
+    // One lead, or several bought together (bulk checkout).
+    const leadIds: string[] = Array.isArray(payment.metadata?.leadIds)
+      ? payment.metadata.leadIds
+      : payment.metadata?.leadId
+        ? [payment.metadata.leadId]
+        : [];
+    if (!leadIds.length) return;
+    const leadId = leadIds.join(',');
 
-    await this.leadRepo.update(leadId, { isUnlocked: true });
+    await this.leadRepo.update(
+      { id: In(leadIds), providerId: payment.providerId },
+      { isUnlocked: true },
+    );
 
     if (payment.voucherId) {
       await this.recordVoucherRedemption(payment);
@@ -1550,7 +1559,8 @@ export class PaymentService {
     if (provider) {
       this.notificationDispatch
         .sendTemplated(provider.userId, 'lead_unlocked', {
-          customerName: 'a customer',
+          customerName:
+            leadIds.length > 1 ? `${leadIds.length} customers` : 'a customer',
         })
         .catch(() => {});
     }
@@ -1996,6 +2006,235 @@ export class PaymentService {
       price: amount,
       discounted: isGrowthSubscriber,
       prefill: await this.getPrefillData(provider),
+    };
+  }
+
+  // ──────────────────────────────────────────
+  // Bulk lead unlock — several contacts in one payment (Razorpay only)
+  // ──────────────────────────────────────────
+
+  /** Volume discount on the paid part, from the lead_bulk_discounts setting. */
+  private async bulkDiscountPct(paidCount: number): Promise<number> {
+    let tiers: { min: number; pct: number }[] = [
+      { min: 5, pct: 10 },
+      { min: 10, pct: 15 },
+      { min: 20, pct: 20 },
+    ];
+    try {
+      const parsed = JSON.parse(
+        await this.getSetting('lead_bulk_discounts', ''),
+      );
+      if (Array.isArray(parsed)) tiers = parsed;
+    } catch {
+      /* keep the defaults */
+    }
+    return tiers
+      .filter((t) => paidCount >= Number(t.min))
+      .reduce((best, t) => Math.max(best, Number(t.pct) || 0), 0);
+  }
+
+  /**
+   * How a set of leads is unlocked: plan credits and free monthly unlocks
+   * first (on the most valuable leads), the rest paid in one go with a
+   * volume discount.
+   */
+  private async bulkPlan(userId: string, leadIds: string[]) {
+    const provider = await this.providerRepo.findOneBy({ userId });
+    if (!provider) throw new NotFoundException('Provider not found');
+    const leads = await this.leadRepo.find({
+      where: { id: In(leadIds), providerId: provider.id, isUnlocked: false },
+    });
+    if (!leads.length)
+      throw new BadRequestException('Those contacts are already yours.');
+
+    const monetized =
+      (await this.getSetting('leads_monetization_enabled', 'false')) === 'true';
+    const subscription = await this.subscriptionRepo.findOne({
+      where: { providerId: provider.id, status: 'active' },
+      relations: ['plan'],
+    });
+    const unlimited = subscription?.plan?.monthlyLeadUnlocks === -1;
+    let planLeft =
+      subscription?.plan && !unlimited
+        ? Math.max(
+            0,
+            subscription.plan.monthlyLeadUnlocks - subscription.leadUnlocksUsed,
+          )
+        : 0;
+
+    const womenLed = provider.womenLedStatus === 'approved';
+    const quota = parseInt(
+      await this.getSetting(
+        womenLed ? 'women_led_free_leads_per_month' : 'free_lead_quota_monthly',
+        womenLed ? '8' : '5',
+      ),
+      10,
+    );
+    const now = new Date();
+    const reset = provider.freeLeadsResetAt
+      ? new Date(provider.freeLeadsResetAt)
+      : null;
+    const sameMonth =
+      !!reset &&
+      reset.getMonth() === now.getMonth() &&
+      reset.getFullYear() === now.getFullYear();
+    let quotaLeft = Math.max(
+      0,
+      quota - (sameMonth ? provider.freeLeadsUsedThisMonth : 0),
+    );
+
+    const growth = subscription?.plan?.slug === 'growth';
+    const order: Record<string, number> = { hot: 0, warm: 1, soft: 2, cold: 3 };
+    const sorted = [...leads].sort(
+      (a, b) => order[a.tier || 'cold'] - order[b.tier || 'cold'],
+    );
+
+    const free: ProviderLead[] = [];
+    const paid: { lead: ProviderLead; price: number }[] = [];
+    let planUsed = 0;
+    let quotaUsed = 0;
+    for (const lead of sorted) {
+      if (!lead.userId || !monetized || unlimited) free.push(lead);
+      else if (planLeft > 0) {
+        planLeft--;
+        planUsed++;
+        free.push(lead);
+      } else if (quotaLeft > 0) {
+        quotaLeft--;
+        quotaUsed++;
+        free.push(lead);
+      } else {
+        const tier = lead.tier || 'cold';
+        const key = growth
+          ? `lead_price_${tier}_discounted`
+          : `lead_price_${tier}`;
+        const fallback: Record<string, string> = {
+          hot: '99',
+          warm: '69',
+          soft: '49',
+          cold: '29',
+        };
+        const fallbackGrowth: Record<string, string> = {
+          hot: '49',
+          warm: '35',
+          soft: '25',
+          cold: '15',
+        };
+        paid.push({
+          lead,
+          price: parseFloat(
+            await this.getSetting(
+              key,
+              (growth ? fallbackGrowth : fallback)[tier] ?? '49',
+            ),
+          ),
+        });
+      }
+    }
+    const subtotal = paid.reduce((sum, p) => sum + p.price, 0);
+    const discountPct = await this.bulkDiscountPct(paid.length);
+    const total = Math.round(subtotal * (1 - discountPct / 100));
+    return {
+      provider,
+      subscription,
+      free,
+      paid,
+      planUsed,
+      quotaUsed,
+      sameMonth,
+      subtotal,
+      discountPct,
+      total,
+    };
+  }
+
+  async quoteBulkLeads(userId: string, leadIds: string[]) {
+    const p = await this.bulkPlan(userId, leadIds);
+    return {
+      count: p.free.length + p.paid.length,
+      freeCount: p.free.length,
+      paidCount: p.paid.length,
+      subtotal: p.subtotal,
+      discountPct: p.discountPct,
+      total: p.total,
+      /** The next paid count that earns a bigger discount, if any. */
+      nextDiscount: await this.nextBulkDiscount(p.paid.length),
+    };
+  }
+
+  private async nextBulkDiscount(paidCount: number) {
+    const now = await this.bulkDiscountPct(paidCount);
+    for (let n = paidCount + 1; n <= paidCount + 20; n++) {
+      const pct = await this.bulkDiscountPct(n);
+      if (pct > now) return { more: n - paidCount, pct };
+    }
+    return null;
+  }
+
+  async createBulkLeadCheckout(userId: string, leadIds: string[]) {
+    const p = await this.bulkPlan(userId, leadIds);
+
+    // Free ones are unlocked now, as a single free unlock would be.
+    if (p.free.length) {
+      await this.leadRepo.update(
+        { id: In(p.free.map((l) => l.id)) },
+        { isUnlocked: true },
+      );
+      if (p.planUsed && p.subscription) {
+        p.subscription.leadUnlocksUsed += p.planUsed;
+        await this.subscriptionRepo.save(p.subscription);
+      }
+      if (p.quotaUsed) {
+        p.provider.freeLeadsUsedThisMonth =
+          (p.sameMonth ? p.provider.freeLeadsUsedThisMonth : 0) + p.quotaUsed;
+        p.provider.freeLeadsResetAt = p.sameMonth
+          ? p.provider.freeLeadsResetAt
+          : new Date();
+        await this.providerRepo.save(p.provider);
+      }
+    }
+    const unlocked = p.free.map((l) => l.id);
+    if (!p.paid.length) return { requiresPayment: false, unlocked };
+
+    const payment = this.paymentRepo.create({
+      providerId: p.provider.id,
+      amount: p.total,
+      currency: 'INR',
+      status: 'pending',
+      type: 'lead_unlock',
+      paymentGateway: 'razorpay',
+      metadata: {
+        leadIds: p.paid.map((x) => x.lead.id),
+        bulk: true,
+        subtotal: p.subtotal,
+        discountPct: p.discountPct,
+      },
+      discountAmount: p.subtotal - p.total,
+    });
+    await this.paymentRepo.save(payment);
+
+    const order = await this.razorpay.orders.create({
+      amount: Math.round(p.total * 100),
+      currency: 'INR',
+      receipt: payment.id,
+      notes: { paymentId: payment.id, type: 'lead_unlock' },
+    });
+    await this.paymentRepo.update(payment.id, {
+      gatewayOrderId: order.id,
+      status: 'processing',
+    });
+    return {
+      requiresPayment: true,
+      unlocked,
+      paidLeadIds: p.paid.map((x) => x.lead.id),
+      orderId: order.id,
+      amount: Math.round(p.total * 100),
+      currency: 'INR',
+      paymentId: payment.id,
+      keyId: this.config.get<string>('RAZORPAY_KEY_ID'),
+      description: `${p.paid.length} lead contacts`,
+      total: p.total,
+      prefill: await this.getPrefillData(p.provider),
     };
   }
 
