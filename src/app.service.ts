@@ -108,6 +108,16 @@ export class AppService {
         }
       }
     } catch { /* ignore malformed sponsorship_plans */ }
+    // Lead Wallet packs sold through Apple on iOS.
+    try {
+      const packsSetting = await this.settingRepo.findOneBy({ key: 'lead_packs' });
+      const packs = packsSetting ? JSON.parse(packsSetting.value) : [];
+      if (Array.isArray(packs)) {
+        for (const p of packs) {
+          if (p?.appleProductId && typeof p.appleProductId === 'string') appleProductIds.push(p.appleProductId);
+        }
+      }
+    } catch { /* ignore malformed lead_packs */ }
     return {
       leadPricing: {
         hot: config['lead_price_hot'] ?? 99,
