@@ -1,4 +1,4 @@
-import { IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString, IsUUID, Min, IsDateString } from 'class-validator';
+import { IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString, IsUUID, Min, IsDateString, IsArray, ArrayMinSize, ArrayMaxSize } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateSponsorshipCheckoutDto {
@@ -136,4 +136,13 @@ export class VerifyAppleConsumableDto {
   @IsString()
   @IsNotEmpty()
   transactionId: string;
+}
+
+export class BulkLeadsDto {
+  @ApiProperty({ type: [String] })
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(100)
+  @IsUUID('all', { each: true })
+  leadIds: string[];
 }

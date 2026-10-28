@@ -15,6 +15,7 @@ import {
   CreateLeadUnlockCheckoutDto,
   CreateSubscriptionCheckoutDto,
   CreateDealCreationCheckoutDto,
+  BulkLeadsDto,
   ValidateVoucherDto,
   VerifyAppleConsumableDto,
 } from './dto/payment.dto';
@@ -35,6 +36,18 @@ export class PaymentController {
   }
 
   // ─── Lead Unlock ────────────────────────
+
+  @Post('lead-bulk/quote')
+  @ApiOperation({ summary: 'Price for unlocking several leads at once (free credits first, then a volume discount)' })
+  quoteBulkLeads(@Request() req, @Body() dto: BulkLeadsDto) {
+    return this.paymentService.quoteBulkLeads(req.user.id, dto.leadIds);
+  }
+
+  @Post('lead-bulk/checkout')
+  @ApiOperation({ summary: 'Unlock several leads: free ones now, the rest in one Razorpay payment' })
+  createBulkLeadCheckout(@Request() req, @Body() dto: BulkLeadsDto) {
+    return this.paymentService.createBulkLeadCheckout(req.user.id, dto.leadIds);
+  }
 
   @Post('lead-unlock/checkout')
   @ApiOperation({ summary: 'Unlock a lead — uses subscription credits or creates Razorpay Order' })
