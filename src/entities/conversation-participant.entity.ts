@@ -45,6 +45,10 @@ export class ConversationParticipant {
   @Column({ name: 'blocked_at', type: 'timestamptz', nullable: true })
   blockedAt: Date | null;
 
+  /** Muted: messages still arrive, but no push notifications. */
+  @Column({ name: 'is_muted', type: 'boolean', default: false })
+  isMuted: boolean;
+
   @CreateDateColumn({ name: 'joined_at' })
   joinedAt: Date;
 

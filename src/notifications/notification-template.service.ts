@@ -505,6 +505,19 @@ export class NotificationTemplateService {
         isActive: true,
         defaultRoute: '/?tab=listings&subTab=deals',
       },
+      // ─── Chat (owner) ───
+      {
+        slug: 'chat_unanswered',
+        name: 'Customer waiting for a reply',
+        description: 'Owner: a customer message has gone unanswered for 2+ hours (once per chat per day)',
+        type: 'chat_message',
+        titleTemplate: '⏰ {{name}} is waiting for your reply',
+        bodyTemplate: '"{{excerpt}}" — {{ago}} ago. Businesses that reply quickly win more customers.',
+        variables: ['name', 'excerpt', 'ago'],
+        category: 'transactional',
+        isActive: true,
+        defaultRoute: '/chat',
+      },
       // ─── Deals (customer) ───
       {
         slug: 'saved_business_deal',

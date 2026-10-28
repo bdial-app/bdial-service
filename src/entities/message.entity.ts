@@ -30,10 +30,10 @@ export class Message {
   @Column({
     name: 'message_type',
     type: 'enum',
-    enum: ['text', 'image', 'enquiry', 'system', 'quote_request'],
+    enum: ['text', 'image', 'enquiry', 'system', 'quote_request', 'file', 'product', 'deal'],
     default: 'text',
   })
-  messageType: 'text' | 'image' | 'enquiry' | 'system' | 'quote_request';
+  messageType: 'text' | 'image' | 'enquiry' | 'system' | 'quote_request' | 'file' | 'product' | 'deal';
 
   /**
    * Flexible metadata for rich messages:

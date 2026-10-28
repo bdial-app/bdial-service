@@ -130,6 +130,10 @@ export class Provider {
   @Column({ name: 'free_deals_created', type: 'int', default: 0 })
   freeDealsCreated: number;
 
+  /** Saved chat replies the owner sends with one tap; null = the starter set. */
+  @Column({ name: 'chat_quick_replies', type: 'jsonb', nullable: true })
+  chatQuickReplies: string[] | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
