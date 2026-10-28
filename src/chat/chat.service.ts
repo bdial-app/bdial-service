@@ -426,8 +426,18 @@ export class ChatService {
          FROM reviews WHERE provider_id = $1 AND status = 'active'`,
       [provider.id],
     );
+    // Same rule as the business page: a live, approved boost with budget left.
+    const [boost] = await this.messageRepo.manager.query(
+      `SELECT 1 FROM sponsored_listings
+        WHERE provider_id = $1 AND is_active = true AND approval_status = 'approved'
+          AND starts_at <= now() AND ends_at > now()
+          AND (billing_mode = 'free' OR spent_amount < budget_amount)
+        LIMIT 1`,
+      [provider.id],
+    );
     return {
       verified: provider.status === 'active',
+      premium: !!boost,
       rating: stats ? Math.round(Number(stats.rating) * 10) / 10 : 0,
       reviewCount: stats?.reviews ?? 0,
       replyMinutes: await this.replyMinutes(provider.userId),

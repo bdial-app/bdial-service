@@ -64,6 +64,8 @@ export interface ProviderSearchResult {
   relevanceScore: number;
   isSponsored?: boolean;
   sponsoredListingId?: string;
+  /** The business runs a live boost, wherever it's shown. */
+  premium?: boolean;
   hasActiveOffer?: boolean;
   offerId?: string;
   offerTitle?: string;
@@ -88,6 +90,8 @@ export interface ProductSearchResult {
   relevanceScore: number;
   isSponsored?: boolean;
   sponsoredListingId?: string;
+  /** Its business runs a live boost. */
+  premium?: boolean;
   /** The business behind it has a live offer. */
   hasActiveOffer?: boolean;
   offerId?: string;
@@ -1001,6 +1005,8 @@ export class SearchService implements OnModuleInit {
       relevanceScore: parseFloat(x.score.toFixed(3)),
       isSponsored: x.sponsored,
       ...(x.sponsored ? { sponsoredListingId: r.listing_id } : {}),
+      // The business runs a live boost (a Premium partner), placed here or not.
+      premium: !!r.listing_id,
       hasActiveOffer: !!r.has_active_offer,
       offerTitle: r.offer_title || undefined,
       discountValue: r.discount_value != null ? parseFloat(r.discount_value) : undefined,
@@ -1028,6 +1034,8 @@ export class SearchService implements OnModuleInit {
       relevanceScore: parseFloat(x.score.toFixed(3)),
       isSponsored: x.sponsored,
       ...(x.sponsored ? { sponsoredListingId: r.listing_id } : {}),
+      // The business runs a live boost (a Premium partner), placed here or not.
+      premium: !!r.listing_id,
       hasActiveOffer: !!r.has_active_offer,
       ...(r.has_active_offer
         ? { offerId: r.offer_id, offerTitle: r.offer_title, discountType: r.discount_type, discountValue: parseFloat(r.discount_value) }
