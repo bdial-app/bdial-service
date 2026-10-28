@@ -10,11 +10,14 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags, ApiQuery } from '@nestjs/swagger';
 import { PaymentService } from './payment.service';
+import { LeadWalletService } from './lead-wallet.service';
 import {
   CreateSponsorshipCheckoutDto,
   CreateLeadUnlockCheckoutDto,
   CreateSubscriptionCheckoutDto,
   CreateDealCreationCheckoutDto,
+  CreateLeadPackCheckoutDto,
+  LeadIdsDto,
   ValidateVoucherDto,
   VerifyAppleConsumableDto,
 } from './dto/payment.dto';
@@ -23,7 +26,10 @@ import {
 @Controller('payments')
 @ApiBearerAuth()
 export class PaymentController {
-  constructor(private readonly paymentService: PaymentService) {}
+  constructor(
+    private readonly paymentService: PaymentService,
+    private readonly leadWallet: LeadWalletService,
+  ) {}
 
   // ─── Sponsorship ────────────────────────
 
@@ -50,6 +56,32 @@ export class PaymentController {
   }
 
   // ─── Deal Creation ─────────────────────
+
+  // ─── Lead Wallet ─────────────────────
+
+  @Get('lead-wallet')
+  @ApiOperation({ summary: 'Lead Wallet balance, packs with their bonus, refund rules and recent activity' })
+  getLeadWallet(@Request() req) {
+    return this.leadWallet.getWallet(req.user.id);
+  }
+
+  @Post('lead-wallet/checkout')
+  @ApiOperation({ summary: 'Buy a Lead Wallet pack (Razorpay order or Apple product)' })
+  createLeadPackCheckout(@Request() req, @Body() dto: CreateLeadPackCheckoutDto) {
+    return this.paymentService.createLeadPackCheckout(req.user.id, dto);
+  }
+
+  @Post('lead-wallet/quote')
+  @ApiOperation({ summary: 'What unlocking these leads would cost from the wallet' })
+  quoteLeads(@Request() req, @Body() dto: LeadIdsDto) {
+    return this.leadWallet.quote(req.user.id, dto.leadIds);
+  }
+
+  @Post('lead-wallet/unlock')
+  @ApiOperation({ summary: 'Unlock leads: free credits first, the rest from the wallet (all or nothing)' })
+  unlockLeads(@Request() req, @Body() dto: LeadIdsDto) {
+    return this.leadWallet.unlock(req.user.id, dto.leadIds);
+  }
 
   @Post('deal-creation/checkout')
   @ApiOperation({ summary: 'Check deal creation eligibility or create Razorpay Order for paid deal' })

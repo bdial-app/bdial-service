@@ -11,7 +11,7 @@ import {
 import { Provider } from './provider.entity';
 
 export type PaymentStatus = 'pending' | 'processing' | 'succeeded' | 'failed' | 'refunded';
-export type PaymentType = 'sponsorship' | 'lead_unlock' | 'badge' | 'subscription' | 'deal_unlock' | 'deal_creation';
+export type PaymentType = 'sponsorship' | 'lead_unlock' | 'badge' | 'subscription' | 'deal_unlock' | 'deal_creation' | 'lead_credits';
 export type PaymentGateway = 'razorpay' | 'apple' | 'manual' | 'voucher';
 
 @Entity('payments')
@@ -54,7 +54,7 @@ export class Payment {
 
   @Column({
     type: 'enum',
-    enum: ['sponsorship', 'lead_unlock', 'badge', 'subscription', 'deal_unlock', 'deal_creation'],
+    enum: ['sponsorship', 'lead_unlock', 'badge', 'subscription', 'deal_unlock', 'deal_creation', 'lead_credits'],
   })
   type: PaymentType;
 

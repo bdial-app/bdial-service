@@ -24,6 +24,7 @@ import { VoucherRedemption } from '../entities/voucher-redemption.entity';
 import { SystemSetting } from '../entities/system-setting.entity';
 import { ProviderOffer } from '../entities/provider-offer.entity';
 import { DAY_MS, daysBetween, loadDealRules } from '../providers/deal-rules';
+import { LeadWalletService } from './lead-wallet.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { AppleVerifyService } from './apple-verify.service';
 import {
@@ -37,6 +38,7 @@ import {
   CreateLeadUnlockCheckoutDto,
   CreateSubscriptionCheckoutDto,
   CreateDealCreationCheckoutDto,
+  CreateLeadPackCheckoutDto,
 } from './dto/payment.dto';
 
 @Injectable()
@@ -70,6 +72,7 @@ export class PaymentService {
     private readonly appleVerify: AppleVerifyService,
     private readonly dataSource: DataSource,
     private readonly automations: AutomationsService,
+    private readonly leadWallet: LeadWalletService,
   ) {}
 
   // ──────────────────────────────────────────
@@ -1463,6 +1466,10 @@ export class PaymentService {
       case 'deal_creation':
         await this.fulfillDealCreationPayment(payment);
         break;
+      case 'lead_credits':
+        await this.leadWallet.creditPack(payment);
+        void this.notifyPaymentSuccess(payment, 'Lead Wallet top-up');
+        break;
     }
   }
 
@@ -1997,6 +2004,87 @@ export class PaymentService {
       discounted: isGrowthSubscriber,
       prefill: await this.getPrefillData(provider),
     };
+  }
+
+  // ──────────────────────────────────────────
+  // Lead Wallet pack checkout
+  // ──────────────────────────────────────────
+
+  async createLeadPackCheckout(userId: string, dto: CreateLeadPackCheckoutDto) {
+    const { ctx, pack, credit } = await this.leadWallet.packForCheckout(
+      userId,
+      dto.packId,
+    );
+    const provider = await this.providerRepo.findOneBy({ id: ctx.id });
+    if (!provider) throw new NotFoundException('Provider not found');
+
+    const payment = this.paymentRepo.create({
+      providerId: provider.id,
+      amount: pack.price,
+      currency: 'INR',
+      status: 'pending',
+      type: 'lead_credits' as any,
+      paymentGateway: 'razorpay',
+      metadata: { packId: pack.id, credit, growth: ctx.plan_slug === 'growth' },
+    });
+    await this.paymentRepo.save(payment);
+
+    if (dto.gateway === 'apple') {
+      if (!pack.appleProductId) {
+        throw new BadRequestException('Lead packs on iPhone are coming soon.');
+      }
+      await this.paymentRepo.update(payment.id, {
+        metadata: {
+          ...payment.metadata,
+          appleProductId: pack.appleProductId,
+        } as any,
+        status: 'processing',
+      });
+      return {
+        requiresPayment: true,
+        gateway: 'apple',
+        appleProductId: pack.appleProductId,
+        paymentId: payment.id,
+        price: pack.price,
+        credit,
+      };
+    }
+
+    const order = await this.razorpay.orders.create({
+      amount: Math.round(pack.price * 100),
+      currency: 'INR',
+      receipt: payment.id,
+      notes: { paymentId: payment.id, type: 'lead_credits' },
+    });
+    await this.paymentRepo.update(payment.id, {
+      gatewayOrderId: order.id,
+      status: 'processing',
+    });
+    return {
+      requiresPayment: true,
+      orderId: order.id,
+      amount: Math.round(pack.price * 100),
+      currency: 'INR',
+      paymentId: payment.id,
+      keyId: this.config.get<string>('RAZORPAY_KEY_ID'),
+      description: `Lead Wallet · ₹${credit.toLocaleString('en-IN')} credit`,
+      price: pack.price,
+      credit,
+      prefill: await this.getPrefillData(provider),
+    };
+  }
+
+  private async notifyPaymentSuccess(payment: Payment, description: string) {
+    const provider = await this.providerRepo.findOneBy({
+      id: payment.providerId,
+    });
+    if (!provider) return;
+    this.notificationDispatch
+      .sendTemplated(provider.userId, 'payment_success', {
+        amount: `₹${payment.amount}`,
+        description,
+      })
+      .catch(() => {});
   }
 
   // ──────────────────────────────────────────
