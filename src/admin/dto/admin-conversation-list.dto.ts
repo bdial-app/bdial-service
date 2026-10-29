@@ -6,6 +6,7 @@ import {
   IsISO8601,
   IsOptional,
   IsString,
+  IsUUID,
   Max,
   MaxLength,
   Min,
@@ -161,6 +162,16 @@ export class AdminConversationListQueryDto {
   @IsString()
   @MaxLength(100)
   city?: string;
+
+  @ApiPropertyOptional({ description: 'Only conversations with this business (provider id)' })
+  @IsOptional()
+  @IsUUID()
+  providerId?: string;
+
+  @ApiPropertyOptional({ description: 'Only conversations of this customer (user id)' })
+  @IsOptional()
+  @IsUUID()
+  customerId?: string;
 
   @ApiPropertyOptional({ enum: CONVERSATION_SORTS, default: 'recent' })
   @IsOptional()

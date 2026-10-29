@@ -2913,6 +2913,8 @@ export class AdminService {
       minMessages,
       inactiveDays,
       city,
+      providerId,
+      customerId,
       sort,
     } = query;
     // dateFrom/dateTo are the legacy names the admin-app still sends.
@@ -2936,10 +2938,25 @@ export class AdminService {
       qb.andWhere(
         `(c.context_title ILIKE :search OR EXISTS (
            SELECT 1 FROM conversation_participants cp JOIN users u ON u.id = cp.user_id
-           WHERE cp.conversation_id = c.id AND (u.name ILIKE :search OR u.mobile_number ILIKE :search)))`,
+           LEFT JOIN providers pr ON pr.user_id = cp.user_id AND cp.role = 'provider'
+           WHERE cp.conversation_id = c.id
+             AND (u.name ILIKE :search OR u.mobile_number ILIKE :search OR pr.brand_name ILIKE :search))
+         OR EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND m.content ILIKE :search))`,
         { search: `%${search}%` },
       );
     }
+    if (providerId)
+      qb.andWhere(
+        `EXISTS (SELECT 1 FROM conversation_participants cp JOIN providers pr ON pr.user_id = cp.user_id
+                 WHERE cp.conversation_id = c.id AND cp.role = 'provider' AND pr.id = :providerId)`,
+        { providerId },
+      );
+    if (customerId)
+      qb.andWhere(
+        `EXISTS (SELECT 1 FROM conversation_participants cp
+                 WHERE cp.conversation_id = c.id AND cp.role = 'customer' AND cp.user_id = :customerId)`,
+        { customerId },
+      );
     if (status) qb.andWhere('c.status = :status', { status });
     if (type) qb.andWhere('c.type = :type', { type });
     if (contextType)
@@ -3008,23 +3025,79 @@ export class AdminService {
 
     const [pageRows, total] = await qb.getManyAndCount();
     const ids = pageRows.map((c) => c.id);
-    if (ids.length === 0) return { items: [], meta: meta(total) };
+    return { items: await this.enrichConversations(ids), meta: meta(total) };
+  }
 
-    // Participants, message counts, the business's city and the safety flags
-    // for this page only. The flags use the same predicates as the filters.
-    const [full, messageCounts, providerCities, flags] = await Promise.all([
+  /** One conversation with everything the list shows, for a deep link. */
+  async getChatConversation(admin: any, conversationId: string) {
+    this.assertAdmin(admin);
+    const [item] = await this.enrichConversations([conversationId]);
+    if (!item) throw new NotFoundException('Conversation not found');
+    return item;
+  }
+
+  /**
+   * Participants, who the business and customer are, message counts by side,
+   * first reply time, the customer's lead with this business and the safety
+   * flags. The flags use the same predicates as the filters.
+   */
+  private async enrichConversations(ids: string[]) {
+    if (ids.length === 0) return [];
+    const [full, messageStats, businesses, leads, flags] = await Promise.all([
       this.conversationRepo.find({
         where: { id: In(ids) },
         relations: ['participants', 'participants.user'],
       }),
-      this.dataSource.query<{ conversation_id: string; count: number }[]>(
-        `SELECT conversation_id, count(*)::int AS count FROM messages WHERE conversation_id = ANY($1) GROUP BY 1`,
+      this.dataSource.query<
+        {
+          conversation_id: string;
+          count: number;
+          customer: number;
+          provider: number;
+          attachments: number;
+          first_customer_at: Date | null;
+          first_provider_at: Date | null;
+        }[]
+      >(
+        `SELECT m.conversation_id, count(*)::int AS count,
+                count(*) FILTER (WHERE cp.role = 'customer')::int AS customer,
+                count(*) FILTER (WHERE cp.role = 'provider')::int AS provider,
+                count(*) FILTER (WHERE m.message_type IN ('image', 'file'))::int AS attachments,
+                min(m.created_at) FILTER (WHERE cp.role = 'customer' AND m.message_type <> 'system') AS first_customer_at,
+                min(m.created_at) FILTER (WHERE cp.role = 'provider' AND m.message_type <> 'system') AS first_provider_at
+         FROM messages m
+         LEFT JOIN conversation_participants cp ON cp.conversation_id = m.conversation_id AND cp.user_id = m.sender_id
+         WHERE m.conversation_id = ANY($1) GROUP BY 1`,
         [ids],
       ),
-      this.dataSource.query<{ conversation_id: string; city: string | null }[]>(
-        `SELECT cp.conversation_id, pr.city FROM conversation_participants cp
+      this.dataSource.query<
+        {
+          conversation_id: string;
+          id: string;
+          brandName: string;
+          slug: string;
+          city: string | null;
+          photoUrl: string | null;
+          contactNumber: string | null;
+          status: string;
+        }[]
+      >(
+        `SELECT cp.conversation_id, pr.id, pr.brand_name AS "brandName", pr.slug, pr.city,
+                pr.profile_photo_url AS "photoUrl", pr.contact_number AS "contactNumber", pr.status
+         FROM conversation_participants cp
          JOIN providers pr ON pr.user_id = cp.user_id
          WHERE cp.role = 'provider' AND cp.conversation_id = ANY($1)`,
+        [ids],
+      ),
+      this.dataSource.query<
+        { conversation_id: string; id: string; tier: string; score: number; isUnlocked: boolean }[]
+      >(
+        `SELECT a.conversation_id, l.id, l.tier, l.score, l.is_unlocked AS "isUnlocked"
+         FROM conversation_participants a
+         JOIN conversation_participants b ON b.conversation_id = a.conversation_id AND b.role = 'customer'
+         JOIN providers pr ON pr.user_id = a.user_id
+         JOIN provider_leads l ON l.provider_id = pr.id AND l.visitor_key = b.user_id::text
+         WHERE a.role = 'provider' AND a.conversation_id = ANY($1)`,
         [ids],
       ),
       this.dataSource.query<
@@ -3033,36 +3106,54 @@ export class AdminService {
           hasRedacted: boolean;
           reported: boolean;
           blocked: boolean;
+          unanswered: boolean;
         }[]
       >(
         `SELECT c.id,
                 ${CONVERSATION_REDACTED_SQL} AS "hasRedacted",
                 ${CONVERSATION_REPORTED_SQL} AS reported,
-                ${CONVERSATION_BLOCKED_SQL} AS blocked
+                ${CONVERSATION_BLOCKED_SQL} AS blocked,
+                ${CONVERSATION_UNANSWERED_SQL} AS unanswered
          FROM conversations c WHERE c.id = ANY($1)`,
         [ids],
       ),
     ]);
     const byId = new Map(full.map((c) => [c.id, c]));
-    const countById = new Map(
-      messageCounts.map((r) => [r.conversation_id, r.count]),
-    );
-    const cityById = new Map(
-      providerCities.map((r) => [r.conversation_id, r.city]),
-    );
+    const statsById = new Map(messageStats.map((r) => [r.conversation_id, r]));
+    const businessById = new Map(businesses.map(({ conversation_id, ...b }) => [conversation_id, b]));
+    const leadById = new Map(leads.map(({ conversation_id, ...l }) => [conversation_id, l]));
     const flagsById = new Map(flags.map((r) => [r.id, r]));
 
-    return {
-      items: ids.map((id) => ({
-        ...byId.get(id),
-        messageCount: countById.get(id) ?? 0,
-        providerCity: cityById.get(id) ?? null,
-        hasRedacted: flagsById.get(id)?.hasRedacted ?? false,
-        reported: flagsById.get(id)?.reported ?? false,
-        blocked: flagsById.get(id)?.blocked ?? false,
-      })),
-      meta: meta(total),
-    };
+    return ids
+      .filter((id) => byId.has(id))
+      .map((id) => {
+        const c = byId.get(id)!;
+        const st = statsById.get(id);
+        const business = businessById.get(id) ?? null;
+        const customer = c.participants?.find((p) => p.role === 'customer')?.user ?? null;
+        const firstReply =
+          st?.first_customer_at && st.first_provider_at && st.first_provider_at > st.first_customer_at
+            ? Math.max(1, Math.round((+st.first_provider_at - +st.first_customer_at) / 60_000))
+            : null;
+        return {
+          ...c,
+          messageCount: st?.count ?? 0,
+          customerMessages: st?.customer ?? 0,
+          providerMessages: st?.provider ?? 0,
+          attachmentCount: st?.attachments ?? 0,
+          firstReplyMinutes: firstReply,
+          provider: business,
+          providerCity: business?.city ?? null,
+          customer: customer
+            ? { id: customer.id, name: customer.name, mobileNumber: customer.mobileNumber, email: customer.email, city: customer.city }
+            : null,
+          lead: leadById.get(id) ?? null,
+          hasRedacted: flagsById.get(id)?.hasRedacted ?? false,
+          reported: flagsById.get(id)?.reported ?? false,
+          blocked: flagsById.get(id)?.blocked ?? false,
+          unanswered: flagsById.get(id)?.unanswered ?? false,
+        };
+      });
   }
 
   /** City options and quick-segment counts for the conversation list. */
@@ -3139,13 +3230,58 @@ export class AdminService {
 
   async getChatStats(admin: any) {
     this.assertAdmin(admin);
-    const [totalConversations, activeConversations, closedConversations, totalMessages] = await Promise.all([
-      this.conversationRepo.count(),
-      this.conversationRepo.count({ where: { status: 'active' as any } }),
-      this.conversationRepo.count({ where: { status: 'closed' as any } }),
-      this.messageRepo.count(),
+    const [[conv], [msg], [reply], topBusinesses] = await Promise.all([
+      this.dataSource.query(
+        `SELECT count(*)::int AS "totalConversations",
+                count(*) FILTER (WHERE c.status = 'active')::int AS "activeConversations",
+                count(*) FILTER (WHERE c.status = 'closed')::int AS "closedConversations",
+                count(*) FILTER (WHERE c.created_at >= now() - interval '24 hours')::int AS "newConversations24h",
+                count(*) FILTER (WHERE c.created_at >= now() - interval '7 days')::int AS "newConversations7d",
+                count(*) FILTER (WHERE c.status = 'active' AND ${CONVERSATION_UNANSWERED_SQL})::int AS "unansweredConversations",
+                count(*) FILTER (WHERE ${CONVERSATION_REPORTED_SQL})::int AS "reportedConversations"
+         FROM conversations c`,
+      ),
+      this.dataSource.query(
+        `SELECT count(*)::int AS "totalMessages",
+                count(*) FILTER (WHERE created_at >= now() - interval '24 hours')::int AS "messages24h",
+                count(DISTINCT sender_id) FILTER (WHERE created_at >= now() - interval '7 days')::int AS "activeChatters7d"
+         FROM messages`,
+      ),
+      // Of the conversations started in the last 30 days where a customer
+      // wrote, how many got a reply, and how fast was the first one.
+      this.dataSource.query(
+        `WITH f AS (
+           SELECT m.conversation_id,
+                  min(m.created_at) FILTER (WHERE cp.role = 'customer') AS fc,
+                  min(m.created_at) FILTER (WHERE cp.role = 'provider') AS fp
+             FROM messages m
+             JOIN conversations c ON c.id = m.conversation_id
+             JOIN conversation_participants cp ON cp.conversation_id = m.conversation_id AND cp.user_id = m.sender_id
+            WHERE c.created_at >= now() - interval '30 days' AND m.message_type <> 'system'
+            GROUP BY 1)
+         SELECT count(*) FILTER (WHERE fc IS NOT NULL)::int AS asked,
+                count(*) FILTER (WHERE fc IS NOT NULL AND fp > fc)::int AS answered,
+                percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM fp - fc)) FILTER (WHERE fp > fc) AS median_s
+           FROM f`,
+      ),
+      this.dataSource.query(
+        `SELECT pr.id, pr.brand_name AS "brandName", pr.city, pr.slug,
+                count(*)::int AS conversations,
+                count(*) FILTER (WHERE ${CONVERSATION_UNANSWERED_SQL})::int AS unanswered
+           FROM conversations c
+           JOIN conversation_participants cp ON cp.conversation_id = c.id AND cp.role = 'provider'
+           JOIN providers pr ON pr.user_id = cp.user_id
+          WHERE coalesce(c.last_message_at, c.created_at) >= now() - interval '30 days'
+          GROUP BY pr.id ORDER BY 5 DESC, 6 DESC LIMIT 8`,
+      ),
     ]);
-    return { totalConversations, activeConversations, closedConversations, totalMessages };
+    return {
+      ...conv,
+      ...msg,
+      replyRate30d: reply.asked ? Math.round((reply.answered / reply.asked) * 100) : null,
+      medianFirstReplyMinutes: reply.median_s != null ? Math.max(1, Math.round(Number(reply.median_s) / 60)) : null,
+      topBusinesses,
+    };
   }
 
   // ============================================

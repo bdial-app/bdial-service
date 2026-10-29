@@ -16,7 +16,10 @@ import { RAZORPAY_CLIENT } from './razorpay.provider';
 import { Payment, PaymentStatus } from '../entities/payment.entity';
 import { Provider } from '../entities/provider.entity';
 import { SponsoredListing } from '../entities/sponsored-listing.entity';
-import { ProviderLead } from '../entities/provider-lead.entity';
+import {
+  ProviderLead,
+  type LeadUnlockMethod,
+} from '../entities/provider-lead.entity';
 import { Subscription } from '../entities/subscription.entity';
 import { SubscriptionPlan } from '../entities/subscription-plan.entity';
 import { Voucher } from '../entities/voucher.entity';
@@ -312,8 +315,7 @@ export class PaymentService {
 
     // Anonymous leads (no userId) are free — no contact info to sell
     if (!lead.userId) {
-      lead.isUnlocked = true;
-      await this.leadRepo.save(lead);
+      await this.markUnlocked(lead, 'anonymous');
       return { unlocked: true, method: 'free', remainingCredits: -1 };
     }
 
@@ -321,8 +323,7 @@ export class PaymentService {
     const monetizationEnabled =
       (await this.getSetting('leads_monetization_enabled', 'false')) === 'true';
     if (!monetizationEnabled) {
-      lead.isUnlocked = true;
-      await this.leadRepo.save(lead);
+      await this.markUnlocked(lead, 'free');
       return { unlocked: true, method: 'free', remainingCredits: -1 };
     }
 
@@ -334,8 +335,7 @@ export class PaymentService {
 
     // Pro plan (unlimited leads = -1) → always free
     if (subscription?.plan && subscription.plan.monthlyLeadUnlocks === -1) {
-      lead.isUnlocked = true;
-      await this.leadRepo.save(lead);
+      await this.markUnlocked(lead, 'plan');
       return {
         unlocked: true,
         method: 'subscription_credit',
@@ -348,8 +348,7 @@ export class PaymentService {
       const remaining =
         subscription.plan.monthlyLeadUnlocks - subscription.leadUnlocksUsed;
       if (remaining > 0) {
-        lead.isUnlocked = true;
-        await this.leadRepo.save(lead);
+        await this.markUnlocked(lead, 'plan');
         subscription.leadUnlocksUsed += 1;
         await this.subscriptionRepo.save(subscription);
         return {
@@ -387,8 +386,7 @@ export class PaymentService {
     }
 
     if (provider.freeLeadsUsedThisMonth < freeQuota) {
-      lead.isUnlocked = true;
-      await this.leadRepo.save(lead);
+      await this.markUnlocked(lead, 'quota');
       provider.freeLeadsUsedThisMonth += 1;
       await this.providerRepo.save(provider);
       return {
@@ -1530,6 +1528,14 @@ export class PaymentService {
     }
   }
 
+  /** Unlock one lead, recording how and when (for the admin's Leads screen). */
+  private async markUnlocked(lead: ProviderLead, method: LeadUnlockMethod) {
+    lead.isUnlocked = true;
+    lead.unlockedAt = new Date();
+    lead.unlockMethod = method;
+    await this.leadRepo.save(lead);
+  }
+
   private async fulfillLeadUnlockPayment(payment: Payment) {
     // One lead, or several bought together (bulk checkout).
     const leadIds: string[] = Array.isArray(payment.metadata?.leadIds)
@@ -1542,7 +1548,12 @@ export class PaymentService {
 
     await this.leadRepo.update(
       { id: In(leadIds), providerId: payment.providerId },
-      { isUnlocked: true },
+      {
+        isUnlocked: true,
+        unlockedAt: new Date(),
+        unlockMethod: 'paid',
+        unlockPaymentId: payment.id,
+      },
     );
 
     if (payment.voucherId) {
@@ -2090,19 +2101,26 @@ export class PaymentService {
     );
 
     const free: ProviderLead[] = [];
+    const freeMethod = new Map<string, LeadUnlockMethod>();
     const paid: { lead: ProviderLead; price: number }[] = [];
     let planUsed = 0;
     let quotaUsed = 0;
+    const freeBy = (lead: ProviderLead, method: LeadUnlockMethod) => {
+      free.push(lead);
+      freeMethod.set(lead.id, method);
+    };
     for (const lead of sorted) {
-      if (!lead.userId || !monetized || unlimited) free.push(lead);
+      if (!lead.userId) freeBy(lead, 'anonymous');
+      else if (!monetized) freeBy(lead, 'free');
+      else if (unlimited) freeBy(lead, 'plan');
       else if (planLeft > 0) {
         planLeft--;
         planUsed++;
-        free.push(lead);
+        freeBy(lead, 'plan');
       } else if (quotaLeft > 0) {
         quotaLeft--;
         quotaUsed++;
-        free.push(lead);
+        freeBy(lead, 'quota');
       } else {
         const tier = lead.tier || 'cold';
         const key = growth
@@ -2138,6 +2156,7 @@ export class PaymentService {
       provider,
       subscription,
       free,
+      freeMethod,
       paid,
       planUsed,
       quotaUsed,
@@ -2176,10 +2195,17 @@ export class PaymentService {
 
     // Free ones are unlocked now, as a single free unlock would be.
     if (p.free.length) {
-      await this.leadRepo.update(
-        { id: In(p.free.map((l) => l.id)) },
-        { isUnlocked: true },
-      );
+      const now = new Date();
+      const byMethod = new Map<LeadUnlockMethod, string[]>();
+      for (const l of p.free) {
+        const m = p.freeMethod.get(l.id)!;
+        byMethod.set(m, [...(byMethod.get(m) ?? []), l.id]);
+      }
+      for (const [unlockMethod, ids] of byMethod)
+        await this.leadRepo.update(
+          { id: In(ids) },
+          { isUnlocked: true, unlockedAt: now, unlockMethod },
+        );
       if (p.planUsed && p.subscription) {
         p.subscription.leadUnlocksUsed += p.planUsed;
         await this.subscriptionRepo.save(p.subscription);

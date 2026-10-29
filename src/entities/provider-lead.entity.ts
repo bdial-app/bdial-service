@@ -14,6 +14,13 @@ import { User } from './user.entity';
 
 export type LeadTier = 'hot' | 'warm' | 'soft' | 'cold';
 
+/**
+ * anonymous: no contact to sell · free: lead monetization off · plan: a
+ * subscription credit (or unlimited plan) · quota: the free monthly unlocks ·
+ * paid: bought, alone or in a bulk payment.
+ */
+export type LeadUnlockMethod = 'anonymous' | 'free' | 'plan' | 'quota' | 'paid';
+
 @Entity('provider_leads')
 @Index(['providerId', 'tier', 'createdAt'])
 @Unique(['providerId', 'visitorKey'])
@@ -78,6 +85,26 @@ export class ProviderLead {
 
   @Column({ name: 'is_unlocked', type: 'boolean', default: false })
   isUnlocked: boolean;
+
+  @Column({ name: 'unlocked_at', type: 'timestamptz', nullable: true })
+  unlockedAt: Date | null;
+
+  /** How the contact was unlocked; null on leads unlocked before this was recorded. */
+  @Column({ name: 'unlock_method', type: 'varchar', length: 10, nullable: true })
+  unlockMethod: LeadUnlockMethod | null;
+
+  @Column({ name: 'unlock_payment_id', type: 'uuid', nullable: true })
+  unlockPaymentId: string | null;
+
+  /** The business opened this lead in its leads screen. */
+  @Column({ name: 'first_viewed_at', type: 'timestamptz', nullable: true })
+  firstViewedAt: Date | null;
+
+  @Column({ name: 'last_viewed_at', type: 'timestamptz', nullable: true })
+  lastViewedAt: Date | null;
+
+  @Column({ name: 'view_count', type: 'int', default: 0 })
+  viewCount: number;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
