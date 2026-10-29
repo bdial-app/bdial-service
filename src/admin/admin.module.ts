@@ -3,6 +3,9 @@ import { WhatsAppModule } from '../whatsapp/whatsapp.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
+import { AdminLeadsController } from './admin-leads.controller';
+import { AdminLeadsService } from './admin-leads.service';
+import { AnalyticsModule } from '../analytics/analytics.module';
 import { ProviderEnrichmentService } from './provider-enrichment.service';
 import { ProviderLocationService } from './provider-location.service';
 import { ProductBulkService } from './product-bulk.service';
@@ -28,8 +31,9 @@ import { ProvidersModule } from '../providers/providers.module';
     GeocodeModule,
     ProvidersModule,
     WhatsAppModule,
+    AnalyticsModule,
   ],
-  controllers: [AdminController],
-  providers: [ProductBulkService, AdminService, ProviderEnrichmentService, ProviderLocationService],
+  controllers: [AdminController, AdminLeadsController],
+  providers: [ProductBulkService, AdminService, AdminLeadsService, ProviderEnrichmentService, ProviderLocationService],
 })
 export class AdminModule {}

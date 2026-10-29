@@ -406,6 +406,19 @@ export class AnalyticsService {
     });
     if (!lead) throw new NotFoundException('Lead not found');
 
+    // The business checked this lead (shown on the admin's Leads screen).
+    this.leadRepo
+      .createQueryBuilder()
+      .update(ProviderLead)
+      .set({
+        firstViewedAt: () => 'coalesce(first_viewed_at, now())',
+        lastViewedAt: () => 'now()',
+        viewCount: () => 'view_count + 1',
+      })
+      .where('id = :id', { id: lead.id })
+      .execute()
+      .catch((e) => this.logger.warn('Lead view not recorded', e));
+
     // Get event timeline for this lead
     const events = await this.eventRepo
       .createQueryBuilder('e')

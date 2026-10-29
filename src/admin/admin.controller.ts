@@ -739,6 +739,12 @@ export class AdminController {
     return this.adminService.getChatFilterOptions(req.user);
   }
 
+  @Get('chat/conversations/:id')
+  @ApiOperation({ summary: 'One conversation with its business, customer, lead and flags' })
+  getChatConversation(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
+    return this.adminService.getChatConversation(req.user, id);
+  }
+
   @Get('chat/conversations/:id/messages')
   @ApiOperation({ summary: 'Get messages for a conversation' })
   @ApiParam({ name: 'id', description: 'Conversation ID' })
