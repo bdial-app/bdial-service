@@ -1,5 +1,6 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { randomBytes } from 'crypto';
 import { Repository } from 'typeorm';
 import { NotificationTemplate } from '../entities/notification-template.entity';
 
@@ -81,17 +82,98 @@ export class NotificationTemplateService {
     return this.cache.get(slug) || null;
   }
 
+  /**
+   * A saved message for campaigns ("campaign" category). The app's own
+   * notifications are seeded from code and only ever edited, never created.
+   */
   async create(data: Partial<NotificationTemplate>): Promise<NotificationTemplate> {
-    const t = this.templateRepo.create(data);
+    const t = this.templateRepo.create({
+      ...data,
+      slug: `custom_${randomBytes(5).toString('hex')}`,
+      category: 'campaign',
+      type: data.type ?? 'promotional',
+      isActive: true,
+      variables: this.variablesIn(data),
+    });
     const saved = await this.templateRepo.save(t);
     this.invalidateCache();
     return saved;
   }
 
   async update(id: string, data: Partial<NotificationTemplate>): Promise<NotificationTemplate> {
-    await this.templateRepo.update(id, data);
+    const current = await this.findById(id);
+    const patch: Partial<NotificationTemplate> = { ...data };
+    // What the code fills in is fixed for the app's own notifications.
+    if (current.category === 'campaign') {
+      patch.variables = this.variablesIn({ ...current, ...data });
+    } else {
+      delete patch.type;
+      delete patch.variables;
+    }
+    await this.templateRepo.update(id, patch);
     this.invalidateCache();
     return this.findById(id);
+  }
+
+  /** Back to the wording it shipped with; on/off is left as it is. */
+  async reset(id: string): Promise<NotificationTemplate> {
+    const current = await this.findById(id);
+    const d = this.defaultFor(current.slug);
+    if (!d) throw new BadRequestException('Saved messages have no default to go back to');
+    await this.templateRepo.update(id, {
+      name: d.name,
+      description: d.description ?? null,
+      titleTemplate: d.titleTemplate,
+      bodyTemplate: d.bodyTemplate,
+      defaultRoute: d.defaultRoute ?? null,
+      defaultImageUrl: d.defaultImageUrl ?? null,
+    });
+    this.invalidateCache();
+    return this.findById(id);
+  }
+
+  defaultFor(slug: string): Partial<NotificationTemplate> | null {
+    return [...this.getDefaultTemplates(), ...this.getEngagementTemplates()].find((d) => d.slug === slug) ?? null;
+  }
+
+  /** Title and body with these values, even while switched off (for previews and tests). */
+  async render(
+    id: string,
+    variables: Record<string, string> = {},
+  ): Promise<{ template: NotificationTemplate; title: string; body: string; route?: string; imageUrl?: string }> {
+    const template = await this.findById(id);
+    return {
+      template,
+      title: this.interpolate(template.titleTemplate, variables),
+      body: this.interpolate(template.bodyTemplate, variables),
+      route: template.defaultRoute ? this.interpolate(template.defaultRoute, variables) : undefined,
+      imageUrl: template.defaultImageUrl || undefined,
+    };
+  }
+
+  /**
+   * Sent and opened per template over the last `days` days. Counted from the
+   * inbox rows, which carry the template since the admin stats went live.
+   */
+  async stats(days = 30): Promise<{ slug: string; sent: number; opened: number; lastSentAt: string | null }[]> {
+    const rows: { slug: string; sent: string; opened: string; last: Date | null }[] = await this.templateRepo.query(
+      `SELECT data->>'template' AS slug, COUNT(*) AS sent, COUNT(*) FILTER (WHERE is_read) AS opened, MAX(created_at) AS last
+         FROM notifications
+        WHERE created_at >= now() - make_interval(days => $1::int) AND data ? 'template'
+        GROUP BY 1`,
+      [days],
+    );
+    return rows.map((r) => ({
+      slug: r.slug,
+      sent: Number(r.sent),
+      opened: Number(r.opened),
+      lastSentAt: r.last ? new Date(r.last).toISOString() : null,
+    }));
+  }
+
+  private variablesIn(t: Partial<NotificationTemplate>): string[] {
+    const text = `${t.titleTemplate ?? ''} ${t.bodyTemplate ?? ''} ${t.defaultRoute ?? ''}`;
+    return [...new Set([...text.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]))];
   }
 
   async toggleActive(id: string, isActive: boolean): Promise<NotificationTemplate> {
@@ -101,6 +183,10 @@ export class NotificationTemplateService {
   }
 
   async delete(id: string): Promise<void> {
+    const t = await this.findById(id);
+    if (t.category !== 'campaign') {
+      throw new BadRequestException('The app sends this one itself. Switch it off instead of deleting it.');
+    }
     await this.templateRepo.delete(id);
     this.invalidateCache();
   }
