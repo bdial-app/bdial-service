@@ -26,6 +26,7 @@ import {
   MessageJson,
   toContactJson,
   toMessageJson,
+  foldReactions,
   windowExpiresAt,
 } from './whatsapp.mappers';
 import { paginate, PaginatedResult } from './whatsapp.types';
@@ -168,7 +169,7 @@ export class WhatsAppInboxService {
     rows.reverse();
     const extras = await this.audience.contactExtras([contactId]);
     return {
-      items: await this.withCardMatches(rows.map((m) => toMessageJson(m))),
+      items: await this.withCardMatches(foldReactions(rows, rows.map((m) => toMessageJson(m)))),
       contact: toContactJson(contact, extras.get(contactId) ?? {}),
       windowExpiresAt: windowExpiresAt(contact.lastInboundAt),
     };
@@ -287,7 +288,7 @@ export class WhatsAppInboxService {
         : null,
       phoneCandidates,
       windowExpiresAt: windowExpiresAt(contact?.lastInboundAt),
-      messages: await this.withCardMatches(messages.map((m) => toMessageJson(m))),
+      messages: await this.withCardMatches(foldReactions(messages, messages.map((m) => toMessageJson(m)))),
     };
   }
 

@@ -211,6 +211,9 @@ export function toMessageJson(
     body: m.renderedBody,
     media: mediaJson(m),
     contacts: sharedContacts(m),
+    reaction: reactionOf(m),
+    /** Emoji reactions on this message, attached by the inbox. */
+    reactions: [] as { emoji: string }[],
     templateName: m.templateName,
     errorMessage: m.errorMessage,
     errorCode: m.errorCode,
@@ -224,6 +227,33 @@ export function toMessageJson(
   };
 }
 export type MessageJson = ReturnType<typeof toMessageJson>;
+
+/** An inbound reaction: the emoji (null when they took it back) and the message it's on. */
+export function reactionOf(m: WhatsAppMessage): { emoji: string | null; targetWaId: string | null } | null {
+  if (m.direction !== 'inbound' || m.kind !== 'reaction') return null;
+  const r = (m.payload as { reaction?: { emoji?: string; message_id?: string } } | null)?.reaction;
+  return { emoji: r?.emoji || null, targetWaId: r?.message_id ?? null };
+}
+
+/**
+ * Puts each reaction on the message it reacts to (latest one wins, an empty
+ * one clears it) and drops the reaction's own row. A reaction whose message
+ * isn't in this page stays, so it can say "reacted to an earlier message".
+ */
+export function foldReactions(rows: WhatsAppMessage[], items: MessageJson[]): MessageJson[] {
+  const byWaId = new Map<string, MessageJson>();
+  rows.forEach((r, i) => {
+    if (r.waMessageId) byWaId.set(r.waMessageId, items[i]);
+  });
+  const folded = new Set<MessageJson>();
+  for (const item of items) {
+    const target = item.reaction?.targetWaId ? byWaId.get(item.reaction.targetWaId) : undefined;
+    if (!item.reaction || !target) continue;
+    target.reactions = item.reaction.emoji ? [{ emoji: item.reaction.emoji }] : [];
+    folded.add(item);
+  }
+  return items.filter((i) => !folded.has(i));
+}
 
 /** A contact card someone shared with us; `match` is filled in by the inbox. */
 export interface SharedContact {
