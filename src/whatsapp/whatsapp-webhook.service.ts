@@ -65,6 +65,10 @@ interface WebhookInboundMessage {
   };
   reaction?: { emoji?: string };
   location?: { name?: string; address?: string };
+  contacts?: Array<{
+    name?: { formatted_name?: string };
+    phones?: Array<{ phone?: string; wa_id?: string }>;
+  }>;
 }
 
 interface WebhookValue {
@@ -425,6 +429,15 @@ export class WhatsAppWebhookService {
         return '[audio]';
       case 'sticker':
         return '[sticker]';
+      case 'contacts': {
+        // "[contact] Ali Hussain +91 98765 43210, Zainab +91 …"
+        const cards = (m.contacts ?? []).map((c) =>
+          [c.name?.formatted_name, c.phones?.[0]?.phone ?? (c.phones?.[0]?.wa_id ? `+${c.phones[0].wa_id}` : null)]
+            .filter(Boolean)
+            .join(' '),
+        );
+        return cards.length ? `[contact] ${cards.join(', ')}` : '[contact]';
+      }
       default:
         return `[${m.type ?? 'unknown'}]`;
     }
