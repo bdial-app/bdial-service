@@ -16,6 +16,8 @@ import { NotificationDispatchService } from './notification-dispatch.service';
 import { NotificationTemplateService } from './notification-template.service';
 import { NotificationSchedulerService } from './notification-scheduler.service';
 import { NotificationCronService } from './notification-cron.service';
+import { PushAudienceService } from './push-audience.service';
+import { PushCampaignService } from './push-campaign.service';
 import { DeviceTokenController } from './device-token.controller';
 import { NotificationsController } from './notifications.controller';
 import { AdminNotificationsController } from './admin-notifications.controller';
@@ -47,6 +49,8 @@ import { AdminNotificationsController } from './admin-notifications.controller';
     NotificationTemplateService,
     NotificationSchedulerService,
     NotificationCronService,
+    PushAudienceService,
+    PushCampaignService,
   ],
   exports: [
     NotificationsService,

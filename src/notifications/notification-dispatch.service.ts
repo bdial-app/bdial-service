@@ -61,8 +61,8 @@ export class NotificationDispatchService {
     const template = await this.templateService.getBySlug(slug);
     if (!template) return false;
 
-    // Merge route into data payload
-    const payload = { ...data };
+    // Merge route into data payload; `template` lets the admin see how each one performs.
+    const payload: Record<string, any> = { ...data, template: slug };
     if (resolved.route) payload.route = resolved.route;
 
     return this.sendToUser(
@@ -91,6 +91,24 @@ export class NotificationDispatchService {
     batchId?: string,
     targetMode?: NotificationTargetMode,
   ): Promise<boolean> {
+    return (await this.deliver(userId, type, title, body, data, imageUrl, batchId, targetMode)) === 'pushed';
+  }
+
+  /**
+   * sendToUser, saying what happened: the push reached a phone, the person only
+   * gets it in the app's inbox (pushes off, quiet hours, no phone signed in), or
+   * it failed.
+   */
+  async deliver(
+    userId: string,
+    type: NotificationType,
+    title: string,
+    body: string,
+    data?: Record<string, any>,
+    imageUrl?: string,
+    batchId?: string,
+    targetMode?: NotificationTargetMode,
+  ): Promise<'pushed' | 'inbox' | 'failed'> {
     try {
       // 1. Check user preferences
       const prefs = await this.notificationsService.getPreferences(userId);
@@ -98,7 +116,7 @@ export class NotificationDispatchService {
       if (!prefs.pushEnabled) {
         this.logger.debug(`Push disabled for user ${userId} — saving to inbox only`);
         await this.saveNotification(userId, type, title, body, data, imageUrl, batchId, targetMode);
-        return false;
+        return 'inbox';
       }
 
       // Check type-specific preference
@@ -106,14 +124,14 @@ export class NotificationDispatchService {
       if (prefField && !prefs[prefField]) {
         this.logger.debug(`${type} notifications disabled for user ${userId} — saving to inbox only`);
         await this.saveNotification(userId, type, title, body, data, imageUrl, batchId, targetMode);
-        return false;
+        return 'inbox';
       }
 
       // Check quiet hours
       if (this.isQuietHours(prefs)) {
         this.logger.debug(`Quiet hours active for user ${userId} — saving to inbox only`);
         await this.saveNotification(userId, type, title, body, data, imageUrl, batchId, targetMode);
-        return false;
+        return 'inbox';
       }
 
       // 2. Save notification to inbox
@@ -123,7 +141,7 @@ export class NotificationDispatchService {
       const tokens = await this.notificationsService.getActiveTokens(userId);
       if (tokens.length === 0) {
         this.logger.debug(`No active device tokens for user ${userId}`);
-        return false;
+        return 'inbox';
       }
 
       const payload: PushPayload = {
@@ -138,15 +156,15 @@ export class NotificationDispatchService {
       if (tokenStrings.length === 1) {
         const result = await this.firebaseService.sendToDevice(tokenStrings[0], payload);
         await this.cleanupStaleTokens(result.staleTokens);
-        return result.successCount > 0;
+        return result.successCount > 0 ? 'pushed' : 'failed';
       }
 
       const result = await this.firebaseService.sendToDevices(tokenStrings, payload);
       await this.cleanupStaleTokens(result.staleTokens);
-      return result.successCount > 0;
+      return result.successCount > 0 ? 'pushed' : 'failed';
     } catch (error) {
       this.logger.error(`Failed to send notification to user ${userId}: ${error.message}`);
-      return false;
+      return 'failed';
     }
   }
 
@@ -228,6 +246,31 @@ export class NotificationDispatchService {
       });
       throw error;
     }
+  }
+
+  /**
+   * A test push straight to one person's phones: no inbox entry, and their
+   * preferences and quiet hours are skipped so the sender always sees it.
+   */
+  async sendTest(
+    userId: string,
+    type: NotificationType,
+    title: string,
+    body: string,
+    data?: Record<string, any>,
+    imageUrl?: string,
+    targetMode?: NotificationTargetMode,
+  ): Promise<{ devices: number; delivered: number }> {
+    const tokens = (await this.notificationsService.getActiveTokens(userId)).map((t) => t.token);
+    if (!tokens.length) return { devices: 0, delivered: 0 };
+    const result = await this.firebaseService.sendToDevices(tokens, {
+      title,
+      body,
+      imageUrl,
+      data: this.serializeData(type, data, targetMode),
+    });
+    await this.cleanupStaleTokens(result.staleTokens);
+    return { devices: tokens.length, delivered: result.successCount };
   }
 
   // ──────────────────────────────────────────────

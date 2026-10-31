@@ -12,6 +12,10 @@ import {
   Max,
   MaxLength,
   Matches,
+  ArrayMaxSize,
+  IsIn,
+  IsDateString,
+  ValidateNested,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
@@ -228,4 +232,274 @@ export class GetBatchesQueryDto {
   @IsOptional()
   @IsEnum(['draft', 'sending', 'sent', 'failed'])
   status?: string;
+}
+
+// ──────────────────────────────────────────────
+// Admin — Push campaigns
+// ──────────────────────────────────────────────
+
+export class PushAudienceDto {
+  @ApiProperty({ enum: ['everyone', 'businesses', 'customers', 'people'] })
+  @IsEnum(['everyone', 'businesses', 'customers', 'people'])
+  kind: 'everyone' | 'businesses' | 'customers' | 'people';
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @ArrayMaxSize(100)
+  cities?: string[];
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('all', { each: true })
+  @ArrayMaxSize(200)
+  categoryIds?: string[];
+
+  @ApiPropertyOptional({ enum: ['android', 'ios', 'web'], isArray: true })
+  @IsOptional()
+  @IsArray()
+  @IsIn(['android', 'ios', 'web'], { each: true })
+  platforms?: ('android' | 'ios' | 'web')[];
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(3650)
+  joinedWithinDays?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(3650)
+  activeWithinDays?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(3650)
+  inactiveDays?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  womenLed?: boolean;
+
+  @ApiPropertyOptional({ enum: ['yes', 'no'] })
+  @IsOptional()
+  @IsIn(['yes', 'no'])
+  paidPlan?: 'yes' | 'no';
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  noProducts?: boolean;
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('all', { each: true })
+  @ArrayMaxSize(5000)
+  userIds?: string[];
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('all', { each: true })
+  @ArrayMaxSize(5000)
+  providerIds?: string[];
+}
+
+export class PushAudiencePreviewDto {
+  @ApiProperty({ type: PushAudienceDto })
+  @ValidateNested()
+  @Type(() => PushAudienceDto)
+  audience: PushAudienceDto;
+
+  @ApiPropertyOptional({ enum: ['promotional', 'system_announcement'] })
+  @IsOptional()
+  @IsIn(['promotional', 'system_announcement'])
+  type?: 'promotional' | 'system_announcement';
+}
+
+export class PushMessageDto {
+  @ApiProperty({ maxLength: 200 })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(200)
+  title: string;
+
+  @ApiProperty({ maxLength: 2000 })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(2000)
+  body: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  imageUrl?: string;
+
+  @ApiPropertyOptional({ description: 'App screen to open, e.g. "/deals?mode=customer"' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  @Matches(/^\//, { message: 'The screen to open must start with /' })
+  route?: string;
+
+  @ApiPropertyOptional({ enum: ['promotional', 'system_announcement'], default: 'promotional' })
+  @IsOptional()
+  @IsIn(['promotional', 'system_announcement'])
+  type?: 'promotional' | 'system_announcement';
+}
+
+export class CreateCampaignDto extends PushMessageDto {
+  @ApiProperty({ type: PushAudienceDto })
+  @ValidateNested()
+  @Type(() => PushAudienceDto)
+  audience: PushAudienceDto;
+
+  @ApiPropertyOptional({ description: 'ISO time to send at; omit to send now' })
+  @IsOptional()
+  @IsDateString()
+  scheduledAt?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsUUID()
+  templateId?: string;
+}
+
+export class TestPushDto extends PushMessageDto {
+  @ApiPropertyOptional({ description: 'Send to this account instead of yourself' })
+  @IsOptional()
+  @IsUUID()
+  userId?: string;
+
+  @ApiPropertyOptional({ description: 'Send to the owner of this business' })
+  @IsOptional()
+  @IsUUID()
+  providerId?: string;
+}
+
+export class TestTemplateDto {
+  @ApiPropertyOptional({ description: 'Sample values for the template variables' })
+  @IsOptional()
+  @IsObject()
+  variables?: Record<string, string>;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsUUID()
+  userId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsUUID()
+  providerId?: string;
+}
+
+const TEMPLATE_TYPES = [
+  'chat_message', 'review_received', 'provider_status', 'verification_update',
+  'booking_update', 'promotional', 'system_announcement', 'report_update', 'new_enquiry',
+  'payment_update', 'voucher_update', 'subscription_update', 'invite_update',
+];
+
+export class UpdateTemplateDto {
+  @ApiPropertyOptional({ maxLength: 200 })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(200)
+  name?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  description?: string | null;
+
+  @ApiPropertyOptional({ maxLength: 200 })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(200)
+  titleTemplate?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(2000)
+  bodyTemplate?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  defaultRoute?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  defaultImageUrl?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
+
+  @ApiPropertyOptional({ description: 'Saved messages only' })
+  @IsOptional()
+  @IsIn(TEMPLATE_TYPES)
+  type?: string;
+}
+
+export class CreateTemplateDto {
+  @ApiProperty({ maxLength: 200 })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(200)
+  name: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  description?: string;
+
+  @ApiProperty({ maxLength: 200 })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(200)
+  titleTemplate: string;
+
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(2000)
+  bodyTemplate: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  defaultRoute?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  defaultImageUrl?: string;
+
+  @ApiPropertyOptional({ enum: ['promotional', 'system_announcement'] })
+  @IsOptional()
+  @IsIn(['promotional', 'system_announcement'])
+  type?: 'promotional' | 'system_announcement';
 }
