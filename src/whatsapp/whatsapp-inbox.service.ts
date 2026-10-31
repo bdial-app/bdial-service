@@ -168,10 +168,58 @@ export class WhatsAppInboxService {
     rows.reverse();
     const extras = await this.audience.contactExtras([contactId]);
     return {
-      items: rows.map((m) => toMessageJson(m)),
+      items: await this.withCardMatches(rows.map((m) => toMessageJson(m))),
       contact: toContactJson(contact, extras.get(contactId) ?? {}),
       windowExpiresAt: windowExpiresAt(contact.lastInboundAt),
     };
+  }
+
+  /**
+   * Shared contact cards: is each number already a business or a customer on
+   * Tijarah? Matched on the last 10 digits, since stored numbers come in
+   * every shape (+91…, 91…, 0…, bare).
+   */
+  private async withCardMatches(items: MessageJson[]): Promise<MessageJson[]> {
+    const key = (e164: string | null) => (e164 ? e164.replace(/\D/g, '').slice(-10) : null);
+    const keys = [
+      ...new Set(
+        items.flatMap((m) => m.contacts ?? []).flatMap((c) => c.phones.map((p) => key(p.e164))).filter((k): k is string => !!k && k.length === 10),
+      ),
+    ];
+    if (!keys.length) return items;
+    const digits = (col: string) => `right(regexp_replace(coalesce(${col}, ''), '\\D', '', 'g'), 10)`;
+    const [businesses, customers]: [
+      { k: string; id: string; brand_name: string; city: string | null }[],
+      { k: string; id: string; name: string | null }[],
+    ] = await Promise.all([
+      this.dataSource.query(
+        `SELECT DISTINCT ON (q.k) q.k, p.id, p.brand_name, p.city
+           FROM unnest($1::text[]) AS q(k)
+           JOIN providers p ON p.deleted_at IS NULL
+           LEFT JOIN users u ON u.id = p.user_id
+          WHERE ${digits('p.whatsapp_number')} = q.k OR ${digits('p.contact_number')} = q.k OR ${digits('u.mobile_number')} = q.k
+          ORDER BY q.k, p.created_at ASC`,
+        [keys],
+      ),
+      this.dataSource.query(
+        `SELECT DISTINCT ON (q.k) q.k, u.id, u.name
+           FROM unnest($1::text[]) AS q(k)
+           JOIN users u ON ${digits('u.mobile_number')} = q.k
+          ORDER BY q.k, u.created_at ASC`,
+        [keys],
+      ),
+    ]);
+    const biz = new Map(businesses.map((b) => [b.k, { id: b.id, brandName: b.brand_name, city: b.city }]));
+    const cust = new Map(customers.map((c) => [c.k, { id: c.id, name: c.name }]));
+    for (const m of items) {
+      for (const c of m.contacts ?? []) {
+        const ks = c.phones.map((p) => key(p.e164)).filter((k): k is string => !!k);
+        const business = ks.map((k) => biz.get(k)).find(Boolean) ?? null;
+        const customer = ks.map((k) => cust.get(k)).find(Boolean) ?? null;
+        c.match = { business, customer };
+      }
+    }
+    return items;
   }
 
   async reply(contactId: string, dto: DirectSendDto): Promise<MessageJson> {
@@ -239,7 +287,7 @@ export class WhatsAppInboxService {
         : null,
       phoneCandidates,
       windowExpiresAt: windowExpiresAt(contact?.lastInboundAt),
-      messages: messages.map((m) => toMessageJson(m)),
+      messages: await this.withCardMatches(messages.map((m) => toMessageJson(m))),
     };
   }
 

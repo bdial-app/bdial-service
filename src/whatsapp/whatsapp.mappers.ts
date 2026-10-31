@@ -3,6 +3,7 @@ import { WhatsAppCampaign } from '../entities/whatsapp-campaign.entity';
 import { WhatsAppContact } from '../entities/whatsapp-contact.entity';
 import { WhatsAppMessage } from '../entities/whatsapp-message.entity';
 import { WHATSAPP_WINDOW_MS } from './whatsapp.constants';
+import { toE164 } from './whatsapp-phone.util';
 import { SkipBreakdown } from './whatsapp.types';
 
 const iso = (d: Date | string | null | undefined): string | null => {
@@ -209,6 +210,7 @@ export function toMessageJson(
     status: m.status,
     body: m.renderedBody,
     media: mediaJson(m),
+    contacts: sharedContacts(m),
     templateName: m.templateName,
     errorMessage: m.errorMessage,
     errorCode: m.errorCode,
@@ -222,6 +224,47 @@ export function toMessageJson(
   };
 }
 export type MessageJson = ReturnType<typeof toMessageJson>;
+
+/** A contact card someone shared with us; `match` is filled in by the inbox. */
+export interface SharedContact {
+  name: string;
+  company: string | null;
+  phones: { phone: string; e164: string | null; label: string | null }[];
+  match: {
+    business: { id: string; brandName: string; city: string | null } | null;
+    customer: { id: string; name: string | null } | null;
+  } | null;
+}
+
+interface CardPayload {
+  type?: string;
+  contacts?: Array<{
+    name?: { formatted_name?: string; first_name?: string; last_name?: string };
+    org?: { company?: string };
+    phones?: Array<{ phone?: string; wa_id?: string; type?: string }>;
+  }>;
+}
+
+/** The contact cards in an inbound "contacts" message (WhatsApp's Share contact). */
+export function sharedContacts(m: WhatsAppMessage): SharedContact[] | null {
+  const p = m.payload as CardPayload | null;
+  if (m.direction !== 'inbound' || p?.type !== 'contacts' || !p.contacts?.length) return null;
+  return p.contacts.map((c) => ({
+    name:
+      c.name?.formatted_name?.trim() ||
+      [c.name?.first_name, c.name?.last_name].filter(Boolean).join(' ').trim() ||
+      'Unnamed contact',
+    company: c.org?.company?.trim() || null,
+    phones: (c.phones ?? [])
+      .filter((ph) => ph.phone || ph.wa_id)
+      .map((ph) => ({
+        phone: ph.phone ?? `+${ph.wa_id}`,
+        e164: toE164(ph.wa_id ? `+${ph.wa_id}` : ph.phone) ?? toE164(ph.phone),
+        label: ph.type ? ph.type.charAt(0) + ph.type.slice(1).toLowerCase() : null,
+      })),
+    match: null,
+  }));
+}
 
 /** What the inbox needs to show an attachment; the bytes come from /media. */
 function mediaJson(m: WhatsAppMessage) {
