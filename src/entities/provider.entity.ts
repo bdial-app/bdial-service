@@ -27,8 +27,13 @@ export class Provider {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ name: 'user_id', type: 'uuid', unique: true })
+  /** The owner. Only empty on a deleted business whose owner has since listed a new one. */
+  @Column({ name: 'user_id', type: 'uuid', unique: true, nullable: true })
   userId: string;
+
+  /** Who owned a deleted business after it let go of user_id. */
+  @Column({ name: 'previous_user_id', type: 'uuid', nullable: true })
+  previousUserId: string | null;
 
   @Column({ name: 'brand_name', type: 'varchar', length: 150 })
   brandName: string;

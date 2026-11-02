@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Logger, InternalServerErrorException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Not, Repository } from 'typeorm';
+import { IsNull, Not, Repository } from 'typeorm';
 import { Product, Provider, Review, Photo, ProviderCategory, ProviderOffer, SponsoredListing } from '../entities';
 import { CreateProductDto, UpdateProductDto } from './dto/product.dto';
 import { StorageService } from '../storage/storage.service';
@@ -143,7 +143,7 @@ export class ProductsService {
 
   async findByProvider(providerId: string, page = 1, limit = 20) {
     const [data, total] = await this.productRepo.findAndCount({
-      where: { providerId },
+      where: { providerId, provider: { deletedAt: IsNull() } },
       order: { isHero: 'DESC', displayOrder: 'ASC', name: 'ASC' },
       take: limit,
       skip: (page - 1) * limit,
@@ -156,7 +156,8 @@ export class ProductsService {
       where: { id },
       relations: ['provider', 'provider.user', 'category', 'subcategory'],
     });
-    if (!product) throw new NotFoundException(`Product with ID '${id}' not found`);
+    // A deleted business's products are gone with it.
+    if (!product || product.provider?.deletedAt) throw new NotFoundException(`Product with ID '${id}' not found`);
 
     const provider = product.provider;
 

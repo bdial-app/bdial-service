@@ -9,7 +9,8 @@ import {
 import { AutomationsService } from '../automations/automations.service';
 import { WomenLedService } from '../women-led/women-led.service';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, ILike, In } from 'typeorm';
+import { Repository, DataSource, ILike, In, IsNull } from 'typeorm';
+import { detachDeletedBusiness } from './detach-deleted-business';
 import { BADGE_KEYS, badgeRank } from '../badges/badge-catalog';
 import { BadgesService } from '../badges/badges.service';
 import { Provider, User, Verification, ProviderCategory, Review, Product, Photo, Message, ConversationParticipant, ProviderBadge, ProviderOffer, SponsoredListing, ProviderWarning, SystemSetting, Subscription, ProviderOnboardingDraft } from '../entities';
@@ -160,7 +161,8 @@ export class ProvidersService {
     if (!user) throw new NotFoundException(`User with ID '${userId}' not found`);
 
     const existingProvider = await this.providerRepo.findOneBy({ userId });
-    if (existingProvider) throw new ConflictException(`Provider already exists for user with ID '${userId}'`);
+    if (existingProvider && !existingProvider.deletedAt) throw new ConflictException(`Provider already exists for user with ID '${userId}'`);
+    if (existingProvider) await this.assertCanListAgain(existingProvider);
 
     // Content moderation
     this.checkProviderContent(createProviderDto.brandName, createProviderDto.description);
@@ -185,7 +187,10 @@ export class ProvidersService {
       latitude: latitude ? parseFloat(latitude) : null,
       longitude: longitude ? parseFloat(longitude) : null,
     });
-    const saved = await this.providerRepo.save(provider);
+    const saved = await this.dataSource.transaction(async (manager) => {
+      await detachDeletedBusiness(manager, userId);
+      return manager.save(provider);
+    });
     if (askedWomenLed === true) {
       await this.womenLed.requestFromOnboarding(saved.id, userId, {
         womanName: womenLedName,
@@ -244,6 +249,10 @@ export class ProvidersService {
     const existing = await this.existingListing(userId);
     if (existing) return existing;
 
+    // Their last business was deleted: a new one, once the cooldown is over.
+    const removed = await this.providerRepo.findOneBy({ userId });
+    if (removed) await this.assertCanListAgain(removed);
+
     // Check if this contact number is already used by another active provider
     if (providerData.contactNumber) {
       const bare = providerData.contactNumber.replace(/^\+?91/, '');
@@ -288,6 +297,7 @@ export class ProvidersService {
     let declaredWomenLed = false;
     try {
       result = await this.dataSource.transaction(async (manager) => {
+        const relisting = await detachDeletedBusiness(manager, userId);
         // isFeatured is dropped: Featured is an admin decision, never self-set.
         const { latitude, longitude, isFeatured: _featured, file: _file, bannerImage: _bi, profileImage: _pi, productImages: _pImgs, bannerImageUrl: _biu, profilePhotoUrl: _ppu, womenLedName: _wln, womenLedRole: _wlr, ...cleanData } = providerData as any;
         // Only a ticked box asks for the badge (no guessing from gender); the
@@ -361,9 +371,14 @@ export class ProvidersService {
           await manager.save(galleryPhotos);
         }
 
+        // One verification per user. A new business is checked afresh, so an
+        // earlier approval doesn't carry over to it.
+        const fresh = { aadhaarStatus: 'pending', ijamatStatus: 'not_submitted', adminNotes: null, reviewedAt: null, reviewedBy: null, reviewerName: null };
+        const prior = await manager.findOneBy(Verification, { userId });
         let savedVerification: Verification | null = null;
         if (verificationDocUrl) {
           const verification = manager.create(Verification, {
+            ...(prior ? { id: prior.id, ...fresh } : {}),
             userId,
             aadhaarDocUrl: verificationDocUrl,
             ijamatNumber,
@@ -372,6 +387,8 @@ export class ProvidersService {
             status: 'in_review',
           });
           savedVerification = await manager.save(verification);
+        } else if (relisting && prior) {
+          await manager.update(Verification, prior.id, { ...fresh, status: 'pending' });
         }
 
         return { provider: savedProvider, verification: savedVerification, products: savedProducts };
@@ -517,12 +534,20 @@ export class ProvidersService {
       providerStatus = 'unverified';
     }
 
-    return { providerStatus, verificationStatus, provider, verification, preferredMode: providerStatus === 'disabled' || providerStatus === 'deleted' ? 'customer' : (user?.preferredMode ?? 'customer') };
+    return {
+      providerStatus,
+      verificationStatus,
+      provider,
+      verification,
+      preferredMode: providerStatus === 'disabled' || providerStatus === 'deleted' ? 'customer' : (user?.preferredMode ?? 'customer'),
+      // Deleted: how long until they can list a new business.
+      ...(provider.deletedAt ? { listAgainInHours: await this.listAgainInHours(provider.deletedAt) } : {}),
+    };
   }
 
   async findOne(id: string) {
     const provider = await this.providerRepo.findOne({
-      where: { id },
+      where: { id, deletedAt: IsNull() },
       relations: ['user'],
     });
     if (!provider) throw new NotFoundException(`Provider with ID '${id}' not found`);
@@ -535,7 +560,7 @@ export class ProvidersService {
    */
   async findDetails(id: string) {
     const provider = await this.providerRepo.findOne({
-      where: { id },
+      where: { id, deletedAt: IsNull() },
       relations: ['user', 'providerCategories', 'providerCategories.category'],
     });
     if (!provider) throw new NotFoundException(`Provider with ID '${id}' not found`);
@@ -643,7 +668,8 @@ export class ProvidersService {
     const skip = (page - 1) * limit;
 
     const qb = this.providerRepo.createQueryBuilder('provider')
-      .leftJoinAndSelect('provider.user', 'user');
+      .leftJoinAndSelect('provider.user', 'user')
+      .where('provider.deletedAt IS NULL');
 
     if (status) qb.andWhere('provider.status = :status', { status });
     if (city) qb.andWhere('provider.city ILIKE :city', { city: `%${city}%` });
@@ -1766,6 +1792,26 @@ export class ProvidersService {
   private async isCooldownEnabled(): Promise<boolean> {
     const setting = await this.settingRepo.findOneBy({ key: 'provider_disable_cooldown_enabled' });
     return setting ? setting.value === 'true' : true;
+  }
+
+  /**
+   * Hours until someone whose business was deleted can list a new one (0: now).
+   * The same cooldown, and the same settings, as re-enabling a disabled business.
+   */
+  private async listAgainInHours(deletedAt: Date): Promise<number> {
+    if (!(await this.isCooldownEnabled())) return 0;
+    const remaining = (await this.getDisableCooldownHours()) * 60 * 60 * 1000 - (Date.now() - new Date(deletedAt).getTime());
+    return remaining > 0 ? Math.ceil(remaining / (60 * 60 * 1000)) : 0;
+  }
+
+  private async assertCanListAgain(removed: Provider): Promise<void> {
+    if (!removed.deletedAt) return;
+    const hours = await this.listAgainInHours(removed.deletedAt);
+    if (hours > 0) {
+      throw new BadRequestException(
+        `Your last business was removed recently. You can list a new one in ${hours} more hour${hours === 1 ? '' : 's'}.`,
+      );
+    }
   }
 
   /** Get cooldown status for the authenticated user's provider */

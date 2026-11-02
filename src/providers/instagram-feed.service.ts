@@ -1,7 +1,7 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 import { Provider } from '../entities/provider.entity';
 import { instagramHandleOf, instagramConfigProblem } from '../admin/provider-enrichment.service';
 
@@ -78,7 +78,7 @@ export class InstagramFeedService {
   /** The feed for one provider. Never throws: an empty feed just hides the grid. */
   async forProvider(providerId: string): Promise<InstagramFeed> {
     const provider = await this.providerRepo.findOne({
-      where: { id: providerId },
+      where: { id: providerId, deletedAt: IsNull() },
       select: ['id', 'instagramHandle'],
     });
     if (!provider) throw new NotFoundException('Provider not found');

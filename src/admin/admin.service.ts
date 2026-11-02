@@ -21,6 +21,7 @@ import { WhatsAppConsentService } from '../whatsapp/whatsapp-consent.service';
 import { AutomationsService } from '../automations/automations.service';
 import { WomenLedService } from '../women-led/women-led.service';
 import { BRAND_MARK_FOLDER, isBrandMarkUrl } from '../providers/brand-mark';
+import { detachDeletedBusiness } from '../providers/detach-deleted-business';
 import { AdminProviderFiltersDto, AdminProviderListDto } from './dto/admin-provider-list.dto';
 import { OtpService } from '../otp/otp.service';
 import { compressImage, compressImages, validateImageMime } from '../common/image-processor';
@@ -589,7 +590,8 @@ export class AdminService {
     // If approved, also activate the provider
     if (verification && aadhaarStatus === 'approved') {
       const provider = await this.providerRepo.findOneBy({ userId: verification.userId });
-      if (provider && provider.status !== 'active') {
+      // A deleted business stays deleted; approving the person doesn't bring it back.
+      if (provider && !provider.deletedAt && provider.status !== 'active') {
         provider.status = 'active';
         await this.providerRepo.save(provider);
       }
@@ -615,7 +617,7 @@ export class AdminService {
       ).catch(() => {});
 
       const owned = await this.providerRepo.findOneBy({ userId: verification.userId });
-      if (owned) {
+      if (owned && !owned.deletedAt) {
         void this.automations.schedule(
           aadhaarStatus === 'approved' ? 'verification_approved' : 'verification_not_approved',
           {
@@ -940,7 +942,7 @@ export class AdminService {
           const provider = await this.providerRepo.findOneBy({ id: report.entityId });
           if (provider) {
             await this.providerRepo.update(report.entityId, { status: 'suspended', suspendedAt: new Date(), suspensionConfirmed: true });
-            await this.userRepo.update(provider.userId, { status: 'suspended' });
+            if (provider.userId) await this.userRepo.update(provider.userId, { status: 'suspended' });
             await this.createProviderWarning(report.entityId, reportId, admin.id, report.reason, adminNotes, true);
             // Notify the user about account suspension
             this.notificationDispatch.sendToUser(
@@ -956,7 +958,7 @@ export class AdminService {
             .findOne({ where: { id: report.entityId }, relations: ['provider'] });
           if (product?.provider) {
             await this.providerRepo.update(product.provider.id, { status: 'suspended', suspendedAt: new Date(), suspensionConfirmed: true });
-            await this.userRepo.update(product.provider.userId, { status: 'suspended' });
+            if (product.provider.userId) await this.userRepo.update(product.provider.userId, { status: 'suspended' });
             await this.createProviderWarning(product.provider.id, reportId, admin.id, report.reason, adminNotes, true);
             // Notify the user about account suspension
             this.notificationDispatch.sendToUser(
@@ -5164,7 +5166,7 @@ export class AdminService {
     if (existingUser) {
       // Check if user already has a provider
       const existingProvider = await this.providerRepo.findOne({ where: { userId: existingUser.id } });
-      if (existingProvider) {
+      if (existingProvider && !existingProvider.deletedAt) {
         throw new ConflictException(`User with mobile ${dto.userMobileNumber} already has a provider profile`);
       }
     }
@@ -5236,7 +5238,8 @@ export class AdminService {
         user = await manager.save(User, user);
       }
 
-      // Step 2: Create provider
+      // Step 2: Create provider (an admin re-listing someone doesn't wait for the cooldown)
+      await detachDeletedBusiness(manager, user.id);
       const provider = manager.create(Provider, {
         userId: user.id,
         brandName: dto.brandName,
@@ -5597,7 +5600,7 @@ export class AdminService {
 
     return {
       exists: true,
-      hasProvider: !!user.provider,
+      hasProvider: !!user.provider && !user.provider.deletedAt,
       user: {
         id: user.id,
         name: user.name,
@@ -5607,7 +5610,7 @@ export class AdminService {
         city: user.city,
         status: user.status,
       },
-      provider: user.provider ? {
+      provider: user.provider && !user.provider.deletedAt ? {
         id: user.provider.id,
         brandName: user.provider.brandName,
         status: user.provider.status,

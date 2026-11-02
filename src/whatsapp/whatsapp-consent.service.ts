@@ -297,7 +297,7 @@ export class WhatsAppConsentService {
     const provider = await this.providerRepo.findOne({
       where: { id: opts.providerId },
     });
-    if (!provider) return;
+    if (!provider?.userId) return;
     const owner = await this.userRepo.findOne({
       where: { id: provider.userId },
     });
