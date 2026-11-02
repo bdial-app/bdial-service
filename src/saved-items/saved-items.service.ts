@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, IsNull } from 'typeorm';
 import { SavedItem, Provider, Product, Review } from '../entities';
 
 @Injectable()
@@ -40,13 +40,13 @@ export class SavedItemsService {
     const [providers, products, reviewStatsRaw] = await Promise.all([
       providerIds.length > 0
         ? this.providerRepo.find({
-            where: { id: In(providerIds) },
+            where: { id: In(providerIds), deletedAt: IsNull() },
             relations: ['providerCategories', 'providerCategories.category'],
           })
         : ([] as Provider[]),
       productIds.length > 0
         ? this.productRepo.find({
-            where: { id: In(productIds) },
+            where: { id: In(productIds), provider: { deletedAt: IsNull() } },
             relations: ['provider'],
           })
         : ([] as Product[]),

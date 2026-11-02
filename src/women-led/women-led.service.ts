@@ -547,8 +547,9 @@ export class WomenLedService {
     });
     if (!provider) throw new NotFoundException('Business not found');
     const [owner, verification, history] = await Promise.all([
-      this.users.findOne({ where: { id: provider.userId } }),
-      this.verifications.findOne({ where: { userId: provider.userId } }),
+      // A null here would match the first row: someone else's name and ID.
+      provider.userId ? this.users.findOne({ where: { id: provider.userId } }) : null,
+      provider.userId ? this.verifications.findOne({ where: { userId: provider.userId } }) : null,
       this.requests.find({
         where: { providerId: provider.id },
         order: { createdAt: 'DESC' },
@@ -776,7 +777,7 @@ export class WomenLedService {
         opts.note || `Confirmed by ${await this.adminName(admin.id)}`,
       );
     }
-    const owner = await this.users.findOne({ where: { id: provider.userId } });
+    const owner = provider.userId ? await this.users.findOne({ where: { id: provider.userId } }) : null;
     const saved = await this.requests.save(
       this.requests.create({
         providerId,

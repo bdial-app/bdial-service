@@ -109,6 +109,8 @@ export class NotificationDispatchService {
     batchId?: string,
     targetMode?: NotificationTargetMode,
   ): Promise<'pushed' | 'inbox' | 'failed'> {
+    // A deleted business that has let go of its owner has nobody to tell.
+    if (!userId) return 'failed';
     try {
       // 1. Check user preferences
       const prefs = await this.notificationsService.getPreferences(userId);

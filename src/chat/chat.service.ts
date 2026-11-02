@@ -66,7 +66,7 @@ export class ChatService {
       where: { id: dto.providerId },
       relations: ['user'],
     });
-    if (!provider) throw new NotFoundException('Provider not found');
+    if (!provider || provider.deletedAt || !provider.userId) throw new NotFoundException('Provider not found');
 
     // Prevent self-chat
     if (provider.userId === userId) {

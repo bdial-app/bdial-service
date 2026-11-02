@@ -824,7 +824,7 @@ export class AutomationsService {
       const provider = job.providerId
         ? await this.providerRepo.findOne({ where: { id: job.providerId } })
         : null;
-      if (!provider)
+      if (!provider || !provider.userId)
         return {
           phone: null,
           userId: job.userId,
