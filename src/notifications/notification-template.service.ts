@@ -604,6 +604,18 @@ export class NotificationTemplateService {
         isActive: true,
         defaultRoute: '/chat',
       },
+      {
+        slug: 'chat_reply_nudge',
+        name: 'Reminder to reply (sent by an admin)',
+        description: 'Owner or customer: an admin reminded them from the chat section that someone is waiting for their reply',
+        type: 'chat_message',
+        titleTemplate: '⏰ {{name}} is waiting for your reply',
+        bodyTemplate: '"{{excerpt}}" — {{ago}} ago. Tap to reply.',
+        variables: ['name', 'excerpt', 'ago'],
+        category: 'transactional',
+        isActive: true,
+        defaultRoute: '/chat',
+      },
       // ─── Deals (customer) ───
       {
         slug: 'saved_business_deal',

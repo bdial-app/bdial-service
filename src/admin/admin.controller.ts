@@ -15,6 +15,9 @@ import { ImportProviderImageUrlsDto } from './dto/provider-images.dto';
 import { AdminProductListQueryDto } from './dto/admin-product-list.dto';
 import { AdminVerificationListQueryDto } from './dto/admin-verification-list.dto';
 import { AdminConversationListQueryDto } from './dto/admin-conversation-list.dto';
+import { SendChatNudgeDto } from './dto/chat-nudge.dto';
+import { ChatNudgeService } from './chat-nudge.service';
+import { Roles } from '../common/decorators/roles.decorator';
 import { AdminPhotoListQueryDto } from './dto/admin-photo-list.dto';
 import { AdminSponsorshipListQueryDto } from './dto/admin-sponsorship-list.dto';
 import { AdminOfferListQueryDto } from './dto/admin-offer-list.dto';
@@ -54,6 +57,7 @@ export class AdminController {
     private readonly providerEnrichment: ProviderEnrichmentService,
     private readonly providerLocation: ProviderLocationService,
     private readonly productBulk: ProductBulkService,
+    private readonly chatNudge: ChatNudgeService,
   ) {}
 
   @Get('dashboard')
@@ -771,6 +775,22 @@ export class AdminController {
   @ApiParam({ name: 'id', description: 'Conversation ID' })
   closeConversation(@Param('id') id: string, @Request() req) {
     return this.adminService.closeConversation(req.user, id);
+  }
+
+  @Get('chat/conversations/:id/nudge')
+  @Roles('admin')
+  @ApiOperation({ summary: 'Who owes a reply in this chat, how they can be reminded, and past reminders' })
+  @ApiParam({ name: 'id', description: 'Conversation ID' })
+  getChatNudge(@Param('id', ParseUUIDPipe) id: string) {
+    return this.chatNudge.inspect(id);
+  }
+
+  @Post('chat/conversations/:id/nudge')
+  @Roles('admin')
+  @ApiOperation({ summary: 'Remind the person who owes a reply, by push or WhatsApp' })
+  @ApiParam({ name: 'id', description: 'Conversation ID' })
+  sendChatNudge(@Param('id', ParseUUIDPipe) id: string, @Body() dto: SendChatNudgeDto, @Request() req) {
+    return this.chatNudge.send(req.user, id, dto.channel);
   }
 
   @Get('chat/stats')
