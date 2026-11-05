@@ -16,6 +16,7 @@ import { MetaCloudApiService } from '../whatsapp/meta-cloud-api.service';
 import { toE164 } from '../whatsapp/whatsapp-phone.util';
 import { isAppLinkUrl } from '../whatsapp/whatsapp-variable.service';
 import { appLinkOrigin } from '../common/app-links';
+import { returnedRows } from '../common/utils/returned-rows';
 import {
   AUTOMATIONS,
   AUTOMATION_BY_KEY,
@@ -571,11 +572,16 @@ export class AutomationsService {
 
   @Cron(CronExpression.EVERY_MINUTE)
   async runDue(): Promise<void> {
+    // A message this late is worse than none: "someone just enquired", days on.
+    await this.dataSource.query(
+      `UPDATE automation_jobs SET status = 'cancelled', skip_reason = 'too_late'
+        WHERE status IN ('pending', 'processing') AND due_at < now() - interval '24 hours'`,
+    );
     // Jobs stuck "processing" (a crash mid-send) go back in the queue.
     await this.dataSource.query(
       `UPDATE automation_jobs SET status = 'pending' WHERE status = 'processing' AND updated_at < now() - interval '10 minutes'`,
     );
-    const jobs = await this.dataSource.query<{ id: string }[]>(
+    const claimed: unknown = await this.dataSource.query(
       `UPDATE automation_jobs SET status = 'processing', updated_at = now()
         WHERE id IN (
           SELECT id FROM automation_jobs
@@ -584,7 +590,7 @@ export class AutomationsService {
            FOR UPDATE SKIP LOCKED)
         RETURNING id`,
     );
-    for (const { id } of jobs) {
+    for (const { id } of returnedRows<{ id: string }>(claimed)) {
       const job = await this.jobRepo.findOne({ where: { id } });
       if (job) await this.runJob(job);
     }
