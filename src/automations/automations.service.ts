@@ -45,7 +45,22 @@ export type ScheduleOpts = {
   delayMinutes?: number;
 };
 
-type Outcome =
+/** The two approved templates an admin can use to chase a reply in one chat. */
+export type ChatReminderKey = 'enquiry_alert' | 'business_replied';
+
+export type ChatReminderOpts = {
+  /** The customer being reminded; empty when it's the owner. */
+  userId?: string | null;
+  providerId: string | null;
+  context: {
+    conversationId: string;
+    excerpt: string;
+    customerName?: string;
+    brandName?: string;
+  };
+};
+
+export type Outcome =
   | {
       status: 'sent';
       messageId: string;
@@ -111,6 +126,21 @@ function param(v: unknown, max = 120): string {
 function bodyBlanks(t: WhatsAppTemplate): number {
   const body = t.components.find((c) => c.type === 'BODY')?.text ?? '';
   return new Set(body.match(/\{\{\s*\d+\s*\}\}/g) ?? []).size;
+}
+
+/**
+ * Who an admin's chat reminder may reach on WhatsApp. An owner has listed this
+ * number for customers to reach them, so anything but a "stop" is fine; a
+ * customer only ever hears from us here if they turned it on in Settings.
+ */
+function reminderConsentProblem(
+  def: AutomationDef,
+  consent: WhatsAppContact['consent'],
+): string | null {
+  if (consent === 'opted_out') return 'opted_out';
+  return def.audience === 'customer' && consent !== 'opted_in'
+    ? 'not_agreed'
+    : null;
 }
 
 /** A business's public page on the website. */
@@ -640,7 +670,10 @@ export class AutomationsService {
   ): Promise<Outcome> {
     const def = AUTOMATION_BY_KEY.get(job.automationKey as AutomationKey);
     if (!def) return { status: 'skipped', reason: 'unknown_automation' };
-    if (!opts.test && !(await this.isEnabled(def.key)))
+    // An admin chose to send this one, so the automation's own switch, its
+    // "did they open the app" wait and its limits don't apply to it.
+    const adminReminder = job.context?.adminReminder === true;
+    if (!opts.test && !adminReminder && !(await this.isEnabled(def.key)))
       return { status: 'cancelled', reason: 'switched_off' };
 
     // Who and which number
@@ -649,7 +682,9 @@ export class AutomationsService {
     if (!phone) return { status: 'skipped', reason: 'no_phone' };
 
     if (!opts.test) {
-      const stale = await this.noLongerRelevant(def, job, who);
+      const stale = adminReminder
+        ? await this.reminderNoLongerNeeded(job, who.userId)
+        : await this.noLongerRelevant(def, job, who);
       if (stale) return { status: 'cancelled', reason: stale, phone };
 
       if (!inSendWindow(this.now())) {
@@ -660,7 +695,7 @@ export class AutomationsService {
         };
       }
 
-      if (def.appFirstMinutes > 0 && who.lastSeenAt) {
+      if (!adminReminder && def.appFirstMinutes > 0 && who.lastSeenAt) {
         const since = Date.now() - def.appFirstMinutes * 60_000;
         if (
           who.lastSeenAt.getTime() >
@@ -682,7 +717,15 @@ export class AutomationsService {
     if (!opts.test) {
       if (!contact.reachable)
         return { status: 'skipped', reason: 'not_on_whatsapp', phone };
-      if (def.consent === 'opted_in' && contact.consent !== 'opted_in') {
+      if (adminReminder) {
+        const refused = reminderConsentProblem(def, contact.consent);
+        if (refused) return { status: 'skipped', reason: refused, phone };
+      }
+      if (
+        !adminReminder &&
+        def.consent === 'opted_in' &&
+        contact.consent !== 'opted_in'
+      ) {
         return { status: 'skipped', reason: 'not_agreed', phone };
       }
       if (def.consent === 'not_opted_out' && contact.consent === 'opted_out') {
@@ -718,7 +761,9 @@ export class AutomationsService {
     }
 
     if (!opts.test) {
-      const limit = await this.overLimit(def, phone, contact);
+      const limit = adminReminder
+        ? null
+        : await this.overLimit(def, phone, contact);
       if (limit) return { status: 'skipped', reason: limit, phone };
       const budget = await this.overBudget(def);
       if (budget) return { status: 'skipped', reason: budget, phone };
@@ -897,6 +942,128 @@ export class AutomationsService {
     )
       return 'already_signed_in';
     return null;
+  }
+
+  /** An admin's reminder waiting for sending hours: is it still worth sending? */
+  private async reminderNoLongerNeeded(
+    job: AutomationJob,
+    recipientUserId: string | null,
+  ): Promise<string | null> {
+    const [row] = await this.dataSource.query<
+      {
+        status: string;
+        last_sender: string | null;
+        blocked: boolean;
+        muted: boolean;
+      }[]
+    >(
+      `SELECT c.status, c.last_message_sender_id AS last_sender,
+              bool_or(cp.blocked_at IS NOT NULL) AS blocked,
+              bool_or(cp.user_id = $2 AND cp.is_muted) AS muted
+         FROM conversations c
+         JOIN conversation_participants cp ON cp.conversation_id = c.id
+        WHERE c.id = $1
+        GROUP BY c.id`,
+      [job.context?.conversationId, recipientUserId],
+    );
+    if (!row || row.status !== 'active') return 'chat_closed';
+    if (row.last_sender === recipientUserId) return 'already_replied';
+    if (row.blocked) return 'chat_blocked';
+    if (row.muted) return 'chat_muted';
+    return null;
+  }
+
+  /**
+   * What a chat reminder would say and whether it can go. Reads only; the
+   * contact row isn't created until something is actually sent.
+   */
+  async previewChatReminder(
+    key: ChatReminderKey,
+    opts: ChatReminderOpts,
+  ): Promise<{
+    problem: string | null;
+    phone: string | null;
+    text: string | null;
+    /** Set outside sending hours: when it would actually go. */
+    sendsAt: Date | null;
+  }> {
+    const def = AUTOMATION_BY_KEY.get(key)!;
+    const who = await this.recipient(def, {
+      userId: opts.userId ?? null,
+      providerId: opts.providerId,
+    } as AutomationJob);
+    const refuse = (problem: string) => ({
+      problem,
+      phone: who.phone,
+      text: null,
+      sendsAt: null,
+    });
+    if (!who.phone) return refuse('no_phone');
+    if (!this.meta.isConfigured()) return refuse('whatsapp_not_configured');
+    const contact = await this.contactRepo.findOne({
+      where: { phone: who.phone },
+    });
+    if (contact && !contact.reachable) return refuse('not_on_whatsapp');
+    const consentProblem = reminderConsentProblem(
+      def,
+      contact?.consent ?? 'unknown',
+    );
+    if (consentProblem) return refuse(consentProblem);
+
+    const template = await this.templateRepo.findOne({
+      where: { name: def.template.name, language: 'en' },
+    });
+    if (!template || template.status !== 'approved')
+      return refuse('template_not_approved');
+    if (bodyBlanks(template) !== def.template.vars.length)
+      return refuse('template_differs');
+    if (template.category !== def.template.category)
+      return refuse(`template_is_${template.category}`);
+    const budget = await this.overBudget(def);
+    if (budget) return refuse(budget);
+
+    const ctx: Record<string, unknown> = { ...opts.context, ...who.extra };
+    let text = template.components.find((c) => c.type === 'BODY')?.text ?? '';
+    for (const [i, v] of def.template.vars.entries()) {
+      if (!ctx[v.key]) return refuse(`missing_${v.key}`);
+      text = text.replace(
+        new RegExp(`\\{\\{\\s*${i + 1}\\s*\\}\\}`, 'g'),
+        param(ctx[v.key], v.key === 'excerpt' ? 140 : 60),
+      );
+    }
+    const now = this.now();
+    return {
+      problem: null,
+      phone: who.phone,
+      text,
+      sendsAt: inSendWindow(now) ? null : nextSendWindow(now),
+    };
+  }
+
+  /**
+   * Send an admin's reminder now, through the same job as every automated
+   * message, so it's logged and costed the same way. Outside sending hours the
+   * job stays queued and goes at the next window, unless they've replied by then.
+   */
+  async sendChatReminder(
+    key: ChatReminderKey,
+    opts: ChatReminderOpts,
+  ): Promise<{ jobId: string; outcome: Outcome }> {
+    // 'processing' keeps the every-minute runner off it while it's sent here.
+    const [row] = await this.dataSource.query<{ id: string }[]>(
+      `INSERT INTO automation_jobs (automation_key, dedupe_key, user_id, provider_id, due_at, status, context)
+       VALUES ($1, $2, $3, $4, now(), 'processing', $5)
+       RETURNING id`,
+      [
+        key,
+        `admin_reminder:${opts.context.conversationId}:${Date.now()}`,
+        opts.userId ?? null,
+        opts.providerId,
+        JSON.stringify({ ...opts.context, adminReminder: true }),
+      ],
+    );
+    const job = await this.jobRepo.findOneOrFail({ where: { id: row.id } });
+    return { jobId: row.id, outcome: await this.runJob(job) };
   }
 
   /** Daily, weekly, marketing and "ignored" limits for this number. */

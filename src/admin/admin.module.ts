@@ -19,6 +19,7 @@ import { SupabaseModule } from '../supabase/supabase.module';
 import { ServiceableCitiesModule } from '../serviceable-cities/serviceable-cities.module';
 import { GoogleReviewsModule } from '../google-reviews/google-reviews.module';
 import { ProvidersModule } from '../providers/providers.module';
+import { ChatNudgeService } from './chat-nudge.service';
 
 @Module({
   imports: [
@@ -34,6 +35,6 @@ import { ProvidersModule } from '../providers/providers.module';
     AnalyticsModule,
   ],
   controllers: [AdminController, AdminLeadsController],
-  providers: [ProductBulkService, AdminService, AdminLeadsService, ProviderEnrichmentService, ProviderLocationService],
+  providers: [ProductBulkService, AdminService, ChatNudgeService, AdminLeadsService, ProviderEnrichmentService, ProviderLocationService],
 })
 export class AdminModule {}

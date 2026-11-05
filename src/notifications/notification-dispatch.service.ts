@@ -50,22 +50,33 @@ export class NotificationDispatchService {
     data?: Record<string, any>,
     targetMode?: NotificationTargetMode,
   ): Promise<boolean> {
+    return (await this.deliverTemplated(userId, slug, variables, data, targetMode)) === 'pushed';
+  }
+
+  /** sendTemplated, saying what happened; 'disabled' when the template is off. */
+  async deliverTemplated(
+    userId: string,
+    slug: string,
+    variables: Record<string, string> = {},
+    data?: Record<string, any>,
+    targetMode?: NotificationTargetMode,
+  ): Promise<'pushed' | 'inbox' | 'failed' | 'disabled'> {
     // 1. Resolve template — returns null if admin disabled it
     const resolved = await this.templateService.resolve(slug, variables);
     if (!resolved) {
       this.logger.debug(`Notification "${slug}" is disabled by admin — skipping`);
-      return false;
+      return 'disabled';
     }
 
     // 2. Get template to determine type
     const template = await this.templateService.getBySlug(slug);
-    if (!template) return false;
+    if (!template) return 'disabled';
 
     // Merge route into data payload; `template` lets the admin see how each one performs.
     const payload: Record<string, any> = { ...data, template: slug };
     if (resolved.route) payload.route = resolved.route;
 
-    return this.sendToUser(
+    return this.deliver(
       userId,
       template.type as NotificationType,
       resolved.title,
