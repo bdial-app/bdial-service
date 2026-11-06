@@ -2032,38 +2032,49 @@ export class AdminService {
     if (key) await this.storageService.delete(key).catch(() => {});
   }
 
-  async updateProviderContactNumber(admin: any, providerId: string, contactNumber: string, otp: string) {
+  /**
+   * An admin sets a business's contact number directly: no OTP, and no 24-hour
+   * wait (that cooldown is for owners, so it isn't started here either). The
+   * change is audited, and the owner and customers who saved the business are
+   * told, the same as any other admin edit.
+   */
+  async updateProviderContactNumber(admin: any, providerId: string, contactNumber: string) {
     this.assertAdmin(admin);
-    const phone = contactNumber?.replace(/\D/g, '').slice(-10);
+    const phone = (contactNumber ?? '').replace(/\D/g, '').slice(-10);
     if (!/^\d{10}$/.test(phone)) throw new BadRequestException('Contact number must be exactly 10 digits');
-    const code = otp?.trim();
-    if (!/^\d{6}$/.test(code)) throw new BadRequestException('OTP must be exactly 6 digits');
 
     const provider = await this.providerRepo.findOne({ where: { id: providerId } });
     if (!provider) throw new NotFoundException('Provider not found');
-
-    // Enforce 24h cooldown
-    if (provider.lastContactNumberChangeAt) {
-      const elapsed = Date.now() - new Date(provider.lastContactNumberChangeAt).getTime();
-      const cooldownMs = 24 * 60 * 60 * 1000;
-      if (elapsed < cooldownMs) {
-        const remaining = Math.ceil((cooldownMs - elapsed) / 1000);
-        throw new BadRequestException({
-          statusCode: 429,
-          message: 'Contact number was changed recently. Please wait before changing again.',
-          retryAfterSeconds: remaining,
-          error_code: 'CONTACT_CHANGE_COOLDOWN',
-        });
-      }
+    const previous = provider.contactNumber;
+    if ((previous ?? '').replace(/\D/g, '').slice(-10) === phone) {
+      throw new BadRequestException('That is already this business’s number');
     }
 
-    // Verify OTP
-    await this.otpService.verifyOtpWithKey(`admin_action_${phone}_business_verification`, phone, code);
+    // Same rule as an owner's own change: one listed business per number.
+    const clash = await this.providerRepo
+      .createQueryBuilder('p')
+      .where('p.deletedAt IS NULL')
+      .andWhere('p.id != :id', { id: providerId })
+      .andWhere('p.contactNumber IN (:...forms)', { forms: [phone, `+91${phone}`, `91${phone}`, `0${phone}`] })
+      .getOne();
+    if (clash) {
+      throw new ConflictException(`That number is already listed for another business (${clash.brandName}).`);
+    }
 
-    await this.providerRepo.update(providerId, {
-      contactNumber: phone,
-      lastContactNumberChangeAt: new Date(),
-    });
+    await this.providerRepo.update(providerId, { contactNumber: phone });
+    await this.createAuditLog(
+      admin.id,
+      'update_provider_contact',
+      'provider',
+      providerId,
+      { contactNumber: previous },
+      { contactNumber: phone },
+      `Admin changed ${provider.brandName}'s number from ${previous || '—'} to ${phone}`,
+    );
+    void this.automations.onDetailsChangedByAdmin(providerId, ['contactNumber']).catch(() => {});
+    void this.automations
+      .onBusinessDetailsChanged(providerId, provider, { contactNumber: phone })
+      .catch(() => {});
 
     return this.providerRepo.findOne({
       where: { id: providerId },

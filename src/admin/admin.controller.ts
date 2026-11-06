@@ -444,11 +444,11 @@ export class AdminController {
   }
 
   @Patch('providers/:id/contact-number')
-  @ApiOperation({ summary: 'Admin update provider contact number with OTP verification' })
+  @ApiOperation({ summary: 'Admin change a provider’s business contact number (no OTP)' })
   @ApiParam({ name: 'id', description: 'Provider ID' })
-  @ApiBody({ schema: { properties: { contactNumber: { type: 'string' }, otp: { type: 'string' } } } })
-  updateContactNumber(@Param('id') id: string, @Request() req, @Body() body: { contactNumber: string; otp: string }) {
-    return this.adminService.updateProviderContactNumber(req.user, id, body.contactNumber, body.otp);
+  @ApiBody({ schema: { properties: { contactNumber: { type: 'string' } } } })
+  updateContactNumber(@Param('id') id: string, @Request() req, @Body() body: { contactNumber: string }) {
+    return this.adminService.updateProviderContactNumber(req.user, id, body?.contactNumber);
   }
 
   // ============================================

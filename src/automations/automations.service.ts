@@ -164,6 +164,7 @@ const CHANGE_WORDS: Array<[string[], string]> = [
   [['description'], 'description'],
   [['openTime', 'closeTime'], 'opening hours'],
   [['city', 'area', 'pincode', 'address', 'latitude', 'longitude'], 'address'],
+  [['contactNumber'], 'phone number'],
   [['whatsappNumber'], 'WhatsApp number'],
   [
     ['websiteUrl', 'instagramHandle', 'facebookHandle', 'youtubeHandle'],
