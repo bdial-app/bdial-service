@@ -164,7 +164,7 @@ export class AdminService {
     private womenLed: WomenLedService,
   ) {}
 
-  private assertAdmin(user: any) {
+  assertAdmin(user: any) {
     if ((ROLE_HIERARCHY[user.role] ?? 0) < ROLE_HIERARCHY['admin']) {
       throw new ForbiddenException('Admin access required');
     }
@@ -630,16 +630,6 @@ export class AdminService {
     }
 
     return verification;
-  }
-
-  async removeReview(admin: any, reviewId: string) {
-    this.assertAdmin(admin);
-    await this.reviewRepo.update(reviewId, {
-      status: 'removed',
-      moderatedAt: new Date(),
-      moderatedBy: admin.id,
-    });
-    return this.reviewRepo.findOneBy({ id: reviewId });
   }
 
   async getPendingReports(admin: any) {
@@ -2032,38 +2022,49 @@ export class AdminService {
     if (key) await this.storageService.delete(key).catch(() => {});
   }
 
-  async updateProviderContactNumber(admin: any, providerId: string, contactNumber: string, otp: string) {
+  /**
+   * An admin sets a business's contact number directly: no OTP, and no 24-hour
+   * wait (that cooldown is for owners, so it isn't started here either). The
+   * change is audited, and the owner and customers who saved the business are
+   * told, the same as any other admin edit.
+   */
+  async updateProviderContactNumber(admin: any, providerId: string, contactNumber: string) {
     this.assertAdmin(admin);
-    const phone = contactNumber?.replace(/\D/g, '').slice(-10);
+    const phone = (contactNumber ?? '').replace(/\D/g, '').slice(-10);
     if (!/^\d{10}$/.test(phone)) throw new BadRequestException('Contact number must be exactly 10 digits');
-    const code = otp?.trim();
-    if (!/^\d{6}$/.test(code)) throw new BadRequestException('OTP must be exactly 6 digits');
 
     const provider = await this.providerRepo.findOne({ where: { id: providerId } });
     if (!provider) throw new NotFoundException('Provider not found');
-
-    // Enforce 24h cooldown
-    if (provider.lastContactNumberChangeAt) {
-      const elapsed = Date.now() - new Date(provider.lastContactNumberChangeAt).getTime();
-      const cooldownMs = 24 * 60 * 60 * 1000;
-      if (elapsed < cooldownMs) {
-        const remaining = Math.ceil((cooldownMs - elapsed) / 1000);
-        throw new BadRequestException({
-          statusCode: 429,
-          message: 'Contact number was changed recently. Please wait before changing again.',
-          retryAfterSeconds: remaining,
-          error_code: 'CONTACT_CHANGE_COOLDOWN',
-        });
-      }
+    const previous = provider.contactNumber;
+    if ((previous ?? '').replace(/\D/g, '').slice(-10) === phone) {
+      throw new BadRequestException('That is already this business’s number');
     }
 
-    // Verify OTP
-    await this.otpService.verifyOtpWithKey(`admin_action_${phone}_business_verification`, phone, code);
+    // Same rule as an owner's own change: one listed business per number.
+    const clash = await this.providerRepo
+      .createQueryBuilder('p')
+      .where('p.deletedAt IS NULL')
+      .andWhere('p.id != :id', { id: providerId })
+      .andWhere('p.contactNumber IN (:...forms)', { forms: [phone, `+91${phone}`, `91${phone}`, `0${phone}`] })
+      .getOne();
+    if (clash) {
+      throw new ConflictException(`That number is already listed for another business (${clash.brandName}).`);
+    }
 
-    await this.providerRepo.update(providerId, {
-      contactNumber: phone,
-      lastContactNumberChangeAt: new Date(),
-    });
+    await this.providerRepo.update(providerId, { contactNumber: phone });
+    await this.createAuditLog(
+      admin.id,
+      'update_provider_contact',
+      'provider',
+      providerId,
+      { contactNumber: previous },
+      { contactNumber: phone },
+      `Admin changed ${provider.brandName}'s number from ${previous || '—'} to ${phone}`,
+    );
+    void this.automations.onDetailsChangedByAdmin(providerId, ['contactNumber']).catch(() => {});
+    void this.automations
+      .onBusinessDetailsChanged(providerId, provider, { contactNumber: phone })
+      .catch(() => {});
 
     return this.providerRepo.findOne({
       where: { id: providerId },
@@ -2532,100 +2533,6 @@ export class AdminService {
   // ============================================
   // Admin Reviews Management
   // ============================================
-
-  async getReviews(
-    admin: any,
-    page?: number,
-    limit?: number,
-    status?: string,
-    providerId?: string,
-    minRating?: number,
-    maxRating?: number,
-  ) {
-    this.assertAdmin(admin);
-    const currentPage = Math.max(1, Number(page) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number(limit) || 10));
-    const skip = (currentPage - 1) * pageSize;
-
-    try {
-      // Avoid leftJoinAndSelect on OneToMany (photos) with skip/take — causes
-      // TypeORM subquery pagination bugs.  Load photos separately if needed.
-      const qb = this.reviewRepo.createQueryBuilder('rev')
-        .leftJoinAndSelect('rev.reviewer', 'reviewer')
-        .leftJoinAndSelect('rev.provider', 'provider');
-
-      if (status) qb.andWhere('rev.status = :status', { status });
-      if (providerId) qb.andWhere('rev.provider_id = :providerId', { providerId });
-      if (minRating) qb.andWhere('rev.star_rating >= :minRating', { minRating: Number(minRating) });
-      if (maxRating) qb.andWhere('rev.star_rating <= :maxRating', { maxRating: Number(maxRating) });
-
-      qb.orderBy('rev.posted_at', 'DESC').skip(skip).take(pageSize);
-
-      const [items, total] = await qb.getManyAndCount();
-      return {
-        items,
-        meta: {
-          total,
-          page: currentPage,
-          limit: pageSize,
-          totalPages: Math.ceil(total / pageSize),
-        },
-      };
-    } catch (err) {
-      // Fallback: simpler find approach
-      const where: any = {};
-      if (status) where.status = status;
-      if (providerId) where.providerId = providerId;
-
-      const [items, total] = await this.reviewRepo.findAndCount({
-        where,
-        relations: ['reviewer', 'provider'],
-        order: { postedAt: 'DESC' },
-        skip,
-        take: pageSize,
-      });
-      return {
-        items,
-        meta: {
-          total,
-          page: currentPage,
-          limit: pageSize,
-          totalPages: Math.ceil(total / pageSize),
-        },
-      };
-    }
-  }
-
-  async getReviewById(admin: any, reviewId: string) {
-    this.assertAdmin(admin);
-    const review = await this.reviewRepo.findOne({
-      where: { id: reviewId },
-      relations: ['reviewer', 'provider', 'photos', 'reports', 'moderator'],
-    });
-    if (!review) throw new NotFoundException('Review not found');
-    return review;
-  }
-
-  async updateReviewStatus(admin: any, reviewId: string, status: 'active' | 'removed') {
-    this.assertAdmin(admin);
-    const update: any = { status };
-    if (status === 'removed') {
-      update.moderatedAt = new Date();
-      update.moderatedBy = admin.id;
-    }
-    await this.reviewRepo.update(reviewId, update);
-
-    // Recompute combined rating after moderation
-    const review = await this.reviewRepo.findOneBy({ id: reviewId });
-    if (review) {
-      this.googleReviewsService.recomputeByProviderId(review.providerId).catch(() => {});
-    }
-
-    return this.reviewRepo.findOne({
-      where: { id: reviewId },
-      relations: ['reviewer', 'provider'],
-    });
-  }
 
   /**
    * Record a review on a business from the admin panel — feedback collected

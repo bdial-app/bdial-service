@@ -697,6 +697,21 @@ export class ProvidersService {
     if (requestingUserId) {
       delete updateProviderDto.isFeatured;
       delete updateProviderDto.userId;
+      // An owner's new number needs an OTP, so it can only change through
+      // PATCH :id/contact-number. Sending the current one again is harmless.
+      if (updateProviderDto.contactNumber !== undefined) {
+        const digits = (v: string | null | undefined) =>
+          (v ?? '').replace(/\D/g, '').slice(-10);
+        if (
+          digits(updateProviderDto.contactNumber) !==
+          digits(existingProvider.contactNumber)
+        ) {
+          throw new BadRequestException(
+            'Change your contact number from Business details, with the OTP sent to the new number.',
+          );
+        }
+        delete updateProviderDto.contactNumber;
+      }
     }
     // Women-Led changes only through its own requests (WomenLedService).
     delete updateProviderDto.isWomenLed;
