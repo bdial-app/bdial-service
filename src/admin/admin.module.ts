@@ -20,6 +20,7 @@ import { ServiceableCitiesModule } from '../serviceable-cities/serviceable-citie
 import { GoogleReviewsModule } from '../google-reviews/google-reviews.module';
 import { ProvidersModule } from '../providers/providers.module';
 import { ChatNudgeService } from './chat-nudge.service';
+import { AdminReviewsService } from './admin-reviews.service';
 
 @Module({
   imports: [
@@ -35,6 +36,6 @@ import { ChatNudgeService } from './chat-nudge.service';
     AnalyticsModule,
   ],
   controllers: [AdminController, AdminLeadsController],
-  providers: [ProductBulkService, AdminService, ChatNudgeService, AdminLeadsService, ProviderEnrichmentService, ProviderLocationService],
+  providers: [ProductBulkService, AdminService, ChatNudgeService, AdminReviewsService, AdminLeadsService, ProviderEnrichmentService, ProviderLocationService],
 })
 export class AdminModule {}

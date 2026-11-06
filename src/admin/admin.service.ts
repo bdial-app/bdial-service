@@ -164,7 +164,7 @@ export class AdminService {
     private womenLed: WomenLedService,
   ) {}
 
-  private assertAdmin(user: any) {
+  assertAdmin(user: any) {
     if ((ROLE_HIERARCHY[user.role] ?? 0) < ROLE_HIERARCHY['admin']) {
       throw new ForbiddenException('Admin access required');
     }
@@ -630,16 +630,6 @@ export class AdminService {
     }
 
     return verification;
-  }
-
-  async removeReview(admin: any, reviewId: string) {
-    this.assertAdmin(admin);
-    await this.reviewRepo.update(reviewId, {
-      status: 'removed',
-      moderatedAt: new Date(),
-      moderatedBy: admin.id,
-    });
-    return this.reviewRepo.findOneBy({ id: reviewId });
   }
 
   async getPendingReports(admin: any) {
@@ -2543,100 +2533,6 @@ export class AdminService {
   // ============================================
   // Admin Reviews Management
   // ============================================
-
-  async getReviews(
-    admin: any,
-    page?: number,
-    limit?: number,
-    status?: string,
-    providerId?: string,
-    minRating?: number,
-    maxRating?: number,
-  ) {
-    this.assertAdmin(admin);
-    const currentPage = Math.max(1, Number(page) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number(limit) || 10));
-    const skip = (currentPage - 1) * pageSize;
-
-    try {
-      // Avoid leftJoinAndSelect on OneToMany (photos) with skip/take — causes
-      // TypeORM subquery pagination bugs.  Load photos separately if needed.
-      const qb = this.reviewRepo.createQueryBuilder('rev')
-        .leftJoinAndSelect('rev.reviewer', 'reviewer')
-        .leftJoinAndSelect('rev.provider', 'provider');
-
-      if (status) qb.andWhere('rev.status = :status', { status });
-      if (providerId) qb.andWhere('rev.provider_id = :providerId', { providerId });
-      if (minRating) qb.andWhere('rev.star_rating >= :minRating', { minRating: Number(minRating) });
-      if (maxRating) qb.andWhere('rev.star_rating <= :maxRating', { maxRating: Number(maxRating) });
-
-      qb.orderBy('rev.posted_at', 'DESC').skip(skip).take(pageSize);
-
-      const [items, total] = await qb.getManyAndCount();
-      return {
-        items,
-        meta: {
-          total,
-          page: currentPage,
-          limit: pageSize,
-          totalPages: Math.ceil(total / pageSize),
-        },
-      };
-    } catch (err) {
-      // Fallback: simpler find approach
-      const where: any = {};
-      if (status) where.status = status;
-      if (providerId) where.providerId = providerId;
-
-      const [items, total] = await this.reviewRepo.findAndCount({
-        where,
-        relations: ['reviewer', 'provider'],
-        order: { postedAt: 'DESC' },
-        skip,
-        take: pageSize,
-      });
-      return {
-        items,
-        meta: {
-          total,
-          page: currentPage,
-          limit: pageSize,
-          totalPages: Math.ceil(total / pageSize),
-        },
-      };
-    }
-  }
-
-  async getReviewById(admin: any, reviewId: string) {
-    this.assertAdmin(admin);
-    const review = await this.reviewRepo.findOne({
-      where: { id: reviewId },
-      relations: ['reviewer', 'provider', 'photos', 'reports', 'moderator'],
-    });
-    if (!review) throw new NotFoundException('Review not found');
-    return review;
-  }
-
-  async updateReviewStatus(admin: any, reviewId: string, status: 'active' | 'removed') {
-    this.assertAdmin(admin);
-    const update: any = { status };
-    if (status === 'removed') {
-      update.moderatedAt = new Date();
-      update.moderatedBy = admin.id;
-    }
-    await this.reviewRepo.update(reviewId, update);
-
-    // Recompute combined rating after moderation
-    const review = await this.reviewRepo.findOneBy({ id: reviewId });
-    if (review) {
-      this.googleReviewsService.recomputeByProviderId(review.providerId).catch(() => {});
-    }
-
-    return this.reviewRepo.findOne({
-      where: { id: reviewId },
-      relations: ['reviewer', 'provider'],
-    });
-  }
 
   /**
    * Record a review on a business from the admin panel — feedback collected

@@ -16,6 +16,8 @@ import { AdminProductListQueryDto } from './dto/admin-product-list.dto';
 import { AdminVerificationListQueryDto } from './dto/admin-verification-list.dto';
 import { AdminConversationListQueryDto } from './dto/admin-conversation-list.dto';
 import { SendChatNudgeDto } from './dto/chat-nudge.dto';
+import { AdminReviewListQueryDto, AdminReviewStatusDto } from './dto/admin-review-list.dto';
+import { AdminReviewsService } from './admin-reviews.service';
 import { ChatNudgeService } from './chat-nudge.service';
 import { Roles } from '../common/decorators/roles.decorator';
 import { AdminPhotoListQueryDto } from './dto/admin-photo-list.dto';
@@ -58,6 +60,7 @@ export class AdminController {
     private readonly providerLocation: ProviderLocationService,
     private readonly productBulk: ProductBulkService,
     private readonly chatNudge: ChatNudgeService,
+    private readonly adminReviews: AdminReviewsService,
   ) {}
 
   @Get('dashboard')
@@ -177,9 +180,15 @@ export class AdminController {
   }
 
   @Patch('reviews/:id/remove')
-  @ApiOperation({ summary: 'Remove a review' })
-  removeReview(@Param('id') id: string, @Request() req) {
-    return this.adminService.removeReview(req.user, id);
+  @ApiOperation({ summary: 'Remove a review (same as status removed)' })
+  removeReview(@Param('id', ParseUUIDPipe) id: string, @Request() req, @Body() body: { reason?: string }) {
+    return this.adminReviews.setStatus(req.user, id, 'removed', body?.reason);
+  }
+
+  @Patch('reviews/:id/reports/dismiss')
+  @ApiOperation({ summary: 'Keep the review and dismiss its open reports' })
+  dismissReviewReports(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
+    return this.adminReviews.dismissReports(req.user, id);
   }
 
   @Patch('users/:id/pause')
@@ -556,23 +565,15 @@ export class AdminController {
   // ============================================
 
   @Get('reviews')
-  @ApiOperation({ summary: 'Paginated review list with filters' })
-  @ApiQuery({ name: 'page', required: false, type: Number })
-  @ApiQuery({ name: 'limit', required: false, type: Number })
-  @ApiQuery({ name: 'status', required: false, type: String })
-  @ApiQuery({ name: 'providerId', required: false, type: String })
-  @ApiQuery({ name: 'minRating', required: false, type: Number })
-  @ApiQuery({ name: 'maxRating', required: false, type: Number })
-  getReviews(
-    @Request() req,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
-    @Query('status') status?: string,
-    @Query('providerId') providerId?: string,
-    @Query('minRating') minRating?: number,
-    @Query('maxRating') maxRating?: number,
-  ) {
-    return this.adminService.getReviews(req.user, page, limit, status, providerId, minRating, maxRating);
+  @ApiOperation({ summary: 'Reviews with their business, reviewer, chat, photos and reports; searchable and filterable' })
+  getReviews(@Request() req, @Query() query: AdminReviewListQueryDto) {
+    return this.adminReviews.list(req.user, query);
+  }
+
+  @Get('reviews/filter-options')
+  @ApiOperation({ summary: 'Segment counts, business cities and headline numbers for the reviews page' })
+  getReviewFilterOptions(@Request() req) {
+    return this.adminReviews.filterOptions(req.user);
   }
 
   @Post('reviews')
@@ -588,22 +589,17 @@ export class AdminController {
   }
 
   @Get('reviews/:id')
-  @ApiOperation({ summary: 'Get review detail with relations' })
+  @ApiOperation({ summary: 'One review with photos, reports, the reviewer’s chat, lead and other reviews, the business’s ratings and moderation history' })
   @ApiParam({ name: 'id', description: 'Review ID' })
-  getReview(@Param('id') id: string, @Request() req) {
-    return this.adminService.getReviewById(req.user, id);
+  getReview(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
+    return this.adminReviews.detail(req.user, id);
   }
 
   @Patch('reviews/:id/status')
-  @ApiOperation({ summary: 'Update review status (active/removed)' })
+  @ApiOperation({ summary: 'Show or take down a review (active/removed), with an optional reason for the audit log' })
   @ApiParam({ name: 'id', description: 'Review ID' })
-  @ApiBody({ schema: { properties: { status: { type: 'string', enum: ['active', 'removed'] } }, required: ['status'] } })
-  updateReviewStatus(
-    @Param('id') id: string,
-    @Request() req,
-    @Body('status') status: 'active' | 'removed',
-  ) {
-    return this.adminService.updateReviewStatus(req.user, id, status);
+  updateReviewStatus(@Param('id', ParseUUIDPipe) id: string, @Request() req, @Body() body: AdminReviewStatusDto) {
+    return this.adminReviews.setStatus(req.user, id, body.status, body.reason);
   }
 
   // ============================================
