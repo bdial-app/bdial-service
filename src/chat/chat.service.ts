@@ -628,6 +628,10 @@ export class ChatService {
         metadata: { ...dto.metadata, fileName, caption: dto.content || null },
         content: `📄 ${fileName}`,
       };
+    } else if (dto.metadata?.location !== undefined) {
+      // A shared location travels as a text message: older apps show its
+      // address and a Maps link, newer ones draw the location card.
+      dto = { ...dto, messageType: 'text', ...this.buildLocation(dto) };
     }
 
     // Content moderation: check message text for profanity
@@ -1022,8 +1026,66 @@ export class ChatService {
       .getOne();
   }
 
+  /**
+   * Check a shared location and write the text everyone can read: its name,
+   * its address and a Maps link. Only these fields are kept.
+   */
+  private buildLocation(dto: SendMessageDto): {
+    content: string;
+    metadata: Record<string, any>;
+  } {
+    if (dto.messageType && dto.messageType !== 'text') {
+      throw new BadRequestException('A location is sent on its own');
+    }
+    const loc = (dto.metadata?.location ?? {}) as Record<string, unknown>;
+    const lat = Number(loc.lat);
+    const lng = Number(loc.lng);
+    if (
+      !Number.isFinite(lat) ||
+      !Number.isFinite(lng) ||
+      Math.abs(lat) > 90 ||
+      Math.abs(lng) > 180 ||
+      (lat === 0 && lng === 0)
+    ) {
+      throw new BadRequestException('That location is not valid');
+    }
+    const text = (v: unknown, max: number) =>
+      typeof v === 'string' && v.trim()
+        ? v.replace(/\s+/g, ' ').trim().slice(0, max)
+        : null;
+    const label = text(loc.label, 80);
+    const address = text(loc.address, 200);
+    const source = ['current', 'pinned', 'business', 'saved'].includes(
+      String(loc.source),
+    )
+      ? String(loc.source)
+      : 'pinned';
+    const at = `${lat.toFixed(6)},${lng.toFixed(6)}`;
+    const lines = [
+      `📍 ${label ?? 'Location'}`,
+      address && address !== label ? address : null,
+      `https://www.google.com/maps/search/?api=1&query=${at}`,
+    ].filter(Boolean);
+    return {
+      content: lines.join('\n'),
+      metadata: {
+        location: {
+          lat: Number(lat.toFixed(6)),
+          lng: Number(lng.toFixed(6)),
+          label,
+          address,
+          source,
+        },
+      },
+    };
+  }
+
   /** Build a preview string for conversation list */
   private buildPreview(dto: SendMessageDto): string {
+    if (dto.metadata?.location) {
+      const label = (dto.metadata.location as { label?: string | null }).label;
+      return `📍 ${label ? `Location: ${label}` : 'Location'}`.slice(0, 100);
+    }
     if (dto.messageType === 'image') return '📷 Photo';
     if (dto.messageType === 'enquiry') return '📋 Enquiry';
     if (dto.messageType === 'quote_request') return '💰 Quote Request';
