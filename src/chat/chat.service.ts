@@ -73,6 +73,17 @@ export class ChatService {
       throw new BadRequestException('Cannot start a conversation with yourself');
     }
 
+    // Refuse a first message sendMessage would refuse, before anything is
+    // saved — otherwise a blank conversation is left behind.
+    if (
+      dto.initialMessage &&
+      this.contentSanitizer.check(dto.initialMessage).flagged
+    ) {
+      throw new BadRequestException(
+        'Your message contains inappropriate language. Please revise and try again.',
+      );
+    }
+
     // 2. Check for existing active conversation with same context
     const existing = await this.findExistingConversation(
       userId,
@@ -216,6 +227,19 @@ export class ChatService {
       qb.andWhere("c.type = 'enquiry'");
     }
 
+    // Search the name shown for the other person (a business's brand name,
+    // else their own name) before paging, so it finds every match.
+    if (search?.trim()) {
+      qb.andWhere(
+        `EXISTS (SELECT 1 FROM conversation_participants op
+                   LEFT JOIN users ou ON ou.id = op.user_id
+                   LEFT JOIN providers opr ON opr.user_id = op.user_id AND op.role = 'provider'
+                  WHERE op.conversation_id = c.id AND op.user_id IS DISTINCT FROM :userId
+                    AND coalesce(opr.brand_name, ou.name, 'Unknown') ILIKE :search)`,
+        { search: `%${search.trim()}%` },
+      );
+    }
+
     qb.orderBy('c.lastMessageAt', 'DESC', 'NULLS LAST')
       .skip(skip)
       .take(limit);
@@ -252,21 +276,18 @@ export class ChatService {
     // (for accurate tick display — sent/delivered/read)
     const lastMessageStatusMap = new Map<string, string>();
     if (conversationIds.length > 0) {
-      const lastMsgs = await this.messageRepo
-        .createQueryBuilder('m')
-        .select(['m.conversationId', 'm.status'])
-        .where('m.conversationId IN (:...ids)', { ids: conversationIds })
-        .andWhere('m.deletedAt IS NULL')
-        .orderBy('m.conversationId')
-        .addOrderBy('m.createdAt', 'DESC')
-        .getMany();
-
-      // Keep only the first (most recent) per conversation
-      for (const m of lastMsgs) {
-        if (!lastMessageStatusMap.has(m.conversationId)) {
-          lastMessageStatusMap.set(m.conversationId, m.status);
-        }
-      }
+      // Only the newest message of each, not every message ever sent.
+      const lastMsgs = await this.messageRepo.query<
+        { conversation_id: string; status: string }[]
+      >(
+        `SELECT DISTINCT ON (conversation_id) conversation_id, status
+           FROM messages
+          WHERE conversation_id = ANY($1) AND deleted_at IS NULL
+          ORDER BY conversation_id, created_at DESC`,
+        [conversationIds],
+      );
+      for (const m of lastMsgs)
+        lastMessageStatusMap.set(m.conversation_id, m.status);
     }
 
     // Build response
@@ -317,14 +338,7 @@ export class ChatService {
       };
     });
 
-    // Apply search filter on display name (post-query — fine for reasonable page sizes)
-    const filtered = search
-      ? conversations.filter((c) =>
-          c.otherParticipant.name.toLowerCase().includes(search.toLowerCase()),
-        )
-      : conversations;
-
-    return { conversations: filtered, total, page, limit };
+    return { conversations, total, page, limit };
   }
 
   /** Single conversation detail with both participants */
@@ -1007,7 +1021,12 @@ export class ChatService {
     return participant;
   }
 
-  /** Find existing conversation between two users (WhatsApp-style: one thread per pair) */
+  /**
+   * The thread this customer already has with this business (WhatsApp-style:
+   * one per pair). Roles matter: two owners can each be the other's customer,
+   * and a thread where the caller is the business belongs in their business
+   * inbox, not the customer one they're writing from.
+   */
   private async findExistingConversation(
     userId: string,
     otherUserId: string,
@@ -1017,10 +1036,18 @@ export class ChatService {
     // One conversation per customer↔provider pair, regardless of context
     return this.conversationRepo
       .createQueryBuilder('c')
-      .innerJoin('c.participants', 'p1', 'p1.userId = :userId', { userId })
-      .innerJoin('c.participants', 'p2', 'p2.userId = :otherUserId', {
-        otherUserId,
-      })
+      .innerJoin(
+        'c.participants',
+        'p1',
+        "p1.userId = :userId AND p1.role = 'customer'",
+        { userId },
+      )
+      .innerJoin(
+        'c.participants',
+        'p2',
+        "p2.userId = :otherUserId AND p2.role = 'provider'",
+        { otherUserId },
+      )
       .where("c.status IN ('active', 'archived')")
       .orderBy('c.lastMessageAt', 'DESC', 'NULLS LAST')
       .getOne();
