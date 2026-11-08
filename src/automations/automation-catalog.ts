@@ -32,6 +32,8 @@ export type AutomationKey =
   | 'plan_renewal'
   | 'payment_failed'
   | 'boost_ending'
+  | 'deal_ended'
+  | 'free_deals_left'
   | 'business_replied'
   | 'customer_waiting'
   | 'listing_created_for_you'
@@ -427,6 +429,49 @@ export const AUTOMATIONS: AutomationDef[] = [
         { key: 'clicks', label: 'Visits', sample: '86' },
       ],
       linkButton: 'View results',
+    },
+  },
+  {
+    key: 'deal_ended',
+    name: 'Deal ended',
+    when: '10:30 AM, the day after a deal ends, with how many times it was seen. Skipped if they opened the app after the push.',
+    audience: 'owner',
+    delayMinutes: 180,
+    appFirstMinutes: 180,
+    essential: false,
+    consent: 'opted_in',
+    template: {
+      name: 'tijarah_deal_ended',
+      category: 'utility',
+      body: 'Your deal "{{1}}" for {{2}} ended on {{3}}. It was seen {{4}} times on Tijarah while it ran.',
+      vars: [
+        { key: 'dealTitle', label: 'Deal', sample: 'Eid gift boxes 10% off' },
+        { key: 'brandName', label: 'Business name', sample: 'Burhani Sweets' },
+        { key: 'endDate', label: 'Ended', sample: '30 Oct' },
+        { key: 'views', label: 'Times seen', sample: '146' },
+      ],
+      linkButton: 'View my deals',
+    },
+  },
+  {
+    key: 'free_deals_left',
+    name: 'Free deals left',
+    when: 'A day after the first “free deals left” push (3 days after a deal ends, or a week after a shop opens with none), if no deal was added and they haven’t opened the app in 2 days. Once per quiet stretch.',
+    audience: 'owner',
+    delayMinutes: 24 * 60,
+    appFirstMinutes: 2 * 24 * 60,
+    essential: false,
+    consent: 'opted_in',
+    template: {
+      name: 'tijarah_free_deals_left',
+      category: 'utility',
+      body: 'Salaam, {{1}} has {{2}} of {{3}} free deals left on Tijarah. Deals show to customers in the Deals section and on your shop page.',
+      vars: [
+        { key: 'brandName', label: 'Business name', sample: 'Burhani Sweets' },
+        { key: 'left', label: 'Free deals left', sample: '2' },
+        { key: 'quota', label: 'Free deals in all', sample: '2' },
+      ],
+      linkButton: 'Add a deal',
     },
   },
   {
