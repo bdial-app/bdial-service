@@ -19,6 +19,8 @@ import { SendChatNudgeDto } from './dto/chat-nudge.dto';
 import { AdminReviewListQueryDto, AdminReviewStatusDto } from './dto/admin-review-list.dto';
 import { AdminReviewsService } from './admin-reviews.service';
 import { ChatNudgeService } from './chat-nudge.service';
+import { DashboardPeriodService } from './dashboard-period.service';
+import { DashboardPeriodQueryDto } from './dto/dashboard-period.dto';
 import { Roles } from '../common/decorators/roles.decorator';
 import { AdminPhotoListQueryDto } from './dto/admin-photo-list.dto';
 import { AdminSponsorshipListQueryDto } from './dto/admin-sponsorship-list.dto';
@@ -61,12 +63,19 @@ export class AdminController {
     private readonly productBulk: ProductBulkService,
     private readonly chatNudge: ChatNudgeService,
     private readonly adminReviews: AdminReviewsService,
+    private readonly dashboardPeriod: DashboardPeriodService,
   ) {}
 
   @Get('dashboard')
   @ApiOperation({ summary: 'Admin dashboard stats' })
   getDashboard(@Request() req) {
     return this.adminService.getDashboard(req.user);
+  }
+
+  @Get('dashboard/period')
+  @ApiOperation({ summary: 'Dashboard figures over a date range' })
+  getDashboardPeriod(@Request() req, @Query() query: DashboardPeriodQueryDto) {
+    return this.dashboardPeriod.get(req.user, query);
   }
 
   @Get('providers/pending')

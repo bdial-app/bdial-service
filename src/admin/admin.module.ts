@@ -21,6 +21,7 @@ import { GoogleReviewsModule } from '../google-reviews/google-reviews.module';
 import { ProvidersModule } from '../providers/providers.module';
 import { ChatNudgeService } from './chat-nudge.service';
 import { AdminReviewsService } from './admin-reviews.service';
+import { DashboardPeriodService } from './dashboard-period.service';
 
 @Module({
   imports: [
@@ -36,6 +37,6 @@ import { AdminReviewsService } from './admin-reviews.service';
     AnalyticsModule,
   ],
   controllers: [AdminController, AdminLeadsController],
-  providers: [ProductBulkService, AdminService, ChatNudgeService, AdminReviewsService, AdminLeadsService, ProviderEnrichmentService, ProviderLocationService],
+  providers: [ProductBulkService, AdminService, ChatNudgeService, AdminReviewsService, DashboardPeriodService, AdminLeadsService, ProviderEnrichmentService, ProviderLocationService],
 })
 export class AdminModule {}
