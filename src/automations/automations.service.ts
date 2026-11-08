@@ -936,6 +936,19 @@ export class AutomationsService {
       );
       if (!row || Number(row.unread) === 0) return 'already_read';
     }
+    if (def.key === 'free_deals_left' && job.providerId) {
+      // provider_offers.created_at may be a plain timestamp holding UTC, which
+      // only compares right as timestamptz with the session clock on UTC.
+      const [added] = await this.dataSource.transaction(async (m) => {
+        await m.query(`SET LOCAL TIME ZONE 'UTC'`);
+        return m.query<{ n: number }[]>(
+          `SELECT count(*)::int AS n FROM provider_offers
+            WHERE provider_id = $1 AND created_at::timestamptz > $2::timestamptz`,
+          [job.providerId, new Date(job.createdAt).toISOString()],
+        );
+      });
+      if (Number(added?.n ?? 0) > 0) return 'deal_added';
+    }
     if (
       def.key === 'shop_live' &&
       job.context?.onlyIfNotSignedIn &&
@@ -1180,6 +1193,8 @@ export class AutomationsService {
         return owner('/provider-onboarding/verify');
       case 'deal_approved':
       case 'deal_not_approved':
+      case 'deal_ended':
+      case 'free_deals_left':
         return owner('/?tab=listings&subTab=deals');
       case 'plan_renewal':
       case 'payment_failed':
