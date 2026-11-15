@@ -69,6 +69,35 @@ export class UsersService {
     return this.userRepo.save(user);
   }
 
+  /**
+   * Record that we spent a store-review ask on this person.
+   *
+   * Neither store reports whether the sheet appeared or what the person did
+   * with it, so there is nothing to record but the ask itself. Campaign
+   * audiences read `app_review_asked_at`, which is what keeps the in-app
+   * prompt and a WhatsApp blast from landing on the same person at once.
+   */
+  async noteAppReviewAsked(
+    id: string,
+    dto: { channel?: 'in_app' | 'whatsapp' | 'push'; optOut?: boolean },
+  ) {
+    const patch: Record<string, unknown> = {};
+    if (dto.optOut) {
+      patch.appReviewOptedOut = true;
+    } else {
+      patch.appReviewAskedAt = new Date();
+      patch.appReviewLastChannel = dto.channel ?? 'in_app';
+      patch.appReviewAskCount = () => '"app_review_ask_count" + 1';
+    }
+    await this.userRepo.update({ id }, patch as never);
+    const user = await this.userRepo.findOneBy({ id });
+    return {
+      askedAt: user?.appReviewAskedAt ?? null,
+      askCount: user?.appReviewAskCount ?? 0,
+      optedOut: user?.appReviewOptedOut ?? false,
+    };
+  }
+
   async updateProfile(id: string, dto: UpdateUserDto) {
     if (dto.name) {
       const check = this.contentSanitizer.check(dto.name);

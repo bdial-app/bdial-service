@@ -86,6 +86,22 @@ export class User {
   @Column({ name: 'last_seen_at', type: 'timestamptz', nullable: true })
   lastSeenAt: Date | null;
 
+  // Store-review asks. The stores never say what the person did with their
+  // review sheet, so the only thing worth recording is that an ask was spent.
+  // Both the in-app prompt and campaign audiences read these.
+  @Column({ name: 'app_review_asked_at', type: 'timestamptz', nullable: true })
+  appReviewAskedAt: Date | null;
+
+  @Column({ name: 'app_review_ask_count', type: 'int', default: 0 })
+  appReviewAskCount: number;
+
+  @Column({ name: 'app_review_last_channel', type: 'varchar', length: 16, nullable: true })
+  appReviewLastChannel: string | null;
+
+  /** They asked not to be bothered about rating the app again. */
+  @Column({ name: 'app_review_opted_out', type: 'boolean', default: false })
+  appReviewOptedOut: boolean;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

@@ -140,6 +140,16 @@ export class AudienceFiltersDto implements AudienceFilters {
   @Max(3650)
   notContactedDays?: number;
 
+  @ApiPropertyOptional({
+    description:
+      'Leave out anyone already asked to rate the app within this many days, on any channel, and anyone who opted out. Keeps a campaign from landing on top of the in-app prompt.',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(3650)
+  notAskedForReviewDays?: number;
+
   @ApiPropertyOptional({ enum: CONSENTS, default: 'not_opted_out' })
   @IsOptional()
   @IsIn(CONSENTS)

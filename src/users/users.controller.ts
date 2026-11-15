@@ -21,6 +21,7 @@ import { UsersService } from './users.service';
 import { CategoryPersonalizationService } from './category-personalization.service';
 import { UpdateUserDto, UserListQueryDto } from './dto/user.dto';
 import { CreateUserDto } from './dto/create-user.dto';
+import { AppReviewAskedDto } from './dto/app-review.dto';
 import { AllowPaused } from '../common/decorators/allow-paused.decorator';
 
 @ApiTags('Users')
@@ -51,6 +52,18 @@ export class UsersController {
   @ApiOperation({ summary: 'Get my profile' })
   getMe(@Request() req) {
     return req.user;
+  }
+
+  @Post('me/app-review-asked')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @ApiOperation({
+    summary: 'Record that this person was asked to rate the app',
+    description:
+      'The stores never report what the person did with their review sheet, so this only records that an ask was spent. Campaign audiences read it so the two channels do not both land on the same person.',
+  })
+  noteAppReviewAsked(@Request() req, @Body() dto: AppReviewAskedDto) {
+    return this.usersService.noteAppReviewAsked(req.user.id, dto);
   }
 
   @Patch('me')

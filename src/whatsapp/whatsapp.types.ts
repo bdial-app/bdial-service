@@ -36,6 +36,7 @@ export interface AudienceFilters {
   /** 'approximate' = pinned at a city centre or not at all; 'exact' = a real pin. */
   locationPrecision?: 'approximate' | 'exact';
   notContactedDays?: number;
+  notAskedForReviewDays?: number;
   consent?: ConsentFilter;
   reachableOnly?: boolean;
   /** Always included, in both modes: picked businesses. */
