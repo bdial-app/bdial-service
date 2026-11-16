@@ -493,6 +493,14 @@ export class WhatsAppAudienceService {
         { nc: String(f.notContactedDays) },
       );
     }
+    if (f.notAskedForReviewDays) {
+      // `u` is the users row behind this recipient — absent for a business with
+      // no owner account, which has therefore never been asked.
+      qb.andWhere(
+        `(u.app_review_asked_at IS NULL OR u.app_review_asked_at < now() - (:nar || ' days')::interval)`,
+        { nar: String(f.notAskedForReviewDays) },
+      ).andWhere(`COALESCE(u.app_review_opted_out, false) = false`);
+    }
     const replied = `EXISTS (SELECT 1 FROM whatsapp_messages m WHERE ${link.message} AND m.direction = 'inbound')`;
     if (f.repliedEver === 'yes') qb.andWhere(replied);
     if (f.repliedEver === 'no') qb.andWhere(`NOT ${replied}`);

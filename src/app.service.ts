@@ -28,6 +28,14 @@ export class AppService {
       'leads_monetization_enabled',
       'deals_monetization_enabled',
       'subscriptions_visible',
+      // The app reads these at startup to decide when to show the store's
+      // review sheet, so they can be retuned without shipping a release.
+      'app_review_enabled',
+      'app_review_min_days',
+      'app_review_min_sessions',
+      'app_review_min_value_moments',
+      'app_review_cooldown_days',
+      'app_review_max_asks',
     ];
     const settings = await this.settingRepo.find({ where: { key: In(publicKeys) } });
     const flags: Record<string, any> = {};
